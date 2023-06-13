@@ -17,7 +17,7 @@ def arg_parser():
 
     parser.add_argument("--logdir", default='logs',
                         help="Where to log test info (small).")
-    parser.add_argument("--batch", type=int, default=8,
+    parser.add_argument("--batch-size", type=int, default=8,
                         help="Batch size.")
     parser.add_argument("--name", default='prueba',
                         help="Name of this run. Used for monitoring and checkpointing.")

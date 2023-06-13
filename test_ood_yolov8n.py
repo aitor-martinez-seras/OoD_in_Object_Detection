@@ -98,7 +98,7 @@ def iterate_data_msp(data_loader, model: YOLO, device):
             imgs, targets = data
         
         res = model.predict(imgs, device)
-
+        logits = model.predict(x, extract_logits=True)
         # TODO: Jon Ander
         # Model must output ALL logits for every bbox. Example:
         # >> logits = model.predict(x, extract_logits=True)
