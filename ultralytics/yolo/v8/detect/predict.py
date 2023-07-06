@@ -11,6 +11,10 @@ class DetectionPredictor(BasePredictor):
 
     def postprocess(self, preds, img, orig_imgs):
         """Postprocesses predictions and returns a list of Results objects."""
+
+        aaa = preds[1]
+        preds = preds[0]
+
         preds = ops.non_max_suppression(preds,
                                         self.args.conf,
                                         self.args.iou,
@@ -26,7 +30,7 @@ class DetectionPredictor(BasePredictor):
             path = self.batch[0]
             img_path = path[i] if isinstance(path, list) else path
             results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names, boxes=pred))
-        return results
+        return results, aaa
 
 
 def predict(cfg=DEFAULT_CFG, use_python=False):

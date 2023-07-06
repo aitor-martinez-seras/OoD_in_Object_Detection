@@ -42,7 +42,8 @@ class BaseModel(nn.Module):
         """
         if isinstance(x, dict):  # for cases of training and validating while training.
             return self.loss(x, *args, **kwargs)
-        return self.predict(x, *args, **kwargs)
+        x, aaa = self.predict(x, *args, **kwargs)
+        return x, aaa
 
     def predict(self, x, profile=False, visualize=False, augment=False):
         """
@@ -59,7 +60,8 @@ class BaseModel(nn.Module):
         """
         if augment:
             return self._predict_augment(x)
-        return self._predict_once(x, profile, visualize)
+        x, aaa = self._predict_once(x, profile, visualize)
+        return x, aaa
 
     def _predict_once(self, x, profile=False, visualize=False):
         """
@@ -83,7 +85,8 @@ class BaseModel(nn.Module):
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
-        return x
+        aaa = 33
+        return x, aaa
 
     def _predict_augment(self, x):
         """Perform augmentations on input image x and return augmented inference."""
