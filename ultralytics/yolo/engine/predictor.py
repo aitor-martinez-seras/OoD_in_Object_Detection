@@ -237,7 +237,7 @@ class BasePredictor:
 
             # Inference
             with profilers[1]:
-                preds = self.model(im, augment=self.args.augment, visualize=visualize)
+                preds = self.model(im, augment=self.args.augment, visualize=visualize)  # Este model es el AutoBackend
 
             # Postprocess
             with profilers[2]:
