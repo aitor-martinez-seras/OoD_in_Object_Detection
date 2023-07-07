@@ -85,6 +85,7 @@ class BaseModel(nn.Module):
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
+        # aaa = deepcopy(x)
         aaa = 33
         return x, aaa
 

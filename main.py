@@ -22,21 +22,25 @@ def main():
     # results = model.predict(source=Path('datasets/pruebas_armas'), save=True)
     # results = model.predict(source=Path('datasets/vehiculos_militares'), save=True)
     results = model.predict(source=Path('datasets/proba'), save=True)
+    print(results)
+    print(results[0].extra_item)
+
 
     ##################################
     ## Results es una lista con 2*n elementos, donde n es el numero de imagenes de nuestro dataset.
     ## Los resultados de cada foto vienen en indices consecutivos: [0,1], [2,3], [4,5], ...
     ## En el primer indice estan los resultados originales de YOLO. En el segundo indice esta lo que nosotros queremos sacar
     ## En el siguiente print hago la prueba de lo que digo arriba
-    for i in range(0, len(results)):
-        if i % 2 == 0:
-            print('Result normal')
-            print(i)
-            print(results[i])
-        else:
-            print('Result añadido')
-            print(i)
-            print(results[i])
+
+    # for i in range(0, len(results)):
+    #     if i % 2 == 0:
+    #         print('Result normal')
+    #         print(i)
+    #         print(results[i])
+    #     else:
+    #         print('Result añadido')
+    #         print(i)
+    #         print(results[i])
     
     # path = model.export(format="onnx")  # export the model to ONNX format
 

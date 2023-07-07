@@ -152,7 +152,7 @@ class BasePredictor:
         self.data_path = p
         self.txt_path = str(self.save_dir / 'labels' / p.stem) + ('' if self.dataset.mode == 'image' else f'_{frame}')
         log_string += '%gx%g ' % im.shape[2:]  # print string
-        result = results[0][idx]
+        result = results[idx]
         log_string += result.verbose()
 
         if self.args.save or self.args.show:  # Add bbox to image
@@ -247,7 +247,7 @@ class BasePredictor:
             # Visualize, save, write results
             n = len(im0s)
             for i in range(n):
-                self.results[0][i].speed = {
+                self.results[i].speed = {
                     'preprocess': profilers[0].dt * 1E3 / n,
                     'inference': profilers[1].dt * 1E3 / n,
                     'postprocess': profilers[2].dt * 1E3 / n}
