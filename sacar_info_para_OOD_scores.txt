@@ -1,0 +1,10 @@
+Dentro de ultralytics/nn/task.py vamos a sacar informacion de la funcion _predict_once.
+Aqui se hace un for donde se evalua "m", que es cada capa del modelo.
+Lo que queremos sacar lo metemos dentro de la variable "output_extra".
+Esta variable es la que sacamos hasta los resultados de hacer model.predict en el main.
+Dentro de los resultados tenemos una variable llamada "extra_item" donde esta guardada la informacion que queremos sacar.
+
+IMPORTANTE. Dentro de ultralytics/yolo/v8/detect/predict.py dentro de la class DetectionPredictor
+y dentro de la funcion postprocess hacemos lo siguiente. Como nuestro "output_extra" cogemos el segundo
+elemento de preds: preds[1]. Esto se compone de dos elementos. En el [0] esta la salida de la red neuronal y en el [1]
+lo que creemos que son los feature maps. De momento cogemos solo el primer elemento: preds[1][0].

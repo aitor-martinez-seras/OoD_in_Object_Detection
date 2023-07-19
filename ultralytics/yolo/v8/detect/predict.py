@@ -12,7 +12,14 @@ class DetectionPredictor(BasePredictor):
     def postprocess(self, preds, img, orig_imgs):
         """Postprocesses predictions and returns a list of Results objects."""
 
-        aaa = preds[1]
+        ## preds es tupla de 2 elementos:
+        ## 1ero, tensor de (1,84,5040). 84 son el box + las 80 clases. 5040 son las boxes.
+        ## 2ndo, lista de 3 elementos. En cada elemento tenemos un tensor. Son los feature map segun Aitor
+        # output_extra = preds[1]
+        output_extra = preds[1][0]
+        ## Cojo el [0] porque ahora mismo preds[1] es una lista de 2 elementos donde:
+        ## el primer elemento es la salida de la red neuronal
+        ## el segundo elemento hay 3 items, con lo que creemos que son los feature map.
         preds = preds[0]
 
         preds = ops.non_max_suppression(preds,
@@ -20,7 +27,11 @@ class DetectionPredictor(BasePredictor):
                                         self.args.iou,
                                         agnostic=self.args.agnostic_nms,
                                         max_det=self.args.max_det,
-                                        classes=self.args.classes)
+                                        classes=self.args.classes,
+                                        extra_item=output_extra)
+
+        output_extra = preds[1]
+        preds = preds[0]
 
         results = []
         for i, pred in enumerate(preds):
@@ -29,7 +40,7 @@ class DetectionPredictor(BasePredictor):
                 pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
             path = self.batch[0]
             img_path = path[i] if isinstance(path, list) else path
-            results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names, boxes=pred, extra_item=aaa))
+            results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names, boxes=pred, extra_item=output_extra))
         return results
 
 

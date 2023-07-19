@@ -146,6 +146,7 @@ def non_max_suppression(
         max_time_img=0.05,
         max_nms=30000,
         max_wh=7680,
+        extra_item = None
 ):
     """
     Perform non-maximum suppression (NMS) on a set of boxes, with support for masks and multiple labels per box.
@@ -170,11 +171,13 @@ def non_max_suppression(
         max_time_img (float): The maximum time (seconds) for processing one image.
         max_nms (int): The maximum number of boxes into torchvision.ops.nms().
         max_wh (int): The maximum box width and height in pixels
+        extra_item: Extra item that we want to obtain with the results of the prediction of YOLO to compute OOD
 
     Returns:
         (List[torch.Tensor]): A list of length batch_size, where each element is a tensor of
             shape (num_boxes, 6 + num_masks) containing the kept boxes, with columns
             (x1, y1, x2, y2, confidence, class, mask1, mask2, ...).
+        (List[]): A list were the elements are the information that we want to obtain for OOD scores calculation.
     """
 
     # Checks
@@ -192,7 +195,7 @@ def non_max_suppression(
     nm = prediction.shape[1] - nc - 4
     mi = 4 + nc  # mask start index
     xc = prediction[:, 4:mi].amax(1) > conf_thres  # candidates
-
+    # mi_prueba = torch.arange(0, xc.shape[1], 1)
     # Settings
     # min_wh = 2  # (pixels) minimum box width and height
     time_limit = 0.5 + max_time_img * bs  # seconds to quit after
@@ -202,10 +205,16 @@ def non_max_suppression(
 
     t = time.time()
     output = [torch.zeros((0, 6 + nm), device=prediction.device)] * bs
+    extra_item_final_list = []
+
     for xi, x in enumerate(prediction):  # image index, image inference
+
+        extra_item = extra_item[xi]
         # Apply constraints
         # x[((x[:, 2:4] < min_wh) | (x[:, 2:4] > max_wh)).any(1), 4] = 0  # width-height
         x = x.transpose(0, -1)[xc[xi]]  # confidence
+        # extra_item_elegidos = mi_prueba[xc[xi]]
+        extra_item_elegidos = extra_item.transpose(0, -1)[xc[xi]]
 
         # Cat apriori labels if autolabelling
         if labels and len(labels[xi]):
@@ -238,11 +247,12 @@ def non_max_suppression(
         #     x = x[torch.isfinite(x).all(1)]
 
         # Check shape
+
         n = x.shape[0]  # number of boxes
         if not n:  # no boxes
             continue
+        extra_item_order = extra_item_elegidos[x[:, 4].argsort(descending=True)[:max_nms]]
         x = x[x[:, 4].argsort(descending=True)[:max_nms]]  # sort by confidence and remove excess boxes
-
         # Batched NMS
         c = x[:, 5:6] * (0 if agnostic else max_wh)  # classes
         boxes, scores = x[:, :4] + c, x[:, 4]  # boxes (offset by class), scores
@@ -257,13 +267,15 @@ def non_max_suppression(
                 i = i[iou.sum(1) > 1]  # require redundancy
 
         output[xi] = x[i]
+        extra_item_final_list.append(extra_item_order[i])
+
         if mps:
             output[xi] = output[xi].to(device)
         if (time.time() - t) > time_limit:
             LOGGER.warning(f'WARNING ⚠️ NMS time limit {time_limit:.3f}s exceeded')
             break  # time limit exceeded
 
-    return output
+    return output, extra_item_final_list
 
 
 def clip_boxes(boxes, shape):
