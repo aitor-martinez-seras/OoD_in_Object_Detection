@@ -88,29 +88,34 @@ def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, batch_siz
 def iterate_data_msp(data_loader, model: YOLO, device):
     confs = []
     m = torch.nn.Softmax(dim=-1).cuda()
-
+    all_scores = []
+    print('AAAAAAAAAAAAAAAAAAAAAAA')
     for idx, data in enumerate(data_loader):
-        
+        print('BBBBBBBBBBBBBBBBBB')
         # Esto es para sacar imagenes y labels en diferentes variables
         if isinstance(data, dict):
             imgs = data['img'].to(device)
         else:
             imgs, targets = data
-        
-        res = model.predict(imgs, device)
-        logits = model.predict(x, extract_logits=True)
-        # TODO: Jon Ander
-        # Model must output ALL logits for every bbox. Example:
-        # >> logits = model.predict(x, extract_logits=True)
-        # El metodo predict puede tener como argumento un tensor directamente
 
-        # Vamos a gestionar esto con una lista en la que cada posicion sea una imagen del dataset
+        # Procesar imagenes en el modelo para obtener logits y las cajas
+        result = model.predict(imgs, save=True)
+        # print(result)
 
-        conf, _ = torch.max(m(logits), dim=-1)
-        confs.extend(conf.data.cpu().numpy())
+        # Matchear cuales de las cajas han sido predichas correctamente
 
-    return np.array(confs)
 
+        # Formar un array de la forma [nº de caja, clase y score]
+        score_and_cls_per_bbox = ()
+
+        # Acumular en una lista los scores de cada caja
+        # all_scores.append()
+
+        # conf, _ = torch.max(m(logits), dim=-1)
+        # confs.extend(conf.data.cpu().numpy())
+
+    # return np.array(confs)
+    return None
 # ODIN Score
 def iterate_data_odin(data_loader, model, epsilon, temper, logger):
     criterion = torch.nn.CrossEntropyLoss().cuda()
@@ -160,8 +165,6 @@ def iterate_data_energy(data_loader, model, temper):
             confs.extend(conf.data.cpu().numpy())
     return np.array(confs)
 
-
-
 def run_eval(model, device, in_loader, out_loader, logger, args, num_classes):
     logger.info("Running test...")
     logger.flush()
@@ -169,6 +172,7 @@ def run_eval(model, device, in_loader, out_loader, logger, args, num_classes):
     if args.score == 'MSP':
         logger.info("Processing in-distribution data...")
         in_scores = iterate_data_msp(in_loader, model, device)
+        quit()
         logger.info("Processing out-of-distribution data...")
         out_scores = iterate_data_msp(out_loader, model, device)
     elif args.score == 'ODIN':
@@ -239,6 +243,11 @@ def run_eval(model, device, in_loader, out_loader, logger, args, num_classes):
 
 
 def main(args):
+    print('----------------------------')
+    print('****************************')
+    print('****************************')
+    print('****************************')
+
     logger = log.setup_logger(args)
 
     # TODO: This is for reproducibility 
@@ -249,9 +258,12 @@ def main(args):
         args.batch = 1
 
     # Load ID data and OOD data
-    ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader('VisDrone.yaml', batch_size=args.batch_size)
-    ood_dataset, ood_dataloader = create_YOLO_dataset_and_dataloader('VisDrone.yaml', batch_size=args.batch_size)
+    # ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader('coco128_custom.yaml', batch_size=args.batch_size)
+    ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader('coco128_custom.yaml', batch_size=5)
+    # ood_dataset, ood_dataloader = create_YOLO_dataset_and_dataloader('coco128_custom.yaml', batch_size=args.batch_size)
+    ood_dataloader = None
     # in_set, out_set, in_loader, out_loader = make_id_ood(args, logger)
+    print(ind_dataset)
 
     # TODO: usar el argparser para elegir el modelo que queremos cargar
     model_to_load = 'yolov8n.pt'
@@ -273,7 +285,6 @@ def main(args):
         num_classes = len(ind_dataset.data['names'])
     else:
         num_classes = len(ind_dataset.classes)
-
 
     start_time = time.time()
     run_eval(model, args.device, ind_dataloader, ood_dataloader, logger, args, num_classes=num_classes)
@@ -315,4 +326,5 @@ if __name__ == "__main__":
     parser.add_argument('--temperature_rankfeat', default=1, type=float,
                         help='temperature scaling for RankFeat')
     """
+    print('******************************************')
     main(parser.parse_args())

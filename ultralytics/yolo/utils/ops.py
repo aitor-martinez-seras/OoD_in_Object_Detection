@@ -209,12 +209,14 @@ def non_max_suppression(
 
     for xi, x in enumerate(prediction):  # image index, image inference
 
-        extra_item = extra_item[xi]
+        # extra_item_one_iter = extra_item[xi]
         # Apply constraints
         # x[((x[:, 2:4] < min_wh) | (x[:, 2:4] > max_wh)).any(1), 4] = 0  # width-height
         x = x.transpose(0, -1)[xc[xi]]  # confidence
-        # extra_item_elegidos = mi_prueba[xc[xi]]
-        extra_item_elegidos = extra_item.transpose(0, -1)[xc[xi]]
+        # print('****** 1ero ******')
+        # print('shape extra item:', extra_item.shape)
+        extra_item_elegidos = extra_item[xi].transpose(0, -1)[xc[xi]] ###################
+        # extra_item_elegidos = extra_item[xc[xi]]
 
         # Cat apriori labels if autolabelling
         if labels and len(labels[xi]):
@@ -226,6 +228,7 @@ def non_max_suppression(
 
         # If none remain process next image
         if not x.shape[0]:
+            extra_item_final_list.append(np.array([0]))
             continue
 
         # Detections matrix nx6 (xyxy, conf, cls)
@@ -251,7 +254,11 @@ def non_max_suppression(
         n = x.shape[0]  # number of boxes
         if not n:  # no boxes
             continue
+
         extra_item_order = extra_item_elegidos[x[:, 4].argsort(descending=True)[:max_nms]]
+        # print('------- 2do ---------')
+        # print('shape extra item cajas ordenadas:', extra_item_order.shape)
+
         x = x[x[:, 4].argsort(descending=True)[:max_nms]]  # sort by confidence and remove excess boxes
         # Batched NMS
         c = x[:, 5:6] * (0 if agnostic else max_wh)  # classes
@@ -267,6 +274,10 @@ def non_max_suppression(
                 i = i[iou.sum(1) > 1]  # require redundancy
 
         output[xi] = x[i]
+        # print('¿¿¿¿¿¿¿¿¿ 3ro ¿¿¿¿¿¿¿¿¿¿¿')
+        # print(i)
+        # print('shape extra item cajas elegidas:', extra_item_order[i].shape)
+        # print(extra_item_order[i])
         extra_item_final_list.append(extra_item_order[i])
 
         if mps:
@@ -274,6 +285,7 @@ def non_max_suppression(
         if (time.time() - t) > time_limit:
             LOGGER.warning(f'WARNING ⚠️ NMS time limit {time_limit:.3f}s exceeded')
             break  # time limit exceeded
+        print('FIN non_max_suppresion')
 
     return output, extra_item_final_list
 

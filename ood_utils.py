@@ -1,6 +1,6 @@
 import argparse
 import numpy as np
-import sklearn.metrics as sk
+# import sklearn.metrics as sk
 
 ############################################################
 
@@ -22,7 +22,7 @@ def arg_parser():
     parser.add_argument("--name", default='prueba',
                         help="Name of this run. Used for monitoring and checkpointing.")
 
-    parser.add_argument("--model", default="BiT-S-R101x1", help="Which variant to use")
+    parser.add_argument("--model", default="YOLO", help="Which variant to use")
     parser.add_argument("--model_path", type=str, help="Path to the model you want to test")
 
     return parser

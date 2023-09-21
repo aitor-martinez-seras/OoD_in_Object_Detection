@@ -13,8 +13,9 @@ def main():
     # model.train(data="coco128.yaml", epochs=3)  # train the model
     # metrics = model.val()  # evaluate model performance on the validation set
 
-    results = model.predict(source=Path('datasets/proba'), save=True)
-    print(results)
+    # results = model.predict(source=Path('datasets/proba'), save=True)
+    results = model.predict(source=Path('datasets/coco128'), save=True)
+    # print(results)
     # print(results[0].extra_item) ## Para sacar el extra_item que metemos dentro de Results.
 
 

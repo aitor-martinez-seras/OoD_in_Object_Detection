@@ -31,8 +31,15 @@ class DetectionPredictor(BasePredictor):
                                         extra_item=output_extra)
 
         output_extra = preds[1]
-        preds = preds[0]
+        print('++++++++++++ POSTPROCESS ++++++++++++++++')
+        # print(output_extra)
+        print(len(output_extra))
+        for idx, o in enumerate(output_extra):
+            print(f'Extra item shape: {o.shape}')
+            print(f'Preds shape: {preds[0][idx].shape}')
+        print('-----------------------------------------------------------------------')
 
+        preds = preds[0]
         results = []
         for i, pred in enumerate(preds):
             orig_img = orig_imgs[i] if isinstance(orig_imgs, list) else orig_imgs
@@ -40,7 +47,7 @@ class DetectionPredictor(BasePredictor):
                 pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
             path = self.batch[0]
             img_path = path[i] if isinstance(path, list) else path
-            results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names, boxes=pred, extra_item=output_extra))
+            results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names, boxes=pred, extra_item=output_extra[i]))
         return results
 
 
