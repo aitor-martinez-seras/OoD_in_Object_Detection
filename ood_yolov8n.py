@@ -89,9 +89,7 @@ def iterate_data_msp(data_loader, model: YOLO, device):
     confs = []
     m = torch.nn.Softmax(dim=-1).cuda()
     all_scores = []
-    print('AAAAAAAAAAAAAAAAAAAAAAA')
     for idx, data in enumerate(data_loader):
-        print('BBBBBBBBBBBBBBBBBB')
         # Esto es para sacar imagenes y labels en diferentes variables
         if isinstance(data, dict):
             imgs = data['img'].to(device)
@@ -99,7 +97,8 @@ def iterate_data_msp(data_loader, model: YOLO, device):
             imgs, targets = data
 
         # Procesar imagenes en el modelo para obtener logits y las cajas
-        result = model.predict(imgs, save=True)
+        # result = model.predict(imgs, save=True)
+
         # print(result)
 
         # Matchear cuales de las cajas han sido predichas correctamente
