@@ -11,6 +11,9 @@ from ultralytics.yolo.utils import DEFAULT_CFG
 from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.data import YOLODataset
 
+import matplotlib.pyplot as plt
+from torchvision.utils import draw_bounding_boxes
+
 from ood_utils import get_measures, arg_parser
 import log
 
@@ -95,6 +98,11 @@ def iterate_data_msp(data_loader, model: YOLO, device):
             imgs = data['img'].to(device)
         else:
             imgs, targets = data
+
+        plt.imshow(imgs[4].permute(1,2,0).cpu())
+        plt.savefig('prueba.png')
+        plt.close()
+        quit()
 
         # Procesar imagenes en el modelo para obtener logits y las cajas
         # result = model.predict(imgs, save=True)
@@ -246,6 +254,7 @@ def main(args):
     print('****************************')
     print('****************************')
     print('****************************')
+    
 
     logger = log.setup_logger(args)
 
