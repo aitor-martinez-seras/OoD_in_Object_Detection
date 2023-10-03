@@ -13,6 +13,7 @@ from ultralytics.yolo.data import YOLODataset
 
 import matplotlib.pyplot as plt
 from torchvision.utils import draw_bounding_boxes
+import torchvision.ops as t_ops
 
 from ood_utils import get_measures, arg_parser
 import log
@@ -93,24 +94,56 @@ def iterate_data_msp(data_loader, model: YOLO, device):
     m = torch.nn.Softmax(dim=-1).cuda()
     all_scores = []
     for idx, data in enumerate(data_loader):
-        # Esto es para sacar imagenes y labels en diferentes variables
+
+        # TODO: Quiza se pueda simplificar todo si no lo hacemos en batches, pero de momento vamos 
+        # a intentarlo asi
+
+        # ----------------------
+        ### Preparar imagenes y targets ###
+        # ----------------------
         if isinstance(data, dict):
             imgs = data['img'].to(device)
+            # Como los targets vienen en una sola dimension, tenemos que hacer el matcheo de a que imagen pertenece cada bbox
+            # Para ello, tenemos que sacar en una lista, donde cada posicion se refiere a cada imagen del batch, los indices
+            # de los targets que pertenecen a esa imagen
+            target_idx = [torch.where(data['batch_idx'] == img_idx) for img_idx in range(len(data['im_file']))]
+            # Tambien tenemos que sacar el tamaño de la imagen original para poder pasar de coordenadas relativas a absolutas
+            # necesitamos que sea un array para poder luego indexar todas las bboxes de una al crear el dict targets
+            relative_to_absolute_coordinates = [np.array(data['resized_shape'][img_idx] + data['resized_shape'][img_idx]) for img_idx in range(len(data['im_file']))]
+
+            # Ahora creamos los targets
+            # Targets es un diccionario con dos listas, con tantas posiciones como imagenes en el batch
+            # En 'bboxes' tiene las bboxes. Hay que convertirlas a xyxy y pasar a coordenadas absolutas
+            # En 'cls' tiene las clases
+            targets = dict(
+                bboxes=[t_ops.box_convert(data['bboxes'][idx], 'cxcywh', 'xyxy') * relative_to_absolute_coordinates[img_idx] for img_idx, idx in enumerate(target_idx)],
+                cls=[data['cls'][idx].view(-1) for idx in target_idx]    
+            )
         else:
             imgs, targets = data
 
-        plt.imshow(imgs[4].permute(1,2,0).cpu())
-        plt.savefig('prueba.png')
-        plt.close()
-        quit()
+        # ----------------------
+        ### Procesar imagenes en el modelo para obtener logits y las cajas ###
+        # ----------------------
+        result = model.predict(imgs, save=False)
 
-        # Procesar imagenes en el modelo para obtener logits y las cajas
-        # result = model.predict(imgs, save=True)
+        # ----------------------
+        ### Matchear cuales de las cajas han sido predichas correctamente ###
+        # ----------------------
 
-        # print(result)
+        # Primero calculamos IoU entre cajas predichas y targets
+        iou_matrix_all_images = []
+        for img_idx, res in enumerate(result):
+            iou_matrix_all_images.append(t_ops.box_iou(res.boxes.xyxy.cpu(), targets['bboxes'][img_idx].cpu()))
 
-        # Matchear cuales de las cajas han sido predichas correctamente
-
+        # Ahora queremos asignar correctamente un target a cada caja predicha
+        # La funcion linear_sum_assignment no da para bbox predicha (cada fila)
+        # el target que mejor se le ajusta (columna)
+        # Depues tenemos que comprobar que el IoU sea mayor que un threshold
+        from scipy.optimize import linear_sum_assignment
+        assignment_all_images = []
+        for iou_matrix in iou_matrix_all_images:
+            assignment_all_images.append(linear_sum_assignment(iou_matrix, maximize=True))
 
         # Formar un array de la forma [nº de caja, clase y score]
         score_and_cls_per_bbox = ()
@@ -120,6 +153,30 @@ def iterate_data_msp(data_loader, model: YOLO, device):
 
         # conf, _ = torch.max(m(logits), dim=-1)
         # confs.extend(conf.data.cpu().numpy())
+
+        # Code to plot an image with the targets
+        # n_img = 4
+        # idx = torch.where(data['batch_idx'] == n_img)
+        # bboxes = t_ops.box_convert(data['bboxes'][idx], 'cxcywh', 'xyxy') * torch.Tensor([640, 640, 640, 640])
+        # im = draw_bounding_boxes(
+        #     imgs[n_img].cpu(), bboxes, width=5,
+        #     font='FreeMono', font_size=8, labels=[model.names[int(n.item())] for n in data['cls'][idx]]
+        # )
+        # plt.imshow(im.permute(1,2,0))
+        # plt.savefig('prueba.pdf')
+        # plt.close()
+        
+        # Code to plot the predictions
+        # from torchvision.utils import draw_bounding_boxes
+        # n_img = 1
+        # res = result[n_img]
+        # # idx = torch.where(data['batch_idx'] == n_img)
+        # bboxes = res.boxes.xyxy.cpu()
+        # labels = res.boxes.cls.cpu()
+        # im = draw_bounding_boxes(res.orig_img[n_img].cpu(), bboxes, width=5, font='FreeMonoBold', font_size=20, labels=[model.names[int(n.item())] for n in labels])
+        # plt.imshow(im.permute(1,2,0))
+        # plt.savefig('prueba.png')
+        # plt.close()
 
     # return np.array(confs)
     return None
