@@ -14,6 +14,7 @@ from ultralytics.yolo.data import YOLODataset
 import matplotlib.pyplot as plt
 from torchvision.utils import draw_bounding_boxes
 import torchvision.ops as t_ops
+from scipy.optimize import linear_sum_assignment
 
 from ood_utils import get_measures, arg_parser
 import log
@@ -125,25 +126,86 @@ def iterate_data_msp(data_loader, model: YOLO, device):
         # ----------------------
         ### Procesar imagenes en el modelo para obtener logits y las cajas ###
         # ----------------------
-        result = model.predict(imgs, save=False)
+        results = model.predict(imgs, save=False)
 
         # ----------------------
         ### Matchear cuales de las cajas han sido predichas correctamente ###
         # ----------------------
 
-        # Primero calculamos IoU entre cajas predichas y targets
-        iou_matrix_all_images = []
-        for img_idx, res in enumerate(result):
-            iou_matrix_all_images.append(t_ops.box_iou(res.boxes.xyxy.cpu(), targets['bboxes'][img_idx].cpu()))
+        iou_threshold = 0.5
+
+        # TODO: Optimizar 
+        # Tenemos que conseguir matchear cada prediccion a una de las cajas Ground Truth (GT)
+        for img_idx, res in enumerate(results):
+            # Para ello, primero calculamos el IoU de cada caja predicha con cada caja GT
+            # Despues creamos una matrix de misma shape que la de IoU, donde nos dice 
+            # para cada caja predicha si la clase coincide con la de la correspondiente caja GT
+            iou_matrix = t_ops.box_iou(res.boxes.xyxy.cpu(), targets['bboxes'][img_idx].cpu())
+            mask_matrix = torch.zeros(res.boxes.cls.size()[0], len(targets['cls'][img_idx])) ## Tensor de zeros para rellenar con True False si las clases coinciden
+            for i_pred in range(0,res.boxes.cls.size()[0]):
+                for i_real in range(0, len(targets['cls'][img_idx])):
+                    if res.boxes.cls[i_pred].cpu() == targets['cls'][img_idx][i_real]:
+                        mask_matrix[i_pred, i_real] = True
+                    else:
+                        mask_matrix[i_pred, i_real] = False
+            
+            # Al multiplicarlas elemento a elemento, nos quedamos con los IoU de las cajas que coinciden en clase
+            results[img_idx].assignment_score_matrix = iou_matrix * mask_matrix
+            
+            # Con el linear assigment podemos asignar a cada caja predicha la caja GT que mejor se ajusta
+            results[img_idx].assignment = linear_sum_assignment(results[img_idx].assignment_score_matrix, maximize=True)
+            
+            # Finalmente, recorremos la segunda tupla de la asignacion, que nos dice a que caja GT se ha 
+            # asignado cada caja predicha. Si el IoU es mayor que un threshold, la caja se considera correcta
+            # y se añade a la lista de cajas validas. Las cajas que hayan sido asignadas a pesar de que 
+            # su coste en la assignment_score_matrix sea 0, seran eliminadas al usar el threshold
+            results[img_idx].valid_preds = []
+            for i, assigment in enumerate(results[img_idx].assignment[1]):
+                if results[img_idx].assignment_score_matrix[i, assigment] > iou_threshold:
+                    results[img_idx].valid_preds.append(i)
+        
+        # ----------------------
+        ### Codigo para dibujar las cajas predichas y los targets ###
+        # ----------------------
+        # # Comprobar con un draw_bounding_boxes que las cajas que se han asignado son las correctas    
+        # for img_idx, res in enumerate(results):
+        #     # idx = torch.where(data['batch_idx'] == n_img)
+        #     valid_preds = np.array(res.valid_preds)
+        #     bboxes = res.boxes.xyxy.cpu()[valid_preds]
+        #     labels = res.boxes.cls.cpu()[valid_preds]
+        #     im = draw_bounding_boxes(
+        #         res.orig_img[img_idx].cpu(),
+        #         bboxes,
+        #         width=5,
+        #         font='FreeMonoBold',
+        #         font_size=20,
+        #         labels=[f'{model.names[int(n.item())]} - {res.boxes.conf[i]:.2f}' for i, n in enumerate(labels)]
+        #     )
+        #     plt.imshow(im.permute(1,2,0))
+        #     plt.savefig(f'prueba_{img_idx}.png')
+        #     plt.close()
+
+        
+
+        # # Creamos una mascara con las clases
+        # for res in 
+        #     clases_coinciden = torch.zeros(results[0].boxes.cls.size()[0], results[0].annotated_label.size()[0]) ## Tensor de zeros para rellenar con True False si las clases coinciden
+        #     for i_pred in range(0,results[0].boxes.cls.size()[0]):
+        #         for i_real in range(0,results[0].annotated_label.size()[0]):
+        #             if results[0].boxes.cls[i_pred] == results[0].annotated_label[i_real]:
+        #                 clases_coinciden[i_pred,i_real] = True
+        #             else:
+        #                 clases_coinciden[i_pred, i_real] = False
 
         # Ahora queremos asignar correctamente un target a cada caja predicha
         # La funcion linear_sum_assignment no da para bbox predicha (cada fila)
         # el target que mejor se le ajusta (columna)
         # Depues tenemos que comprobar que el IoU sea mayor que un threshold
-        from scipy.optimize import linear_sum_assignment
-        assignment_all_images = []
-        for iou_matrix in iou_matrix_all_images:
-            assignment_all_images.append(linear_sum_assignment(iou_matrix, maximize=True))
+
+        # from scipy.optimize import linear_sum_assignment
+        # assignment_all_images = []
+        # for iou_matrix in iou_matrix_all_images:
+        #     assignment_all_images.append(linear_sum_assignment(iou_matrix, maximize=True))
 
         # Formar un array de la forma [nº de caja, clase y score]
         score_and_cls_per_bbox = ()
