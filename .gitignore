@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 venv
 venv-yolo
-prueba.*
+prueba*
 
 # C extensions
 *.so
