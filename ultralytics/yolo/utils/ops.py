@@ -285,7 +285,7 @@ def non_max_suppression(
         if (time.time() - t) > time_limit:
             LOGGER.warning(f'WARNING ⚠️ NMS time limit {time_limit:.3f}s exceeded')
             break  # time limit exceeded
-        print('FIN non_max_suppresion')
+        # print('FIN non_max_suppresion')
 
     return output, extra_item_final_list
 
