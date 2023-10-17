@@ -1,5 +1,9 @@
 import time
 import os
+import json
+from pathlib import Path
+import pickle
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -10,6 +14,7 @@ from ultralytics.yolo.data.build import build_yolo_dataset, build_dataloader
 from ultralytics.yolo.utils import DEFAULT_CFG
 from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.data import YOLODataset
+from ultralytics.yolo.engine.results import Results
 
 import matplotlib.pyplot as plt
 from torchvision.utils import draw_bounding_boxes
@@ -19,11 +24,42 @@ from scipy.optimize import linear_sum_assignment
 from ood_utils import get_measures, arg_parser
 import log
 
+NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
+
 ############################################################
 
 # Code copied from https://github.com/KingJamesSong/RankFeat
 
 ############################################################
+
+def write_json(an_object, path_to_file: Path):
+    print(f"Started writing object {type(an_object)} data into a json file")
+    with open(path_to_file, "w") as fp:
+        json.dump(an_object, fp)
+        print(f"Done writing JSON data into {path_to_file} file")
+
+
+def read_json(path_to_file: Path):
+    # for reading also binary mode is important
+    with open(path_to_file, 'rb') as fp:
+        an_object = json.load(fp)
+        return an_object
+
+
+def write_pickle(an_object, path_to_file: Path):
+    print(f"Started writing object {type(an_object)} data into a .pkl file")
+    # store list in binary file so 'wb' mode
+    with open(path_to_file, 'wb') as fp:
+        pickle.dump(an_object, fp)
+        print('Done writing list into a binary file')
+
+
+def read_pickle(path_to_file: Path):
+    # for reading also binary mode is important
+    with open(path_to_file, 'rb') as fp:
+        an_object = pickle.load(fp)
+        return an_object
+
 
 # TODO: Hay que hacer que esto carge los dataloaders de el dataset In-Distribution y Out-Distribution
 def make_id_ood(args, logger):
@@ -55,7 +91,8 @@ def make_id_ood(args, logger):
     return in_set, out_set, in_loader, out_loader
 
 
-def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, batch_size: int):
+def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, batch_size: int, data_split: str, workers: int,
+                                       stride: int = 32, fraction: float = 1.0,):
 
     # TODO: En overrides se definirian ciertos parametros que se quieran tocar de la configuracion por defecto,
     # de tal forma que get_cfg() se encarga de coger esa configuracion por defecto y sobreescribirla con 
@@ -66,17 +103,41 @@ def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, batch_siz
     cfg = get_cfg(DEFAULT_CFG, overrides=overrides)
 
     data_dict = check_det_dataset(dataset_yaml_file_name_or_path)
-    imgs_path = data_dict['val']
+    imgs_path = data_dict[data_split]
+
+    # TODO: Split train dataset into two subsets, one for modeling the in-distribution 
+    #   and the other for defining the thresholds using 
+    #   https://github.com/ultralytics/ultralytics/blob/437b4306d207f787503fa1a962d154700e870c64/ultralytics/data/utils.py#L586
 
     dataset = build_yolo_dataset(
         cfg=cfg,
         img_path=imgs_path,  # Path to the folder containing the images
         batch=batch_size,
         data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
-        mode='test',
+        mode='test',  # This is for disabling data augmentation
         rect=False,
-        stride=32
+        stride=32,
     )
+
+    # from ultralytics.yolo.utils import colorstr
+    # dataset = YOLODataset(
+    #     img_path=imgs_path,
+    #     imgsz=cfg.imgsz,
+    #     batch_size=batch_size,
+    #     augment=False,  # We dont want to augment the data
+    #     hyp=cfg,  # TODO: probably add a get_hyps_from_cfg function
+    #     rect=cfg.rect,  # rectangular batches
+    #     cache=cfg.cache or None,
+    #     single_cls=cfg.single_cls or False,
+    #     stride=int(stride),
+    #     #pad=0.0 if mode == 'train' else 0.5,
+    #     pad=0.5,
+    #     prefix=colorstr(f'test: '),
+    #     use_segments=cfg.task == 'segment',
+    #     use_keypoints=cfg.task == 'pose',
+    #     classes=cfg.classes,
+    #     data=data_dict,
+    #     fraction=fraction)
 
     dataloader = build_dataloader(
         dataset=dataset,
@@ -89,166 +150,229 @@ def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, batch_siz
     return dataset, dataloader
 
 
-# Maximum Logit Score
-def iterate_data_msp(data_loader, model: YOLO, device):
-    confs = []
-    m = torch.nn.Softmax(dim=-1).cuda()
-    all_scores = []
-    for idx, data in enumerate(data_loader):
+def match_predicted_boxes_to_targets(results: Results, targets, iou_threshold: float):
+    """
+    Funcion que matchea las cajas predichas con las cajas Ground Truth (GT) que mejor se ajustan.
+    El matching se devuelve en la variable results.valid_preds, que es una lista de indices de las cajas
+    cuyas predicciones han matcheado con una caja GT con un IoU mayor que el threshold.
+    """
+    # TODO: Optimizar 
+    # Tenemos que conseguir matchear cada prediccion a una de las cajas Ground Truth (GT)
+    for img_idx, res in enumerate(results):
+        # Para ello, primero calculamos el IoU de cada caja predicha con cada caja GT
+        # Despues creamos una matrix de misma shape que la de IoU, donde nos dice 
+        # para cada caja predicha si la clase coincide con la de la correspondiente caja GT
+        iou_matrix = t_ops.box_iou(res.boxes.xyxy.cpu(), targets['bboxes'][img_idx].cpu())
+        mask_matrix = torch.zeros(res.boxes.cls.size()[0], len(targets['cls'][img_idx])) ## Tensor de zeros para rellenar con True False si las clases coinciden
+        for i_pred in range(0,res.boxes.cls.size()[0]):
+            for i_real in range(0, len(targets['cls'][img_idx])):
+                if res.boxes.cls[i_pred].cpu() == targets['cls'][img_idx][i_real]:
+                    mask_matrix[i_pred, i_real] = True
+                else:
+                    mask_matrix[i_pred, i_real] = False
+        
+        # Al multiplicarlas elemento a elemento, nos quedamos con los IoU de las cajas que coinciden en clase
+        results[img_idx].assignment_score_matrix = iou_matrix * mask_matrix
+        
+        # Con el linear assigment podemos asignar a cada caja predicha la caja GT que mejor se ajusta
+        results[img_idx].assignment = linear_sum_assignment(results[img_idx].assignment_score_matrix, maximize=True)
+        
+        # Finalmente, recorremos la segunda tupla de la asignacion, que nos dice a que caja GT se ha 
+        # asignado cada caja predicha. Si el IoU es mayor que un threshold, la caja se considera correcta
+        # y se añade a la lista de cajas validas. Las cajas que hayan sido asignadas a pesar de que 
+        # su coste en la assignment_score_matrix sea 0, seran eliminadas al usar el threshold
+        results[img_idx].valid_preds = []
+        for i, assigment in enumerate(results[img_idx].assignment[1]):
+            if results[img_idx].assignment_score_matrix[i, assigment] > iou_threshold:
+                results[img_idx].valid_preds.append(i)
 
-        # TODO: Quiza se pueda simplificar todo si no lo hacemos en batches, pero de momento vamos 
-        # a intentarlo asi
+
+def log_progress_of_batches(logger, idx_of_batch, number_of_batches):
+    """
+    Log the progress of batches every 50 batches or when 10, 25, 50 and 75% of 
+    progress has been completed.
+    """
+    if idx_of_batch % 50 == 0:
+        logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")
+
+    if idx_of_batch == int(number_of_batches * 0.1):
+        logger.info(f"10%: Procesing batch {idx_of_batch} of {number_of_batches}")
+    elif idx_of_batch == int(number_of_batches * 0.25):
+        logger.info(f"25%: Procesing batch {idx_of_batch} of {number_of_batches}")
+    elif idx_of_batch == int(number_of_batches * 0.5):
+        logger.info(f"50%: Procesing batch {idx_of_batch} of {number_of_batches}")
+    elif idx_of_batch == int(number_of_batches * 0.75):
+        logger.info(f"75%: Procesing batch {idx_of_batch} of {number_of_batches}")
+
+
+def create_targets_dict(data: dict) -> dict:
+    """
+    Funcion que crea un diccionario con los targets de cada imagen del batch.
+    La funcion es necesaria porque los targets vienen en una sola dimension, 
+        por lo que hay que hacer el matcheo de a que imagen pertenece cada bbox.
+    """
+    # Como los targets vienen en una sola dimension, tenemos que hacer el matcheo de a que imagen pertenece cada bbox
+    # Para ello, tenemos que sacar en una lista, donde cada posicion se refiere a cada imagen del batch, los indices
+    # de los targets que pertenecen a esa imagen
+    target_idx = [torch.where(data['batch_idx'] == img_idx) for img_idx in range(len(data['im_file']))]
+    # Tambien tenemos que sacar el tamaño de la imagen original para poder pasar de coordenadas relativas a absolutas
+    # necesitamos que sea un array para poder luego indexar todas las bboxes de una al crear el dict targets
+    relative_to_absolute_coordinates = [np.array(data['resized_shape'][img_idx] + data['resized_shape'][img_idx]) for img_idx in range(len(data['im_file']))]
+
+    # Ahora creamos los targets
+    # Targets es un diccionario con dos listas, con tantas posiciones como imagenes en el batch
+    # En 'bboxes' tiene las bboxes. Hay que convertirlas a xyxy y pasar a coordenadas absolutas
+    # En 'cls' tiene las clases
+    targets = dict(
+        bboxes=[t_ops.box_convert(data['bboxes'][idx], 'cxcywh', 'xyxy') * relative_to_absolute_coordinates[img_idx] for img_idx, idx in enumerate(target_idx)],
+        cls=[data['cls'][idx].view(-1) for idx in target_idx]    
+    )
+    return targets
+
+
+def plot_results(model, results, valid_preds_only: bool, ood_labeling: bool, origin_of_idx: int, ood_decision=None):
+    # ----------------------
+    ### Codigo para dibujar las cajas predichas y los targets ###
+    # ----------------------
+    # Parametros para plot
+    width = 2
+    font = 'FreeMonoBold'
+    font_size = 12
+
+    # Creamos la carpeta donde se guardaran las imagenes
+    pruebas_root_path = Path('pruebas')
+    prueba_ahora_path = pruebas_root_path / NOW
+    prueba_ahora_path.mkdir(exist_ok=True)
+
+    class_names = model.names
+
+    for img_idx, res in enumerate(results):
+        # idx = torch.where(data['batch_idx'] == n_img)
+        if valid_preds_only:
+            valid_preds = np.array(res.valid_preds)
+            bboxes = res.boxes.xyxy.cpu()[valid_preds]
+            labels = res.boxes.cls.cpu()[valid_preds]
+        else:
+            bboxes = res.boxes.xyxy.cpu()
+            labels = res.boxes.cls.cpu()
+
+        if ood_labeling:
+            assert ood_decision is not None, "If ood_labeling is True, ood_decision must be a list of -1 and 1"
+
+            # Este codigo es por si queremos que las cajas OoD se pinten con nombre OoD
+            # for i, decision in enumerate(ood_decision[img_idx]):
+            #     if decision == -1:
+            #         labels[i] = -1
+            # class_names[-1] = 'OoD'
+
+            # labels_for_plot = []
+            # for i, lbl in enumerate(labels):
+            #     if lbl == -1:
+            #         labels_for_plot.append(f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}')
+            #     else:    
+            #         labels_for_plot.append(f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}') 
+            im = draw_bounding_boxes(
+                res.orig_img[img_idx].cpu(),
+                bboxes,
+                width=width,
+                font=font,
+                font_size=font_size,
+                labels=[f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}' for i, n in enumerate(labels)],
+                colors=['red' if n == -1 else 'green' for n in ood_decision[img_idx]]
+            )
+        else:
+            im = draw_bounding_boxes(
+                res.orig_img[img_idx].cpu(),
+                bboxes,
+                width=5,
+                font=font,
+                font_size=font_size,
+                labels=[f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}' for i, n in enumerate(labels)]
+            )
+
+        plt.imshow(im.permute(1,2,0))
+        plt.savefig(prueba_ahora_path / f'{(origin_of_idx + img_idx):03}.png', dpi=300)
+        plt.close()
+
+    # Code to plot an image with the targets
+    # n_img = 4
+    # idx = torch.where(data['batch_idx'] == n_img)
+    # bboxes = t_ops.box_convert(data['bboxes'][idx], 'cxcywh', 'xyxy') * torch.Tensor([640, 640, 640, 640])
+    # im = draw_bounding_boxes(
+    #     imgs[n_img].cpu(), bboxes, width=5,
+    #     font='FreeMono', font_size=8, labels=[model.names[int(n.item())] for n in data['cls'][idx]]
+    # )
+    # plt.imshow(im.permute(1,2,0))
+    # plt.savefig('prueba.pdf')
+    # plt.close()
+    
+    # Code to plot the predictions
+    # from torchvision.utils import draw_bounding_boxes
+    # n_img = 1
+    # res = result[n_img]
+    # # idx = torch.where(data['batch_idx'] == n_img)
+    # bboxes = res.boxes.xyxy.cpu()
+    # labels = res.boxes.cls.cpu()
+    # im = draw_bounding_boxes(res.orig_img[n_img].cpu(), bboxes, width=5, font='FreeMonoBold', font_size=20, labels=[model.names[int(n.item())] for n in labels])
+    # plt.imshow(im.permute(1,2,0))
+    # plt.savefig('prueba.png')
+    # plt.close()
+
+# Maximum Logit Score
+def iterate_data_msp(data_loader, model: YOLO, device, logger):
+    
+    all_scores = [[] for _ in range(len(model.names))]
+    number_of_batches = len(data_loader)
+    
+    # TODO: Quiza se pueda simplificar todo si no lo hacemos en batches, pero de momento vamos 
+    # a intentarlo asi
+    for idx_of_batch, data in enumerate(data_loader):
+        
+        # TODO: Use logger to log progress
+        if idx_of_batch % 50 == 0:
+            logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")  
 
         # ----------------------
         ### Preparar imagenes y targets ###
         # ----------------------
         if isinstance(data, dict):
             imgs = data['img'].to(device)
-            # Como los targets vienen en una sola dimension, tenemos que hacer el matcheo de a que imagen pertenece cada bbox
-            # Para ello, tenemos que sacar en una lista, donde cada posicion se refiere a cada imagen del batch, los indices
-            # de los targets que pertenecen a esa imagen
-            target_idx = [torch.where(data['batch_idx'] == img_idx) for img_idx in range(len(data['im_file']))]
-            # Tambien tenemos que sacar el tamaño de la imagen original para poder pasar de coordenadas relativas a absolutas
-            # necesitamos que sea un array para poder luego indexar todas las bboxes de una al crear el dict targets
-            relative_to_absolute_coordinates = [np.array(data['resized_shape'][img_idx] + data['resized_shape'][img_idx]) for img_idx in range(len(data['im_file']))]
-
-            # Ahora creamos los targets
-            # Targets es un diccionario con dos listas, con tantas posiciones como imagenes en el batch
-            # En 'bboxes' tiene las bboxes. Hay que convertirlas a xyxy y pasar a coordenadas absolutas
-            # En 'cls' tiene las clases
-            targets = dict(
-                bboxes=[t_ops.box_convert(data['bboxes'][idx], 'cxcywh', 'xyxy') * relative_to_absolute_coordinates[img_idx] for img_idx, idx in enumerate(target_idx)],
-                cls=[data['cls'][idx].view(-1) for idx in target_idx]    
-            )
+            targets = create_targets_dict(data)
         else:
             imgs, targets = data
 
         # ----------------------
         ### Procesar imagenes en el modelo para obtener logits y las cajas ###
         # ----------------------
-        results = model.predict(imgs, save=False)
+        results = model.predict(imgs, save=False, verbose=False)
 
         # ----------------------
         ### Matchear cuales de las cajas han sido predichas correctamente ###
         # ----------------------
-
-        iou_threshold = 0.5
-
-        # TODO: Optimizar 
-        # Tenemos que conseguir matchear cada prediccion a una de las cajas Ground Truth (GT)
-        for img_idx, res in enumerate(results):
-            # Para ello, primero calculamos el IoU de cada caja predicha con cada caja GT
-            # Despues creamos una matrix de misma shape que la de IoU, donde nos dice 
-            # para cada caja predicha si la clase coincide con la de la correspondiente caja GT
-            iou_matrix = t_ops.box_iou(res.boxes.xyxy.cpu(), targets['bboxes'][img_idx].cpu())
-            mask_matrix = torch.zeros(res.boxes.cls.size()[0], len(targets['cls'][img_idx])) ## Tensor de zeros para rellenar con True False si las clases coinciden
-            for i_pred in range(0,res.boxes.cls.size()[0]):
-                for i_real in range(0, len(targets['cls'][img_idx])):
-                    if res.boxes.cls[i_pred].cpu() == targets['cls'][img_idx][i_real]:
-                        mask_matrix[i_pred, i_real] = True
-                    else:
-                        mask_matrix[i_pred, i_real] = False
-            
-            # Al multiplicarlas elemento a elemento, nos quedamos con los IoU de las cajas que coinciden en clase
-            results[img_idx].assignment_score_matrix = iou_matrix * mask_matrix
-            
-            # Con el linear assigment podemos asignar a cada caja predicha la caja GT que mejor se ajusta
-            results[img_idx].assignment = linear_sum_assignment(results[img_idx].assignment_score_matrix, maximize=True)
-            
-            # Finalmente, recorremos la segunda tupla de la asignacion, que nos dice a que caja GT se ha 
-            # asignado cada caja predicha. Si el IoU es mayor que un threshold, la caja se considera correcta
-            # y se añade a la lista de cajas validas. Las cajas que hayan sido asignadas a pesar de que 
-            # su coste en la assignment_score_matrix sea 0, seran eliminadas al usar el threshold
-            results[img_idx].valid_preds = []
-            for i, assigment in enumerate(results[img_idx].assignment[1]):
-                if results[img_idx].assignment_score_matrix[i, assigment] > iou_threshold:
-                    results[img_idx].valid_preds.append(i)
+        # Matchea las cajas predichas a los targets y devuelve una lista
+        # con los indices de las cajas predichas que han sido asignadas
+        # dentro de results.valid_preds
+        match_predicted_boxes_to_targets(results, targets, IOU_THRESHOLD)
         
-        # ----------------------
-        ### Codigo para dibujar las cajas predichas y los targets ###
-        # ----------------------
-        # # Comprobar con un draw_bounding_boxes que las cajas que se han asignado son las correctas    
-        # for img_idx, res in enumerate(results):
-        #     # idx = torch.where(data['batch_idx'] == n_img)
-        #     valid_preds = np.array(res.valid_preds)
-        #     bboxes = res.boxes.xyxy.cpu()[valid_preds]
-        #     labels = res.boxes.cls.cpu()[valid_preds]
-        #     im = draw_bounding_boxes(
-        #         res.orig_img[img_idx].cpu(),
-        #         bboxes,
-        #         width=5,
-        #         font='FreeMonoBold',
-        #         font_size=20,
-        #         labels=[f'{model.names[int(n.item())]} - {res.boxes.conf[i]:.2f}' for i, n in enumerate(labels)]
-        #     )
-        #     plt.imshow(im.permute(1,2,0))
-        #     plt.savefig(f'prueba_{img_idx}.png')
-        #     plt.close()
-
-        
-
-        # # Creamos una mascara con las clases
-        # for res in 
-        #     clases_coinciden = torch.zeros(results[0].boxes.cls.size()[0], results[0].annotated_label.size()[0]) ## Tensor de zeros para rellenar con True False si las clases coinciden
-        #     for i_pred in range(0,results[0].boxes.cls.size()[0]):
-        #         for i_real in range(0,results[0].annotated_label.size()[0]):
-        #             if results[0].boxes.cls[i_pred] == results[0].annotated_label[i_real]:
-        #                 clases_coinciden[i_pred,i_real] = True
-        #             else:
-        #                 clases_coinciden[i_pred, i_real] = False
-
-        # Ahora queremos asignar correctamente un target a cada caja predicha
-        # La funcion linear_sum_assignment no da para bbox predicha (cada fila)
-        # el target que mejor se le ajusta (columna)
-        # Depues tenemos que comprobar que el IoU sea mayor que un threshold
-
-        # from scipy.optimize import linear_sum_assignment
-        # assignment_all_images = []
-        # for iou_matrix in iou_matrix_all_images:
-        #     assignment_all_images.append(linear_sum_assignment(iou_matrix, maximize=True))
-
         # Formar un array de la forma [nº de caja, clase y score]
-        score_and_cls_per_bbox = ()
+        for res in results:
+            for valid_idx in res.valid_preds:
+                cls_idx = int(res.boxes.cls[valid_idx].cpu())
+                # El max se hace para sacar el Maximum Softmax Probability (MSP)
+                all_scores[cls_idx].append(res.extra_item[valid_idx][4:][cls_idx].cpu().numpy().max())
 
-        # Acumular en una lista los scores de cada caja
-        # all_scores.append()
+        # # Plot results
+        # plot_results(model, results)
+        # quit()
 
-        # conf, _ = torch.max(m(logits), dim=-1)
-        # confs.extend(conf.data.cpu().numpy())
+    return all_scores
 
-        # Code to plot an image with the targets
-        # n_img = 4
-        # idx = torch.where(data['batch_idx'] == n_img)
-        # bboxes = t_ops.box_convert(data['bboxes'][idx], 'cxcywh', 'xyxy') * torch.Tensor([640, 640, 640, 640])
-        # im = draw_bounding_boxes(
-        #     imgs[n_img].cpu(), bboxes, width=5,
-        #     font='FreeMono', font_size=8, labels=[model.names[int(n.item())] for n in data['cls'][idx]]
-        # )
-        # plt.imshow(im.permute(1,2,0))
-        # plt.savefig('prueba.pdf')
-        # plt.close()
-        
-        # Code to plot the predictions
-        # from torchvision.utils import draw_bounding_boxes
-        # n_img = 1
-        # res = result[n_img]
-        # # idx = torch.where(data['batch_idx'] == n_img)
-        # bboxes = res.boxes.xyxy.cpu()
-        # labels = res.boxes.cls.cpu()
-        # im = draw_bounding_boxes(res.orig_img[n_img].cpu(), bboxes, width=5, font='FreeMonoBold', font_size=20, labels=[model.names[int(n.item())] for n in labels])
-        # plt.imshow(im.permute(1,2,0))
-        # plt.savefig('prueba.png')
-        # plt.close()
-
-    # return np.array(confs)
-    return None
 # ODIN Score
 def iterate_data_odin(data_loader, model, epsilon, temper, logger):
     criterion = torch.nn.CrossEntropyLoss().cuda()
     confs = []
     for b, (x, y) in enumerate(data_loader):
         x = Variable(x.cuda(), requires_grad=True)
-
 
         outputs =  model(x)
 
@@ -291,16 +415,98 @@ def iterate_data_energy(data_loader, model, temper):
             confs.extend(conf.data.cpu().numpy())
     return np.array(confs)
 
-def run_eval(model, device, in_loader, out_loader, logger, args, num_classes):
+def generate_ood_thresholds(in_scores: list, tpr: float, per_class: bool, logger) -> np.array:
+    """
+    Generate the thresholds for each class using the in-distribution scores.
+    If per_class=True, in_scores must be a list of lists,
+      where each list is the list of scores for each class.
+    tpr must be in the range [0, 1]
+    """
+    if per_class:
+        ood_thresholds = np.zeros(len(in_scores))
+        for idx, cl in enumerate(in_scores):
+            if len(cl) < 20:
+                if len(cl) > 10:
+                    logger.warning(f"Class {idx} has {len(cl)} samples. The threshold may not be accurate")
+                    ood_thresholds[idx] = np.percentile(cl, 100 - tpr*100, method='lower')
+                else:
+                    logger.warning(f"Class {idx} has less than 10 samples. The threshold is set to 0.2")
+            else:
+                ood_thresholds[idx] = np.percentile(cl, 100 - tpr*100, method='lower')
+    else:
+        raise NotImplementedError("Not implemented yet")
+    
+    return ood_thresholds
+
+def generate_predictions_with_ood_labeling(dataloader, model, device, logger, ood_thresholds):
+    
+    all_results = []
+
+    conf = 0.15
+    logger.warning(f"Using a confidence threshold of {conf} for tests")
+
+    for idx_of_batch, data in enumerate(dataloader):
+        
+        ### Preparar imagenes y targets ###
+        if isinstance(data, dict):
+            imgs = data['img'].to(device)
+            targets = create_targets_dict(data)
+        else:
+            imgs, targets = data
+        
+        ### Procesar imagenes en el modelo para obtener logits y las cajas ###
+        results = model.predict(imgs, save=False, verbose=True, conf=conf)
+
+        ### Comprobar si las cajas predichas son OoD ###
+        ood_decision = []
+        # Iteramos cada imagen
+        for idx_img, res in enumerate(results):
+            # TODO: Mejorar la forma en la que se guarda la decision de si es OoD o no.
+            # TODO: Separar 
+            ood_decision.append([])
+            # Iteramos cada bbox
+            for idx_bbox in range(len(res.boxes.cls)):
+                cls_idx = int(res.boxes.cls[idx_bbox].cpu())
+
+                # Esto es para MSP
+                if res.extra_item[idx_bbox][4:][cls_idx].cpu().numpy().max() < ood_thresholds[cls_idx]:
+                    ood_decision[idx_img].append(-1)
+                else:
+                    ood_decision[idx_img].append(1)
+        
+        plot_results(model, results, valid_preds_only=False, ood_labeling=True,
+                     origin_of_idx=idx_of_batch*dataloader.batch_size, ood_decision=ood_decision)
+        
+        if idx_of_batch > 4:
+            quit()
+
+    return all_results
+
+
+
+def run_eval(model, device, in_loader, out_loader, logger, args):
     logger.info("Running test...")
     logger.flush()
 
     if args.score == 'MSP':
-        logger.info("Processing in-distribution data...")
-        in_scores = iterate_data_msp(in_loader, model, device)
-        quit()
+        
+        
+        # # In scores
+        # logger.info("Processing in-distribution data...")
+        # in_scores = iterate_data_msp(in_loader, model, device, logger)
+        # # Guardo los resultados en disco para no repetir el calculo
+        # in_scores_serializable = [[float(score) for score in cl] for cl in in_scores]
+        # write_json(in_scores_serializable, Path('pruebas/prueba_in_scores.json'))
+        # write_pickle(in_scores, Path('pruebas/prueba_in_scores.pkl'))
+        in_scores = read_json(Path('pruebas/prueba_in_scores.json'))
+        ood_thresholds = generate_ood_thresholds(in_scores, tpr=0.95, per_class=True, logger=logger)
+        for idx, o in enumerate(ood_thresholds):
+            print(f'{model.names[idx]}: {o:.2f}')
+
+        # OoD scores
         logger.info("Processing out-of-distribution data...")
-        out_scores = iterate_data_msp(out_loader, model, device)
+        out_scores = generate_predictions_with_ood_labeling(out_loader, model, device, logger, ood_thresholds)
+
     elif args.score == 'ODIN':
         logger.info("Processing in-distribution data...")
         in_scores = iterate_data_odin(in_loader, model, args.epsilon_odin, args.temperature_odin, logger)
@@ -374,11 +580,21 @@ def main(args):
     print('****************************')
     print('****************************')
     
-
+    # Setup logger
     logger = log.setup_logger(args)
+
+    # Make IoU threshold global
+    global IOU_THRESHOLD 
+    IOU_THRESHOLD = 0.5
 
     # TODO: This is for reproducibility 
     # torch.backends.cudnn.benchmark = True
+
+    logger.warning('Changing following enviroment variables:')
+    #os.environ['YOLO_VERBOSE'] = 'False'
+    gpu_number = str(2)
+    os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
+    logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
 
     # TODO: Unused till we implement GradNorm
     if args.score == 'GradNorm':
@@ -386,16 +602,27 @@ def main(args):
 
     # Load ID data and OOD data
     # ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader('coco128_custom.yaml', batch_size=args.batch_size)
-    ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader('coco128_custom.yaml', batch_size=5)
-    # ood_dataset, ood_dataloader = create_YOLO_dataset_and_dataloader('coco128_custom.yaml', batch_size=args.batch_size)
-    ood_dataloader = None
+    #ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader('coco128_custom.yaml', batch_size=5)
+    ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader(
+        'coco.yaml',
+        batch_size=args.batch_size,
+        data_split='val',
+        workers=args.num_workers
+    )
+    ood_dataset, ood_dataloader = create_YOLO_dataset_and_dataloader(
+        'VisDrone.yaml', 
+        batch_size=args.batch_size,
+        data_split='val',
+        workers=args.num_workers
+    )
     # in_set, out_set, in_loader, out_loader = make_id_ood(args, logger)
-    print(ind_dataset)
 
     # TODO: usar el argparser para elegir el modelo que queremos cargar
     model_to_load = 'yolov8n.pt'
 
     logger.info(f"Loading model {model_to_load} in {args.device}")
+
+    logger.info(f"IoU threshold set to {IOU_THRESHOLD}")
 
     # Load YOLO model
     # TODO: add different YOLO models
@@ -407,14 +634,8 @@ def main(args):
     # if args.score != 'GradNorm':
     #     model = torch.nn.DataParallel(model)
 
-    # Extract the number of classes
-    if isinstance(ind_dataset, YOLODataset):
-        num_classes = len(ind_dataset.data['names'])
-    else:
-        num_classes = len(ind_dataset.classes)
-
     start_time = time.time()
-    run_eval(model, args.device, ind_dataloader, ood_dataloader, logger, args, num_classes=num_classes)
+    run_eval(model, args.device, ind_dataloader, ood_dataloader, logger, args)
     end_time = time.time()
 
     logger.info("Total running time: {}".format(end_time - start_time))
@@ -424,6 +645,8 @@ if __name__ == "__main__":
     parser = arg_parser()
     
     parser.add_argument('-d', '--device', default='cuda', type=str, help='use cpu or cuda')
+    parser.add_argument('-b', '--batch_size', default=4, type=int, help='batch size to use')
+    parser.add_argument('-n_w', '--num_workers', default=1, type=int, help='number of workers to use in dataloader')
     parser.add_argument("--in_datadir", help="Path to the in-distribution data folder.")
     parser.add_argument("--out_datadir", help="Path to the out-of-distribution data folder.")
 
