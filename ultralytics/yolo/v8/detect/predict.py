@@ -31,13 +31,13 @@ class DetectionPredictor(BasePredictor):
                                         extra_item=output_extra)
 
         output_extra = preds[1]
-        print('++++++++++++ POSTPROCESS ++++++++++++++++')
-        # print(output_extra)
-        print(len(output_extra))
-        for idx, o in enumerate(output_extra):
-            print(f'Extra item shape: {o.shape}')
-            print(f'Preds shape: {preds[0][idx].shape}')
-        print('-----------------------------------------------------------------------')
+        # print('++++++++++++ POSTPROCESS ++++++++++++++++')
+        # # print(output_extra)
+        # print(len(output_extra))
+        # for idx, o in enumerate(output_extra):
+        #     print(f'Extra item shape: {o.shape}')
+        #     print(f'Preds shape: {preds[0][idx].shape}')
+        # print('-----------------------------------------------------------------------')
 
         preds = preds[0]
         results = []
