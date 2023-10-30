@@ -146,7 +146,8 @@ def non_max_suppression(
         max_time_img=0.05,
         max_nms=30000,
         max_wh=7680,
-        extra_item = None
+        extra_item=None,
+        strides=None
 ):
     """
     Perform non-maximum suppression (NMS) on a set of boxes, with support for masks and multiple labels per box.
@@ -172,12 +173,13 @@ def non_max_suppression(
         max_nms (int): The maximum number of boxes into torchvision.ops.nms().
         max_wh (int): The maximum box width and height in pixels
         extra_item: Extra item that we want to obtain with the results of the prediction of YOLO to compute OOD
+        strides (torch.Tensor): The strides of the model. Defaults to None.
 
     Returns:
         (List[torch.Tensor]): A list of length batch_size, where each element is a tensor of
             shape (num_boxes, 6 + num_masks) containing the kept boxes, with columns
             (x1, y1, x2, y2, confidence, class, mask1, mask2, ...).
-        (List[]): A list were the elements are the information that we want to obtain for OOD scores calculation.
+        (List[torch.Tensor]): A list were the elements are the information that we want to obtain for OOD scores calculation.
     """
 
     # Checks
@@ -195,7 +197,7 @@ def non_max_suppression(
     nm = prediction.shape[1] - nc - 4
     mi = 4 + nc  # mask start index
     xc = prediction[:, 4:mi].amax(1) > conf_thres  # candidates
-    # mi_prueba = torch.arange(0, xc.shape[1], 1)
+
     # Settings
     # min_wh = 2  # (pixels) minimum box width and height
     time_limit = 0.5 + max_time_img * bs  # seconds to quit after
@@ -206,16 +208,18 @@ def non_max_suppression(
     t = time.time()
     output = [torch.zeros((0, 6 + nm), device=prediction.device)] * bs
     extra_item_final_list = []
+    strides_final_list = []
 
     for xi, x in enumerate(prediction):  # image index, image inference
 
-        # extra_item_one_iter = extra_item[xi]
         # Apply constraints
         # x[((x[:, 2:4] < min_wh) | (x[:, 2:4] > max_wh)).any(1), 4] = 0  # width-height
+        # Take only the predictions with confidence higher than the threshold
         x = x.transpose(0, -1)[xc[xi]]  # confidence
-        # print('****** 1ero ******')
-        # print('shape extra item:', extra_item.shape)
-        extra_item_elegidos = extra_item[xi].transpose(0, -1)[xc[xi]] ###################
+        if extra_item is not None:
+            extra_item_elegidos = extra_item[xi].transpose(0, -1)[xc[xi]] ###################
+        if strides is not None:
+            strides_one_example = strides[xc[xi]]
         # extra_item_elegidos = extra_item[xc[xi]]
 
         # Cat apriori labels if autolabelling
@@ -227,10 +231,15 @@ def non_max_suppression(
             x = torch.cat((x, v), 0)
 
         # If none remain process next image
-        if not x.shape[0]:
-            extra_item_final_list.append(np.array([0]))
-            continue
-
+        if extra_item is not None:
+            if not x.shape[0]:
+                extra_item_final_list.append(np.array([0]))
+                continue
+        if strides is not None:
+            if not x.shape[0]:
+                strides_final_list.append(np.array([0]))
+                continue
+        
         # Detections matrix nx6 (xyxy, conf, cls)
         box, cls, mask = x.split((4, nc, nm), 1)
         box = xywh2xyxy(box)  # center_x, center_y, width, height) to (x1, y1, x2, y2)
@@ -238,12 +247,20 @@ def non_max_suppression(
             i, j = (cls > conf_thres).nonzero(as_tuple=False).T
             x = torch.cat((box[i], x[i, 4 + j, None], j[:, None].float(), mask[i]), 1)
         else:  # best class only
+            # ESTO NO TIENE MUCHO SENTIDO, YA QUE ESTA COMPROBACION SOBRE EL THRESHOLD DE CONFIANZA
+            #   YA ESTA HECHA PREVIAMENTE AL COMENZAR EL BUCLE. Aun asi lo dejo y lo copio
             conf, j = cls.max(1, keepdim=True)
             x = torch.cat((box, conf, j.float(), mask), 1)[conf.view(-1) > conf_thres]
+            if extra_item is not None:
+                extra_item_elegidos = extra_item_elegidos[conf.view(-1) > conf_thres]
+            if strides is not None:
+                strides_one_example = strides_one_example[conf.view(-1) > conf_thres]
 
         # Filter by class
-        if classes is not None:
+        if classes:
             x = x[(x[:, 5:6] == torch.tensor(classes, device=x.device)).any(1)]
+            if strides is not None:
+                strides_one_example = strides_one_example[(x[:, 5:6] == torch.tensor(classes, device=x.device)).any(1)]
 
         # Apply finite constraint
         # if not torch.isfinite(x).all():
@@ -255,9 +272,12 @@ def non_max_suppression(
         if not n:  # no boxes
             continue
 
-        extra_item_order = extra_item_elegidos[x[:, 4].argsort(descending=True)[:max_nms]]
-        # print('------- 2do ---------')
-        # print('shape extra item cajas ordenadas:', extra_item_order.shape)
+        # sort by confidence and remove excess boxes
+        # TODO: Posible mejora de rendimiento, consultar solo una vez los indices de x 
+        if extra_item is not None:
+            extra_item_order = extra_item_elegidos[x[:, 4].argsort(descending=True)[:max_nms]]
+        if strides is not None:
+            strides_one_example = strides_one_example[x[:, 4].argsort(descending=True)[:max_nms]]        
 
         x = x[x[:, 4].argsort(descending=True)[:max_nms]]  # sort by confidence and remove excess boxes
         # Batched NMS
@@ -273,21 +293,30 @@ def non_max_suppression(
             if redundant:
                 i = i[iou.sum(1) > 1]  # require redundancy
 
+        # Select only the NMSed boxes
         output[xi] = x[i]
-        # print('¿¿¿¿¿¿¿¿¿ 3ro ¿¿¿¿¿¿¿¿¿¿¿')
-        # print(i)
-        # print('shape extra item cajas elegidas:', extra_item_order[i].shape)
-        # print(extra_item_order[i])
-        extra_item_final_list.append(extra_item_order[i])
+        if extra_item is not None:
+            extra_item_final_list.append(extra_item_order[i])
+        if strides is not None:
+            strides_final_list.append(strides_one_example[i])
 
         if mps:
             output[xi] = output[xi].to(device)
         if (time.time() - t) > time_limit:
             LOGGER.warning(f'WARNING ⚠️ NMS time limit {time_limit:.3f}s exceeded')
             break  # time limit exceeded
-        # print('FIN non_max_suppresion')
-
-    return output, extra_item_final_list
+        
+    if extra_item is not None:
+        if strides is not None:
+            return output, extra_item_final_list, strides_final_list
+        else:
+            return output, extra_item_final_list
+        
+    elif strides is not None:
+        return output, strides_final_list
+    
+    else:
+        return output
 
 
 def clip_boxes(boxes, shape):

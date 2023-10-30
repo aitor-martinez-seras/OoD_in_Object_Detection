@@ -25,6 +25,8 @@ from ood_utils import get_measures, arg_parser
 import log
 
 NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
+STORAGE_PATH = Path('storage')
+PRUEBAS_ROOT_PATH = Path('pruebas')
 
 ############################################################
 
@@ -84,11 +86,11 @@ def make_id_ood(args, logger):
         in_set, batch_size=args.batch, shuffle=False,
         num_workers=args.workers, pin_memory=True, drop_last=False)
 
-    out_loader = torch.utils.data.DataLoader(
+    ood_loader = torch.utils.data.DataLoader(
         out_set, batch_size=args.batch, shuffle=False,
         num_workers=args.workers, pin_memory=True, drop_last=False)
 
-    return in_set, out_set, in_loader, out_loader
+    return in_set, out_set, in_loader, ood_loader
 
 
 def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, batch_size: int, data_split: str, workers: int,
@@ -230,7 +232,7 @@ def create_targets_dict(data: dict) -> dict:
     return targets
 
 
-def plot_results(model, results, valid_preds_only: bool, ood_labeling: bool, origin_of_idx: int, ood_decision=None):
+def plot_results(class_names, results, valid_preds_only: bool, origin_of_idx: int, ood_decision=None, ood_method=None):
     # ----------------------
     ### Codigo para dibujar las cajas predichas y los targets ###
     # ----------------------
@@ -239,12 +241,15 @@ def plot_results(model, results, valid_preds_only: bool, ood_labeling: bool, ori
     font = 'FreeMonoBold'
     font_size = 12
 
-    # Creamos la carpeta donde se guardaran las imagenes
-    pruebas_root_path = Path('pruebas')
-    prueba_ahora_path = pruebas_root_path / NOW
-    prueba_ahora_path.mkdir(exist_ok=True)
+    if ood_decision:
+        assert ood_method is not None, "If ood_decision exists, ood_method must be a string with the name of the OoD method"
 
-    class_names = model.names
+    # Creamos la carpeta donde se guardaran las imagenes
+    if ood_method:
+        prueba_ahora_path = PRUEBAS_ROOT_PATH / (NOW + ood_method)
+    else:
+        prueba_ahora_path = PRUEBAS_ROOT_PATH / NOW
+    prueba_ahora_path.mkdir(exist_ok=True)
 
     for img_idx, res in enumerate(results):
         # idx = torch.where(data['batch_idx'] == n_img)
@@ -256,21 +261,22 @@ def plot_results(model, results, valid_preds_only: bool, ood_labeling: bool, ori
             bboxes = res.boxes.xyxy.cpu()
             labels = res.boxes.cls.cpu()
 
-        if ood_labeling:
-            assert ood_decision is not None, "If ood_labeling is True, ood_decision must be a list of -1 and 1"
-
             # Este codigo es por si queremos que las cajas OoD se pinten con nombre OoD
             # for i, decision in enumerate(ood_decision[img_idx]):
-            #     if decision == -1:
-            #         labels[i] = -1
-            # class_names[-1] = 'OoD'
+            #     if decision == 0:
+            #         labels[i] = 0
+            # class_names[0] = 'OoD'
 
             # labels_for_plot = []
             # for i, lbl in enumerate(labels):
-            #     if lbl == -1:
+            #     if lbl == 0:
             #         labels_for_plot.append(f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}')
             #     else:    
             #         labels_for_plot.append(f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}') 
+        
+        # Si tenemos labels OOD, el plot lo hacemos para pintar 
+        # de verde las cajas que son In-Distribution y de rojo las que son OoD
+        if ood_decision:
             im = draw_bounding_boxes(
                 res.orig_img[img_idx].cpu(),
                 bboxes,
@@ -278,8 +284,10 @@ def plot_results(model, results, valid_preds_only: bool, ood_labeling: bool, ori
                 font=font,
                 font_size=font_size,
                 labels=[f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}' for i, n in enumerate(labels)],
-                colors=['red' if n == -1 else 'green' for n in ood_decision[img_idx]]
+                colors=['red' if n == 0 else 'green' for n in ood_decision[img_idx]]
             )
+        
+        # Simplemente pintamos predictions
         else:
             im = draw_bounding_boxes(
                 res.orig_img[img_idx].cpu(),
@@ -318,127 +326,8 @@ def plot_results(model, results, valid_preds_only: bool, ood_labeling: bool, ori
     # plt.savefig('prueba.png')
     # plt.close()
 
-# Maximum Logit Score
-def iterate_data_msp(data_loader, model: YOLO, device, logger):
-    
-    all_scores = [[] for _ in range(len(model.names))]
-    number_of_batches = len(data_loader)
-    
-    # TODO: Quiza se pueda simplificar todo si no lo hacemos en batches, pero de momento vamos 
-    # a intentarlo asi
-    for idx_of_batch, data in enumerate(data_loader):
-        
-        # TODO: Use logger to log progress
-        if idx_of_batch % 50 == 0:
-            logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")  
 
-        # ----------------------
-        ### Preparar imagenes y targets ###
-        # ----------------------
-        if isinstance(data, dict):
-            imgs = data['img'].to(device)
-            targets = create_targets_dict(data)
-        else:
-            imgs, targets = data
-
-        # ----------------------
-        ### Procesar imagenes en el modelo para obtener logits y las cajas ###
-        # ----------------------
-        results = model.predict(imgs, save=False, verbose=False)
-
-        # ----------------------
-        ### Matchear cuales de las cajas han sido predichas correctamente ###
-        # ----------------------
-        # Matchea las cajas predichas a los targets y devuelve una lista
-        # con los indices de las cajas predichas que han sido asignadas
-        # dentro de results.valid_preds
-        match_predicted_boxes_to_targets(results, targets, IOU_THRESHOLD)
-        
-        # Formar un array de la forma [nº de caja, clase y score]
-        for res in results:
-            for valid_idx in res.valid_preds:
-                cls_idx = int(res.boxes.cls[valid_idx].cpu())
-                # El max se hace para sacar el Maximum Softmax Probability (MSP)
-                all_scores[cls_idx].append(res.extra_item[valid_idx][4:][cls_idx].cpu().numpy().max())
-
-        # # Plot results
-        # plot_results(model, results)
-        # quit()
-
-    return all_scores
-
-# ODIN Score
-def iterate_data_odin(data_loader, model, epsilon, temper, logger):
-    criterion = torch.nn.CrossEntropyLoss().cuda()
-    confs = []
-    for b, (x, y) in enumerate(data_loader):
-        x = Variable(x.cuda(), requires_grad=True)
-
-        outputs =  model(x)
-
-        maxIndexTemp = np.argmax(outputs.data.cpu().numpy(), axis=1)
-        outputs = outputs / temper
-
-        labels = Variable(torch.LongTensor(maxIndexTemp).cuda())
-        loss = criterion(outputs, labels)
-        loss.backward()
-
-        # Normalizing the gradient to binary in {0, 1}
-        gradient = torch.ge(x.grad.data, 0)
-        gradient = (gradient.float() - 0.5) * 2
-
-        # Adding small perturbations to images
-        tempInputs = torch.add(x.data, -epsilon, gradient)
-        outputs = model(Variable(tempInputs))
-        outputs = outputs / temper
-        # Calculating the confidence after adding perturbations
-        nnOutputs = outputs.data.cpu()
-        nnOutputs = nnOutputs.numpy()
-        nnOutputs = nnOutputs - np.max(nnOutputs, axis=1, keepdims=True)
-        nnOutputs = np.exp(nnOutputs) / np.sum(np.exp(nnOutputs), axis=1, keepdims=True)
-
-        confs.extend(np.max(nnOutputs, axis=1))
-        if b % 100 == 0:
-            logger.info('{} batches processed'.format(b))
-
-    return np.array(confs)
-
-# Energy Score
-def iterate_data_energy(data_loader, model, temper):
-    confs = []
-    for b, (x, y) in enumerate(data_loader):
-        with torch.no_grad():
-            x = x.cuda()
-            # compute output, measure accuracy and record loss.
-            logits = model(x)
-            conf = temper * torch.logsumexp(logits / temper, dim=1)
-            confs.extend(conf.data.cpu().numpy())
-    return np.array(confs)
-
-def generate_ood_thresholds(in_scores: list, tpr: float, per_class: bool, logger) -> np.array:
-    """
-    Generate the thresholds for each class using the in-distribution scores.
-    If per_class=True, in_scores must be a list of lists,
-      where each list is the list of scores for each class.
-    tpr must be in the range [0, 1]
-    """
-    if per_class:
-        ood_thresholds = np.zeros(len(in_scores))
-        for idx, cl in enumerate(in_scores):
-            if len(cl) < 20:
-                if len(cl) > 10:
-                    logger.warning(f"Class {idx} has {len(cl)} samples. The threshold may not be accurate")
-                    ood_thresholds[idx] = np.percentile(cl, 100 - tpr*100, method='lower')
-                else:
-                    logger.warning(f"Class {idx} has less than 10 samples. The threshold is set to 0.2")
-            else:
-                ood_thresholds[idx] = np.percentile(cl, 100 - tpr*100, method='lower')
-    else:
-        raise NotImplementedError("Not implemented yet")
-    
-    return ood_thresholds
-
-def generate_predictions_with_ood_labeling(dataloader, model, device, logger, ood_thresholds):
+def generate_predictions_with_ood_labeling(dataloader, model, device, logger, ood_thresholds, ood_method, temper=None):
     
     all_results = []
 
@@ -466,59 +355,406 @@ def generate_predictions_with_ood_labeling(dataloader, model, device, logger, oo
             ood_decision.append([])
             # Iteramos cada bbox
             for idx_bbox in range(len(res.boxes.cls)):
-                cls_idx = int(res.boxes.cls[idx_bbox].cpu())
 
-                # Esto es para MSP
-                if res.extra_item[idx_bbox][4:][cls_idx].cpu().numpy().max() < ood_thresholds[cls_idx]:
-                    ood_decision[idx_img].append(-1)
-                else:
-                    ood_decision[idx_img].append(1)
+                # Extraemos la clase predicha y los logits
+                cls_idx = int(res.boxes.cls[idx_bbox].cpu())
+                logits = res.extra_item[idx_bbox][4:].cpu()
+
+                if ood_method == 'msp':
+                    # Coger el cls_idx es como hacer el .max()
+                    if logits[cls_idx] < ood_thresholds[cls_idx]:
+                        ood_decision[idx_img].append(0)
+                    else:
+                        ood_decision[idx_img].append(1)
+
+                elif ood_method == 'Energy':
+                    energy_score = temper * torch.logsumexp(logits / temper, dim=0).item()
+                    if energy_score < ood_thresholds[cls_idx]:
+                        ood_decision[idx_img].append(0)
+                    else:
+                        ood_decision[idx_img].append(1)
         
-        plot_results(model, results, valid_preds_only=False, ood_labeling=True,
-                     origin_of_idx=idx_of_batch*dataloader.batch_size, ood_decision=ood_decision)
+        plot_results(
+            model.names,
+            results,
+            valid_preds_only=False,
+            origin_of_idx=idx_of_batch*dataloader.batch_size,
+            ood_decision=ood_decision,
+            ood_method=ood_method
+        )
         
         if idx_of_batch > 4:
             quit()
 
     return all_results
 
+def log_every_n_batches(logger, idx_of_batch: int, number_of_batches: int, log_every: int):
+    if idx_of_batch % log_every == 0:
+        logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")
+
+# -----------------------------------------------------------
+# OOD Methods
+# -----------------------------------------------------------
+
+# Maximum Logit Score
+def iterate_data_msp(data_loader, model: YOLO, device, logger):
+    
+    all_scores = [[] for _ in range(len(model.names))]
+    number_of_batches = len(data_loader)
+    
+    # TODO: Quiza se pueda simplificar todo si no lo hacemos en batches, pero de momento vamos 
+    # a intentarlo asi
+    for idx_of_batch, data in enumerate(data_loader):
+        
+        log_every_n_batches(logger, idx_of_batch, number_of_batches, log_every=50)
+
+        # ----------------------
+        ### Preparar imagenes y targets ###
+        # ----------------------
+        if isinstance(data, dict):
+            imgs = data['img'].to(device)
+            targets = create_targets_dict(data)
+        else:
+            imgs, targets = data
+
+        # ----------------------
+        ### Procesar imagenes en el modelo para obtener logits y las cajas ###
+        # ----------------------
+        results = model.predict(imgs, save=False, verbose=False)
+
+        # ----------------------
+        ### Matchear cuales de las cajas han sido predichas correctamente ###
+        # ----------------------
+        # Matchea las cajas predichas a los targets y devuelve una lista
+        # con los indices de las cajas predichas que han sido asignadas
+        # dentro de results.valid_preds
+        match_predicted_boxes_to_targets(results, targets, IOU_THRESHOLD)
+        
+        ### Acumular el Maximum Softmax Probability (MSP) de cada caja en la clase correspondiente ###
+        # Recorremos cada imagen
+        for res in results:
+            # Recorremos cada caja predicha valida
+            for valid_idx_one_bbox in res.valid_preds:
+                # Extraemos el indice de la clase predicha para la caja actual
+                cls_idx_one_bbox = int(res.boxes.cls[valid_idx_one_bbox].cpu())
+
+                # Extraemos los logits de dicha caja
+                logits_one_bbox = res.extra_item[valid_idx_one_bbox][4:].cpu().numpy()
+
+                # Acumulamos en la clase correspondiente el Maximum Softmax Probability (MSP)
+                # Hacemos el maximo se para obtener el MSP
+                all_scores[cls_idx_one_bbox].append(logits_one_bbox.max())
+
+        # # Plot results
+        # plot_results(model, results)
+        # quit()
+
+    return all_scores
+
+# ODIN Score
+def iterate_data_odin(data_loader, model, device, logger, epsilon, temper):
+
+    all_scores = [[] for _ in range(len(model.names))]
+    number_of_batches = len(data_loader)
+
+    criterion = torch.nn.CrossEntropyLoss().cuda()
+    confs = []
+    for b, data in enumerate(data_loader):
+
+        ### Preparar imagenes y targets ###
+        if isinstance(data, dict):
+            imgs = data['img'].to(device)
+            targets = create_targets_dict(data)
+        else:
+            imgs, targets = data
+        
+        # 
+        x = Variable(imgs, requires_grad=True)
+
+        outputs =  model(x)
+
+        maxIndexTemp = np.argmax(outputs.data.cpu().numpy(), axis=1)
+        outputs = outputs / temper
+
+        labels = Variable(torch.LongTensor(maxIndexTemp).cuda())
+        loss = criterion(outputs, labels)
+        loss.backward()
+
+        # Normalizing the gradient to binary in {0, 1}
+        gradient = torch.ge(x.grad.data, 0)
+        gradient = (gradient.float() - 0.5) * 2
+
+        # Adding small perturbations to images
+        tempInputs = torch.add(x.data, -epsilon, gradient)
+        outputs = model(Variable(tempInputs))
+        outputs = outputs / temper
+
+        # Calculating the confidence after adding perturbations
+        nnOutputs = outputs.data.cpu()
+        nnOutputs = nnOutputs.numpy()
+        nnOutputs = nnOutputs - np.max(nnOutputs, axis=1, keepdims=True)
+        nnOutputs = np.exp(nnOutputs) / np.sum(np.exp(nnOutputs), axis=1, keepdims=True)
+
+        confs.extend(np.max(nnOutputs, axis=1))
+        if b % 100 == 0:
+            logger.info('{} batches processed'.format(b))
+
+    return np.array(confs)
+
+# Energy Score
+def iterate_data_energy(data_loader, model, device, logger, temper):
+    
+    all_scores = [[] for _ in range(len(model.names))]
+    number_of_batches = len(data_loader)
+
+    for idx_of_batch, data in enumerate(data_loader):
+        
+        log_every_n_batches(logger, idx_of_batch, number_of_batches, log_every=50)
+            
+        ### Preparar imagenes y targets ###
+        if isinstance(data, dict):
+            imgs = data['img'].to(device)
+            targets = create_targets_dict(data)
+        else:
+            imgs, targets = data
+
+        ### Procesar imagenes en el modelo para obtener logits y las cajas ###
+        results = model.predict(imgs, save=False, verbose=False)
+        
+        ### Matchear cuales de las cajas han sido predichas correctamente ###
+        match_predicted_boxes_to_targets(results, targets, IOU_THRESHOLD)
+
+        ### Acumular el Energy score de cada caja en la clase correspondiente ###
+        # Recorremos cada imagen
+        for res in results:
+            # Recorremos cada caja predicha valida
+            for valid_idx_one_bbox in res.valid_preds:
+                # Extraemos el indice de la clase predicha para la caja actual
+                cls_idx_one_bbox = int(res.boxes.cls[valid_idx_one_bbox].cpu())
+
+                # Extraemos los logits de dicha caja
+                logits_one_bbox = res.extra_item[valid_idx_one_bbox][4:].cpu()
+
+                # Acumulamos en la clase correspondiente el Energy score
+                all_scores[cls_idx_one_bbox].append(temper * torch.logsumexp(logits_one_bbox / temper, dim=0).item())
+
+    return all_scores
 
 
-def run_eval(model, device, in_loader, out_loader, logger, args):
+# CKA Score
+def iterate_data_cka(data_loader, model, device, logger):
+
+    import cka
+    
+    all_scores = [[] for _ in range(len(model.names))]
+    number_of_batches = len(data_loader)
+
+    for idx_of_batch, data in enumerate(data_loader):
+        
+        log_every_n_batches(logger, idx_of_batch, number_of_batches, log_every=50)
+            
+        ### Preparar imagenes y targets ###
+        if isinstance(data, dict):
+            imgs = data['img'].to(device)
+            targets = create_targets_dict(data)
+        else:
+            imgs, targets = data
+
+        ### Procesar imagenes en el modelo para obtener logits y las cajas ###
+        results = model.predict(imgs, save=False, verbose=False)
+        
+        ### Matchear cuales de las cajas han sido predichas correctamente ###
+        match_predicted_boxes_to_targets(results, targets, IOU_THRESHOLD)
+
+        ### Acumular el CKA score de cada caja en la clase correspondiente ###
+        # Recorremos cada imagen
+        for res in results:
+            # Recorremos cada caja predicha valida
+            for valid_idx_one_bbox in res.valid_preds:
+                # Extraemos el indice de la clase predicha para la caja actual
+                cls_idx_one_bbox = int(res.boxes.cls[valid_idx_one_bbox].cpu())
+
+                # Compute CKA score
+                # TODO: De momento esta hecho para un solo feature map, pero habria que hacerlo de tal
+                #   forma que para cada bbox se elija el feature map con el que ha sido realizada la prediccion.
+                #   Esto probablemente se tenga que realizar en la funcion ops.non_max_supression() de
+                #   /groups/tri110414/yolo-pruebas/ultralytics/yolo/v8/detect/predict.py
+                print()
+                import cka_google
+                idx_bboxes = [1,3,4,5]
+                activations = []
+                for idx_box in idx_bboxes:
+                    acts = res.extra_item[0][idx_box]
+                    # activations.append(np.expand_dims(np.mean(acts.cpu().numpy(), axis=(1,2)), axis=0))
+                    activations.append(np.expand_dims(torch.flatten(acts, start_dim=0).cpu().numpy(), axis=0))
+                min_len = 1000
+                max_len = 1050
+                cka_all_res = np.zeros((len(activations), max_len))
+                for idx_bbox_i in range(len(activations)):
+                    for idx_bbox_j in range(idx_bbox_i, len(activations)):
+                        for k in range(min_len, max_len):
+                            cka_all_res[idx_bbox_i][k] = cka.linear_CKA(
+                                np.repeat(activations[idx_bbox_i], k, axis=0), np.repeat(activations[idx_bbox_j], k, axis=0)
+                            )
+                            cka_all_res[idx_bbox_i][k] = cka_google.feature_space_linear_cka(
+                                np.repeat(activations[idx_bbox_i], k, axis=0), np.repeat(activations[idx_bbox_j], k, axis=0)
+                            )
+                
+                for cka_one_res in cka_all_res:
+                    cka_one_res = np.nan_to_num(cka_one_res, copy=True, nan=0)
+                    plt.plot(cka_one_res)
+
+                plt.xlim([min_len, max_len])
+                plt.ylim([-1,1])
+                plt.ylabel('CKA Values (-1 to 1)')
+                plt.xlabel('Number of repetitions')
+                plt.savefig('prueba_cka_all.pdf')
+                plt.close()
+
+                idx_bbox0 = 1
+                idx_bbox1 = 2
+                acts0 = res.extra_item[0][idx_bbox0]
+                acts1 = res.extra_item[0][idx_bbox1]
+                avg_acts0 = np.expand_dims(np.mean(acts0.cpu().numpy(), axis=(1,2)), axis=0)
+                avg_acts1 = np.expand_dims(np.mean(acts1.cpu().numpy(), axis=(1,2)), axis=0)
+                min_len = 1000
+                max_len = 1050
+                cka_res = np.zeros(max_len)
+                for k in range(min_len, max_len):
+                    cka_res[k] = cka.linear_CKA(np.repeat(avg_acts0, k, axis=0), np.repeat(avg_acts1, k, axis=0))
+                cka_res = np.nan_to_num(cka_res, copy=True, nan=0)
+                plt.plot(cka_res)
+                plt.xlim([min_len, max_len])
+                plt.ylim([-1,1])
+                plt.ylabel('CKA Values (-1 to 1)')
+                plt.xlabel('Number of repetitions')
+                plt.savefig('prueba_cka.pdf')
+                plt.close()
+
+                # Acumulamos en la clase correspondiente el Energy score
+                # Para ello hay que multiplicar los logits por la temperatura y hacer el logsumexp
+                #all_scores[cls_idx_one_bbox].append(cka_score).item())
+
+    return all_scores
+
+
+def generate_ood_thresholds(in_scores: list, tpr: float, per_class: bool, logger) -> np.array:
+    """
+    Generate the thresholds for each class using the in-distribution scores.
+    If per_class=True, in_scores must be a list of lists,
+      where each list is the list of scores for each class.
+    tpr must be in the range [0, 1]
+    """
+    if per_class:
+        ood_thresholds = np.zeros(len(in_scores))
+        for idx, cl_scores in enumerate(in_scores):
+            if len(cl_scores) < 20:
+                if len(cl_scores) > 10:
+                    logger.warning(f"Class {idx} has {len(cl_scores)} samples. The threshold may not be accurate")
+                    ood_thresholds[idx] = np.percentile(cl_scores, 100 - tpr*100, method='lower')
+                else:
+                    logger.warning(f"Class {idx} has less than 10 samples. The threshold is set to 0.2")
+            else:
+                ood_thresholds[idx] = np.percentile(cl_scores, 100 - tpr*100, method='lower')
+    else:
+        raise NotImplementedError("Not implemented yet")
+    
+    return ood_thresholds
+
+
+def run_eval(model, device, in_loader, ood_loader, logger, args):
     logger.info("Running test...")
     logger.flush()
 
-    if args.score == 'MSP':
+    if args.ood_method == 'MSP':
         
+        # In scores
+        if args.load_in_scores:
+            logger.info("Loading in-distribution scores from disk...")
+            in_scores = read_json(Path('pruebas/prueba_in_scores.json'))
+        else:
+            logger.info("Processing in-distribution data...")
+            in_scores = iterate_data_msp(in_loader, model, device, logger)
+            # Guardo los resultados en disco para no repetir el calculo
+            in_scores_serializable = [[float(score) for score in cl] for cl in in_scores]
+            write_json(in_scores_serializable, STORAGE_PATH / 'msp_in_scores.json')
+            write_pickle(in_scores, STORAGE_PATH / 'msp_in_scores.pkl')
         
-        # # In scores
-        # logger.info("Processing in-distribution data...")
-        # in_scores = iterate_data_msp(in_loader, model, device, logger)
-        # # Guardo los resultados en disco para no repetir el calculo
-        # in_scores_serializable = [[float(score) for score in cl] for cl in in_scores]
-        # write_json(in_scores_serializable, Path('pruebas/prueba_in_scores.json'))
-        # write_pickle(in_scores, Path('pruebas/prueba_in_scores.pkl'))
-        in_scores = read_json(Path('pruebas/prueba_in_scores.json'))
         ood_thresholds = generate_ood_thresholds(in_scores, tpr=0.95, per_class=True, logger=logger)
-        for idx, o in enumerate(ood_thresholds):
-            print(f'{model.names[idx]}: {o:.2f}')
 
         # OoD scores
         logger.info("Processing out-of-distribution data...")
-        out_scores = generate_predictions_with_ood_labeling(out_loader, model, device, logger, ood_thresholds)
+        ood_scores = generate_predictions_with_ood_labeling(ood_loader, model, device, logger, ood_thresholds, args.ood_method)
 
-    elif args.score == 'ODIN':
-        logger.info("Processing in-distribution data...")
-        in_scores = iterate_data_odin(in_loader, model, args.epsilon_odin, args.temperature_odin, logger)
+    elif args.ood_method == 'ODIN':
+        raise NotImplementedError("Not implemented yet")
+        # In scores
+        if args.load_in_scores:
+            logger.info("Loading in-distribution scores from disk...")
+            in_scores = read_json(Path('pruebas/prueba_in_scores.json'))
+        else:
+            logger.info("Processing in-distribution data...")
+            in_scores = iterate_data_odin(in_loader, model, device, logger, epsilon, temper)
+            # Guardo los resultados en disco para no repetir el calculo
+            in_scores_serializable = [[float(score) for score in cl] for cl in in_scores]
+            write_json(in_scores_serializable, STORAGE_PATH / 'odin_in_scores.json')
+            write_pickle(in_scores, STORAGE_PATH / 'odin_in_scores.pkl')
+        
+        ood_thresholds = generate_ood_thresholds(in_scores, tpr=0.95, per_class=True, logger=logger)
+
+        # OoD scores
         logger.info("Processing out-of-distribution data...")
-        out_scores = iterate_data_odin(out_loader, model, args.epsilon_odin, args.temperature_odin, logger)
-    elif args.score == 'Energy':
-        logger.info("Processing in-distribution data...")
-        in_scores = iterate_data_energy(in_loader, model, args.temperature_energy)
+        ood_scores = generate_predictions_with_ood_labeling(ood_loader, model, device, logger, ood_thresholds)
+
+        # logger.info("Processing in-distribution data...")
+        # in_scores = iterate_data_odin(in_loader, model, args.epsilon_odin, args.temperature_odin, logger)
+        # logger.info("Processing out-of-distribution data...")
+        # ood_scores = iterate_data_odin(ood_loader, model, args.epsilon_odin, args.temperature_odin, logger)
+
+    elif args.ood_method == 'Energy':
+
+        # In scores
+        if args.load_in_scores:
+            logger.info("Loading in-distribution scores from disk...")
+            in_scores = read_json(Path(STORAGE_PATH / 'energy_in_scores.json'))
+        else:
+            logger.info("Processing in-distribution data...")
+            in_scores = iterate_data_energy(in_loader, model, device, logger, args.temperature_energy)
+            # Guardo los resultados en disco para no repetir el calculo
+            in_scores_serializable = [[float(score) for score in cl] for cl in in_scores]
+            write_json(in_scores_serializable, STORAGE_PATH / 'energy_in_scores.json')
+            write_pickle(in_scores, STORAGE_PATH / 'energy_in_scores.pkl')
+        
+        ood_thresholds = generate_ood_thresholds(in_scores, tpr=0.95, per_class=True, logger=logger)
+
+        # OoD scores
         logger.info("Processing out-of-distribution data...")
-        out_scores = iterate_data_energy(out_loader, model, args.temperature_energy)
+        ood_scores = generate_predictions_with_ood_labeling(ood_loader, model, device, logger, ood_thresholds,
+                                                            args.ood_method, temper=args.temperature_energy)
+        
+    elif args.ood_method == 'CKA':
+
+        # In scores
+        if args.load_in_scores:
+            logger.info("Loading in-distribution scores from disk...")
+            in_scores = read_json(Path(STORAGE_PATH / 'CKA_in_scores.json'))
+        else:
+            logger.info("Processing in-distribution data...")
+            in_scores = iterate_data_cka(in_loader, model, device, logger)
+            # Guardo los resultados en disco para no repetir el calculo
+            in_scores_serializable = [[float(score) for score in cl] for cl in in_scores]
+            write_json(in_scores_serializable, STORAGE_PATH / 'CKA_in_scores.json')
+            write_pickle(in_scores, STORAGE_PATH / 'CKA_in_scores.pkl')
+        
+        ood_thresholds = generate_ood_thresholds(in_scores, tpr=0.95, per_class=True, logger=logger)
+
+        # OoD scores
+        logger.info("Processing out-of-distribution data...")
+        ood_scores = generate_predictions_with_ood_labeling(ood_loader, model, device, logger, ood_thresholds,
+                                                            args.ood_method)
+
         """
-    elif args.score == 'Mahalanobis':
+    elif args.ood_method == 'Mahalanobis':
         sample_mean, precision, lr_weights, lr_bias, magnitude = np.load(
             os.path.join(args.mahalanobis_param_path, 'results.npy'), allow_pickle=True)
         sample_mean = [s.cuda() for s in sample_mean]
@@ -539,33 +775,33 @@ def run_eval(model, device, in_loader, out_loader, logger, args):
         in_scores = iterate_data_mahalanobis(in_loader, model, num_classes, sample_mean, precision,
                                              num_output, magnitude, regressor, logger)
         logger.info("Processing out-of-distribution data...")
-        out_scores = iterate_data_mahalanobis(out_loader, model, num_classes, sample_mean, precision,
+        ood_scores = iterate_data_mahalanobis(ood_loader, model, num_classes, sample_mean, precision,
                                               num_output, magnitude, regressor, logger)
-    elif args.score == 'GradNorm':
+    elif args.ood_method == 'GradNorm':
         logger.info("Processing in-distribution data...")
         in_scores = iterate_data_gradnorm(in_loader, model, args.temperature_gradnorm, num_classes)
         logger.info("Processing out-of-distribution data...")
-        out_scores = iterate_data_gradnorm(out_loader, model, args.temperature_gradnorm, num_classes)
-    elif args.score == 'RankFeat':
+        ood_scores = iterate_data_gradnorm(ood_loader, model, args.temperature_gradnorm, num_classes)
+    elif args.ood_method == 'RankFeat':
         logger.info("Processing in-distribution data...")
         in_scores = iterate_data_rankfeat(in_loader, model, args.temperature_rankfeat)
         logger.info("Processing out-of-distribution data...")
-        out_scores = iterate_data_rankfeat(out_loader, model, args.temperature_rankfeat)
-    elif args.score == 'React':
+        ood_scores = iterate_data_rankfeat(ood_loader, model, args.temperature_rankfeat)
+    elif args.ood_method == 'React':
         logger.info("Processing in-distribution data...")
         in_scores = iterate_data_react(in_loader, model, args.temperature_react)
         logger.info("Processing out-of-distribution data...")
-        out_scores = iterate_data_react(out_loader, model, args.temperature_react)
+        ood_scores = iterate_data_react(ood_loader, model, args.temperature_react)
         """
     else:
-        raise ValueError("Unknown score type {}".format(args.score))
+        raise ValueError("Unknown score type {}".format(args.ood_method))
 
     in_examples = in_scores.reshape((-1, 1))
-    out_examples = out_scores.reshape((-1, 1))
+    out_examples = ood_scores.reshape((-1, 1))
 
     auroc, aupr_in, aupr_out, fpr95 = get_measures(in_examples, out_examples)
 
-    logger.info('============Results for {}============'.format(args.score))
+    logger.info('============Results for {}============'.format(args.ood_method))
     logger.info('AUROC: {}'.format(auroc))
     logger.info('AUPR (In): {}'.format(aupr_in))
     logger.info('AUPR (Out): {}'.format(aupr_out))
@@ -597,7 +833,7 @@ def main(args):
     logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
 
     # TODO: Unused till we implement GradNorm
-    if args.score == 'GradNorm':
+    if args.ood_method == 'GradNorm':
         args.batch = 1
 
     # Load ID data and OOD data
@@ -615,7 +851,7 @@ def main(args):
         data_split='val',
         workers=args.num_workers
     )
-    # in_set, out_set, in_loader, out_loader = make_id_ood(args, logger)
+    # in_set, out_set, in_loader, ood_loader = make_id_ood(args, logger)
 
     # TODO: usar el argparser para elegir el modelo que queremos cargar
     model_to_load = 'yolov8n.pt'
@@ -631,7 +867,7 @@ def main(args):
     # model.load_state_dict_custom(state_dict['model'])
 
     # TODO: Unused till we implement GradNorm
-    # if args.score != 'GradNorm':
+    # if args.ood_method != 'GradNorm':
     #     model = torch.nn.DataParallel(model)
 
     start_time = time.time()
@@ -647,10 +883,13 @@ if __name__ == "__main__":
     parser.add_argument('-d', '--device', default='cuda', type=str, help='use cpu or cuda')
     parser.add_argument('-b', '--batch_size', default=4, type=int, help='batch size to use')
     parser.add_argument('-n_w', '--num_workers', default=1, type=int, help='number of workers to use in dataloader')
-    parser.add_argument("--in_datadir", help="Path to the in-distribution data folder.")
-    parser.add_argument("--out_datadir", help="Path to the out-of-distribution data folder.")
+    parser.add_argument('-l', '--load_in_scores', action='store_true', help='load in-distribution scores from disk')
+    # parser.add_argument("--in_datadir", help="Path to the in-distribution data folder.")
+    # parser.add_argument("--out_datadir", help="Path to the out-of-distribution data folder.")
 
-    parser.add_argument('--score', choices=['MSP', 'ODIN', 'Energy', 'Mahalanobis', 'GradNorm','RankFeat','React'], default='MSP')
+    parser.add_argument('--ood_method',
+                        choices=['MSP', 'ODIN', 'Energy', 'Mahalanobis', 'GradNorm','RankFeat','React', 'CKA'],
+                        default='MSP')
 
     # arguments for ODIN
     parser.add_argument('--temperature_odin', default=1000, type=int,

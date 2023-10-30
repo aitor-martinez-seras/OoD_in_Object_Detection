@@ -86,8 +86,10 @@ class Detect(nn.Module):
         self.no = nc + self.reg_max * 4  # number of outputs per anchor
         self.stride = torch.zeros(self.nl)  # strides computed during build
         c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], self.nc)  # channels
+        # The BOX head
         self.cv2 = nn.ModuleList(
             nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch)
+        # The CLS head
         self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
 
@@ -95,10 +97,26 @@ class Detect(nn.Module):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
         shape = x[0].shape  # BCHW
         for i in range(self.nl):
+            # Se tiene que cada uno de los strides se recibe con un numero de feature maps
+            # y aqui se hace que los 3 strides acaben con el mismo numero de feature maps
             x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
         if self.training:
             return x
         elif self.dynamic or self.shape != shape:
+            # self.anchors lleva una especie de anchors (porque realmente es anchor free YOLOV8) y
+            # self.strides lleva los strides de cada feature map (te esta diciendo a que stride pertenece 
+            #   cada feature map, 8 16 o 32), que van en la dimension 1 cuando se haga
+            #   el torch.cat donde se concatenan uniendo por la dimension 2, es decir, la dimension de HxW,
+            #   la dimension aplanada de todos los pixeles de la imagen. Ahora en cada pixel (de los feature maps)
+            #   tendras una prediccion, que vendrá referenciada a un anchor POINT que ha sido creado en 
+            #   el centro del grid point, referenciado a la esquina top-left del feature map. Es decir, 
+            #   si tenemos el pixel del feature map de 40x40 que está en el top-left justo, será [0.5,0.5] su
+            #   anchor point, mientras que si es el pixel de 40x40 que está en el bottom-right, será [39.5,39.5]
+            # Some links:
+            # https://patrick-llgc.github.io/Learning-Deep-Learning/paper_notes/gfocal.html
+            # https://github.com/ultralytics/ultralytics/issues/3362
+            # https://github.com/ultralytics/ultralytics/issues/2843
+            # https://github.com/ultralytics/ultralytics/issues/3072
             self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
             self.shape = shape
 
@@ -108,6 +126,9 @@ class Detect(nn.Module):
             cls = x_cat[:, self.reg_max * 4:]
         else:
             box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
+        # Transformamos distancias en coordenadas. Las distancias salen de DFL, que es una capa
+        # que pasa de C canales a C//16 canales. No entiendo bien luego que hace para convertir eso a coordenadas
+        # Box es []
         dbox = dist2bbox(self.dfl(box), self.anchors.unsqueeze(0), xywh=True, dim=1) * self.strides
         y = torch.cat((dbox, cls.sigmoid()), 1)
         return y if self.export else (y, x)
