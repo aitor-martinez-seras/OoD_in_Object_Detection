@@ -1,155 +1,41 @@
 import time
 import os
-import json
 from pathlib import Path
-import pickle
 from datetime import datetime
-
-import numpy as np
-import torch
-from torch.autograd import Variable
-from ultralytics import YOLO
-from ultralytics.yolo.data.utils import check_det_dataset
-from ultralytics.yolo.data.build import build_yolo_dataset, build_dataloader
-from ultralytics.yolo.utils import DEFAULT_CFG
-from ultralytics.yolo.cfg import get_cfg
-from ultralytics.yolo.data import YOLODataset
-from ultralytics.yolo.engine.results import Results
+from typing import List
+from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
-from torchvision.utils import draw_bounding_boxes
+import numpy as np
+import torch
 import torchvision.ops as t_ops
+from torch.autograd import Variable
+from torchvision.utils import draw_bounding_boxes
+from sklearn.metrics import pairwise_distances
 from scipy.optimize import linear_sum_assignment
 
-from ood_utils import get_measures, arg_parser
 import log
+from ultralytics import YOLO
+from ultralytics.yolo.engine.results import Results
+from ood_utils import get_measures, arg_parser, OODMethod
+from sos_dataset import SOS_BaseDataset
+from data_utils import read_json, write_json, write_pickle, create_YOLO_dataset_and_dataloader, create_targets_dict
+
 
 NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
 STORAGE_PATH = Path('storage')
 PRUEBAS_ROOT_PATH = Path('pruebas')
 
+METHODS = {
+    'msp': OODMethod(name='msp', per_class=True, per_stride=False, cluster_method='one', thresholds=None),
+    'odin': OODMethod(name='odin', per_class=True, per_stride=False, cluster_method='one', thresholds=None),
+}
+
 ############################################################
 
-# Code copied from https://github.com/KingJamesSong/RankFeat
+# Code partially copied from https://github.com/KingJamesSong/RankFeat
 
 ############################################################
-
-def write_json(an_object, path_to_file: Path):
-    print(f"Started writing object {type(an_object)} data into a json file")
-    with open(path_to_file, "w") as fp:
-        json.dump(an_object, fp)
-        print(f"Done writing JSON data into {path_to_file} file")
-
-
-def read_json(path_to_file: Path):
-    # for reading also binary mode is important
-    with open(path_to_file, 'rb') as fp:
-        an_object = json.load(fp)
-        return an_object
-
-
-def write_pickle(an_object, path_to_file: Path):
-    print(f"Started writing object {type(an_object)} data into a .pkl file")
-    # store list in binary file so 'wb' mode
-    with open(path_to_file, 'wb') as fp:
-        pickle.dump(an_object, fp)
-        print('Done writing list into a binary file')
-
-
-def read_pickle(path_to_file: Path):
-    # for reading also binary mode is important
-    with open(path_to_file, 'rb') as fp:
-        an_object = pickle.load(fp)
-        return an_object
-
-
-# TODO: Hay que hacer que esto carge los dataloaders de el dataset In-Distribution y Out-Distribution
-def make_id_ood(args, logger):
-    """Returns train and ood datasets."""
-    # crop = 480
-
-    # val_tx = tv.transforms.Compose([
-    #     tv.transforms.Resize((crop, crop)),
-    #     tv.transforms.ToTensor(),
-    #     tv.transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-    # ])
-
-    # in_set = tv.datasets.ImageFolder(args.in_datadir, val_tx)
-    # out_set = tv.datasets.ImageFolder(args.out_datadir, val_tx)
-
-    #in_set = 
-
-    logger.info(f"Using an in-distribution set with {len(in_set)} images.")
-    logger.info(f"Using an out-of-distribution set with {len(out_set)} images.")
-
-    in_loader = torch.utils.data.DataLoader(
-        in_set, batch_size=args.batch, shuffle=False,
-        num_workers=args.workers, pin_memory=True, drop_last=False)
-
-    ood_loader = torch.utils.data.DataLoader(
-        out_set, batch_size=args.batch, shuffle=False,
-        num_workers=args.workers, pin_memory=True, drop_last=False)
-
-    return in_set, out_set, in_loader, ood_loader
-
-
-def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, batch_size: int, data_split: str, workers: int,
-                                       stride: int = 32, fraction: float = 1.0,):
-
-    # TODO: En overrides se definirian ciertos parametros que se quieran tocar de la configuracion por defecto,
-    # de tal forma que get_cfg() se encarga de coger esa configuracion por defecto y sobreescribirla con 
-    # lo que nosotros hayamos definido en overrides. Lo mejor para definir estos overrides es sacarlos tanto de
-    # otro archivo de configuracion que nosotros cargemos como queramos (desde un YAML o de un script de python)
-    # como sacarlo del argparser
-    overrides = dict()
-    cfg = get_cfg(DEFAULT_CFG, overrides=overrides)
-
-    data_dict = check_det_dataset(dataset_yaml_file_name_or_path)
-    imgs_path = data_dict[data_split]
-
-    # TODO: Split train dataset into two subsets, one for modeling the in-distribution 
-    #   and the other for defining the thresholds using 
-    #   https://github.com/ultralytics/ultralytics/blob/437b4306d207f787503fa1a962d154700e870c64/ultralytics/data/utils.py#L586
-
-    dataset = build_yolo_dataset(
-        cfg=cfg,
-        img_path=imgs_path,  # Path to the folder containing the images
-        batch=batch_size,
-        data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
-        mode='test',  # This is for disabling data augmentation
-        rect=False,
-        stride=32,
-    )
-
-    # from ultralytics.yolo.utils import colorstr
-    # dataset = YOLODataset(
-    #     img_path=imgs_path,
-    #     imgsz=cfg.imgsz,
-    #     batch_size=batch_size,
-    #     augment=False,  # We dont want to augment the data
-    #     hyp=cfg,  # TODO: probably add a get_hyps_from_cfg function
-    #     rect=cfg.rect,  # rectangular batches
-    #     cache=cfg.cache or None,
-    #     single_cls=cfg.single_cls or False,
-    #     stride=int(stride),
-    #     #pad=0.0 if mode == 'train' else 0.5,
-    #     pad=0.5,
-    #     prefix=colorstr(f'test: '),
-    #     use_segments=cfg.task == 'segment',
-    #     use_keypoints=cfg.task == 'pose',
-    #     classes=cfg.classes,
-    #     data=data_dict,
-    #     fraction=fraction)
-
-    dataloader = build_dataloader(
-        dataset=dataset,
-        batch=dataset.batch_size,
-        workers=cfg.workers,
-        shuffle=False,
-        rank=-1  # For distributed computing, leave -1 if no distributed computing is done
-    )
-
-    return dataset, dataloader
 
 
 def match_predicted_boxes_to_targets(results: Results, targets, iou_threshold: float):
@@ -197,42 +83,8 @@ def log_progress_of_batches(logger, idx_of_batch, number_of_batches):
     if idx_of_batch % 50 == 0:
         logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")
 
-    if idx_of_batch == int(number_of_batches * 0.1):
-        logger.info(f"10%: Procesing batch {idx_of_batch} of {number_of_batches}")
-    elif idx_of_batch == int(number_of_batches * 0.25):
-        logger.info(f"25%: Procesing batch {idx_of_batch} of {number_of_batches}")
-    elif idx_of_batch == int(number_of_batches * 0.5):
-        logger.info(f"50%: Procesing batch {idx_of_batch} of {number_of_batches}")
-    elif idx_of_batch == int(number_of_batches * 0.75):
-        logger.info(f"75%: Procesing batch {idx_of_batch} of {number_of_batches}")
 
-
-def create_targets_dict(data: dict) -> dict:
-    """
-    Funcion que crea un diccionario con los targets de cada imagen del batch.
-    La funcion es necesaria porque los targets vienen en una sola dimension, 
-        por lo que hay que hacer el matcheo de a que imagen pertenece cada bbox.
-    """
-    # Como los targets vienen en una sola dimension, tenemos que hacer el matcheo de a que imagen pertenece cada bbox
-    # Para ello, tenemos que sacar en una lista, donde cada posicion se refiere a cada imagen del batch, los indices
-    # de los targets que pertenecen a esa imagen
-    target_idx = [torch.where(data['batch_idx'] == img_idx) for img_idx in range(len(data['im_file']))]
-    # Tambien tenemos que sacar el tamaño de la imagen original para poder pasar de coordenadas relativas a absolutas
-    # necesitamos que sea un array para poder luego indexar todas las bboxes de una al crear el dict targets
-    relative_to_absolute_coordinates = [np.array(data['resized_shape'][img_idx] + data['resized_shape'][img_idx]) for img_idx in range(len(data['im_file']))]
-
-    # Ahora creamos los targets
-    # Targets es un diccionario con dos listas, con tantas posiciones como imagenes en el batch
-    # En 'bboxes' tiene las bboxes. Hay que convertirlas a xyxy y pasar a coordenadas absolutas
-    # En 'cls' tiene las clases
-    targets = dict(
-        bboxes=[t_ops.box_convert(data['bboxes'][idx], 'cxcywh', 'xyxy') * relative_to_absolute_coordinates[img_idx] for img_idx, idx in enumerate(target_idx)],
-        cls=[data['cls'][idx].view(-1) for idx in target_idx]    
-    )
-    return targets
-
-
-def plot_results(class_names, results, valid_preds_only: bool, origin_of_idx: int, ood_decision=None, ood_method=None):
+def plot_results(class_names, results, valid_preds_only: bool, origin_of_idx: int, ood_decision=None, ood_method=None, image_format='pdf'):
     # ----------------------
     ### Codigo para dibujar las cajas predichas y los targets ###
     # ----------------------
@@ -299,7 +151,7 @@ def plot_results(class_names, results, valid_preds_only: bool, origin_of_idx: in
             )
 
         plt.imshow(im.permute(1,2,0))
-        plt.savefig(prueba_ahora_path / f'{(origin_of_idx + img_idx):03}.png', dpi=300)
+        plt.savefig(prueba_ahora_path / f'{(origin_of_idx + img_idx):03}.{image_format}', dpi=300)
         plt.close()
 
     # Code to plot an image with the targets
@@ -327,7 +179,7 @@ def plot_results(class_names, results, valid_preds_only: bool, origin_of_idx: in
     # plt.close()
 
 
-def generate_predictions_with_ood_labeling(dataloader, model, device, logger, ood_thresholds, ood_method, temper=None):
+def generate_predictions_with_ood_labeling(dataloader, model, device, logger, ood_thresholds, ood_method, temper=None, centroids=None):
     
     all_results = []
 
@@ -353,26 +205,60 @@ def generate_predictions_with_ood_labeling(dataloader, model, device, logger, oo
             # TODO: Mejorar la forma en la que se guarda la decision de si es OoD o no.
             # TODO: Separar 
             ood_decision.append([])
-            # Iteramos cada bbox
-            for idx_bbox in range(len(res.boxes.cls)):
+            if centroids is not None:
+                
+                for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(res.extra_item):
 
-                # Extraemos la clase predicha y los logits
-                cls_idx = int(res.boxes.cls[idx_bbox].cpu())
-                logits = res.extra_item[idx_bbox][4:].cpu()
+                    if len(bbox_idx_in_one_stride) > 0:  # Check if there are any predictions in this stride
+                        # distances = pairwise_distances(centroids)
 
-                if ood_method == 'msp':
-                    # Coger el cls_idx es como hacer el .max()
-                    if logits[cls_idx] < ood_thresholds[cls_idx]:
-                        ood_decision[idx_img].append(0)
-                    else:
-                        ood_decision[idx_img].append(1)
+                        if ood_method == 'ftmaps':  # TODO: Hay que cambiar los métodoscl
+                            
+                            for idx, ftmap in enumerate(ftmaps):
+                                bbox_idx = idx
+                                cls_idx = int(res.boxes.cls[bbox_idx].cpu())
+                                print('------------------------------')
+                                print('idx_img:\t', idx_of_batch*dataloader.batch_size + idx_img)
+                                print('bbox_idx:\t', bbox_idx)
+                                print('cls:\t\t', cls_idx)
+                                print('conf:\t\t', res.boxes.conf[bbox_idx])
+                                # print('ftmap:\t\t',ftmap.shape)
+                                # print('ftmap_reshape:\t', ftmap.cpu().numpy().reshape(1, -1).shape)
 
-                elif ood_method == 'Energy':
-                    energy_score = temper * torch.logsumexp(logits / temper, dim=0).item()
-                    if energy_score < ood_thresholds[cls_idx]:
-                        ood_decision[idx_img].append(0)
-                    else:
-                        ood_decision[idx_img].append(1)
+                                distance = pairwise_distances(centroids[cls_idx][stride_idx][None,:], ftmap.cpu().numpy().reshape(1, -1), metric='l1')
+                                print('distance:\t', distance)
+                                print('threshold:\t', ood_thresholds[cls_idx][stride_idx])
+
+                                if distance < ood_thresholds[cls_idx][stride_idx]:
+                                    ood_decision[idx_img].append(1)  # InD
+                                else:
+                                    ood_decision[idx_img].append(0)  # OOD
+            
+
+            # Logits methods
+            else:
+                # Iteramos cada bbox
+                for idx_bbox in range(len(res.boxes.cls)):
+
+                    # Extraemos la clase predicha y los logits
+                    # TODO: Esto tiene que hacerse con las opciones de la clase
+                    #   que vamos a crear para los métodos OOD
+                    cls_idx = int(res.boxes.cls[idx_bbox].cpu())
+                    logits = res.extra_item[idx_bbox][4:].cpu()
+
+                    if ood_method == 'msp':
+                        # Coger el cls_idx es como hacer el .max()
+                        if logits[cls_idx] < ood_thresholds[cls_idx]:
+                            ood_decision[idx_img].append(0)  # OOD
+                        else:
+                            ood_decision[idx_img].append(1)  # InD
+
+                    elif ood_method == 'Energy':
+                        energy_score = temper * torch.logsumexp(logits / temper, dim=0).item()
+                        if energy_score < ood_thresholds[cls_idx]:
+                            ood_decision[idx_img].append(0)  # OOD
+                        else:
+                            ood_decision[idx_img].append(1)  # InD
         
         plot_results(
             model.names,
@@ -380,10 +266,11 @@ def generate_predictions_with_ood_labeling(dataloader, model, device, logger, oo
             valid_preds_only=False,
             origin_of_idx=idx_of_batch*dataloader.batch_size,
             ood_decision=ood_decision,
-            ood_method=ood_method
+            ood_method=ood_method,
+            image_format='pdf'
         )
         
-        if idx_of_batch > 4:
+        if idx_of_batch > 10:
             quit()
 
     return all_results
@@ -541,12 +428,10 @@ def iterate_data_energy(data_loader, model, device, logger, temper):
     return all_scores
 
 
-# CKA Score
-def iterate_data_cka(data_loader, model, device, logger):
+# Feature Maps Score
+def iterate_data_ftmaps(data_loader, model, device, logger):
 
-    import cka
-    
-    all_scores = [[] for _ in range(len(model.names))]
+    all_ftmaps_per_class_and_stride = [[[] for _ in range(3)] for _ in range(len(model.names))]
     number_of_batches = len(data_loader)
 
     for idx_of_batch, data in enumerate(data_loader):
@@ -566,79 +451,168 @@ def iterate_data_cka(data_loader, model, device, logger):
         ### Matchear cuales de las cajas han sido predichas correctamente ###
         match_predicted_boxes_to_targets(results, targets, IOU_THRESHOLD)
 
-        ### Acumular el CKA score de cada caja en la clase correspondiente ###
-        # Recorremos cada imagen
+        ### Extract the ftmaps of the selected boxes in their corresponding stride and class ###
+        # Loop each image fo the batch
         for res in results:
-            # Recorremos cada caja predicha valida
-            for valid_idx_one_bbox in res.valid_preds:
-                # Extraemos el indice de la clase predicha para la caja actual
-                cls_idx_one_bbox = int(res.boxes.cls[valid_idx_one_bbox].cpu())
+            cls_idx_one_pred = res.boxes.cls.cpu()
+            # Recorremos cada stride y de ahí nos quedamos con las cajas que hayan sido marcadas como validas
+            # Loop each stride and get only the ftmaps of the boxes that are valid predictions
+            for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(res.extra_item):
+                if len(bbox_idx_in_one_stride) > 0:  # Check if there are any valid predictions in this stride
+                    for i, bbox_idx in enumerate(bbox_idx_in_one_stride):
+                        bbox_idx = bbox_idx.item()
+                        if bbox_idx in res.valid_preds:
+                            pred_cls = int(cls_idx_one_pred[bbox_idx].item())
+                            all_ftmaps_per_class_and_stride[pred_cls][stride_idx].append(ftmaps[i].cpu().numpy())
 
-                # Compute CKA score
-                # TODO: De momento esta hecho para un solo feature map, pero habria que hacerlo de tal
-                #   forma que para cada bbox se elija el feature map con el que ha sido realizada la prediccion.
-                #   Esto probablemente se tenga que realizar en la funcion ops.non_max_supression() de
-                #   /groups/tri110414/yolo-pruebas/ultralytics/yolo/v8/detect/predict.py
-                print()
-                import cka_google
-                idx_bboxes = [1,3,4,5]
-                activations = []
-                for idx_box in idx_bboxes:
-                    acts = res.extra_item[0][idx_box]
-                    # activations.append(np.expand_dims(np.mean(acts.cpu().numpy(), axis=(1,2)), axis=0))
-                    activations.append(np.expand_dims(torch.flatten(acts, start_dim=0).cpu().numpy(), axis=0))
-                min_len = 1000
-                max_len = 1050
-                cka_all_res = np.zeros((len(activations), max_len))
-                for idx_bbox_i in range(len(activations)):
-                    for idx_bbox_j in range(idx_bbox_i, len(activations)):
-                        for k in range(min_len, max_len):
-                            cka_all_res[idx_bbox_i][k] = cka.linear_CKA(
-                                np.repeat(activations[idx_bbox_i], k, axis=0), np.repeat(activations[idx_bbox_j], k, axis=0)
-                            )
-                            cka_all_res[idx_bbox_i][k] = cka_google.feature_space_linear_cka(
-                                np.repeat(activations[idx_bbox_i], k, axis=0), np.repeat(activations[idx_bbox_j], k, axis=0)
-                            )
+    # Convert the list inside each class and stride to numpy arrays
+    for idx_cls, ftmaps_one_cls in enumerate(all_ftmaps_per_class_and_stride):
+        for idx_stride, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
+            if len(ftmaps_one_cls_one_stride) > 0:
+                all_ftmaps_per_class_and_stride[idx_cls][idx_stride] = np.stack(ftmaps_one_cls_one_stride, axis=0)
+            else:
+                all_ftmaps_per_class_and_stride[idx_cls][idx_stride] = np.empty(0)
+
+    return all_ftmaps_per_class_and_stride
+
+
+def generate_ind_representation(
+        agg_method: str,
+        clustering_opt: str,
+        ind_tensors: List[np.array] or List[List[np.array]],
+        logger,
+        per_class: bool,
+        per_stride: bool,
+        compute_covariance = False
+    ) -> List[np.array] or List[List[np.array]]:
+    """
+    Generate the clusters for each class using the in-distribution tensors (usually feature maps).
+    If per_stride, ind_tensors must be a list of lists, where each position is
+        a list of tensors, one for each stride List[List[N, C, H, W]].
+        Otherwise each position is just a tensor List[[N, C, H, W]].
+    """
+    CLUSTER_METHODS_AVAILABLE = ["KMeans", "DBSCAN", "AgglomerativeClustering"]
+    
+    if agg_method == 'mean':
+        agg_method = np.mean
+    elif agg_method == 'median':
+        agg_method = np.median
+    else:
+        raise NameError(f"The agg_method argument must be one of the following: 'mean', 'median'. Current value: {agg_method}")
+
+    
+    if per_class:
+
+        if per_stride:
+
+            clusters_per_class_and_stride = [[[] for _ in range(3)] for _ in range(len(ind_tensors))]
+
+            if clustering_opt == 'one':
                 
-                for cka_one_res in cka_all_res:
-                    cka_one_res = np.nan_to_num(cka_one_res, copy=True, nan=0)
-                    plt.plot(cka_one_res)
+                for cls_idx, ftmaps_one_cls in enumerate(ind_tensors):
 
-                plt.xlim([min_len, max_len])
-                plt.ylim([-1,1])
-                plt.ylabel('CKA Values (-1 to 1)')
-                plt.xlabel('Number of repetitions')
-                plt.savefig('prueba_cka_all.pdf')
-                plt.close()
+                    print(f'Class {cls_idx:03} of {len(ind_tensors)}')
+                    for stride_idx, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
+                        
+                        if len(ftmaps_one_cls_one_stride) > 1:
 
-                idx_bbox0 = 1
-                idx_bbox1 = 2
-                acts0 = res.extra_item[0][idx_bbox0]
-                acts1 = res.extra_item[0][idx_bbox1]
-                avg_acts0 = np.expand_dims(np.mean(acts0.cpu().numpy(), axis=(1,2)), axis=0)
-                avg_acts1 = np.expand_dims(np.mean(acts1.cpu().numpy(), axis=(1,2)), axis=0)
-                min_len = 1000
-                max_len = 1050
-                cka_res = np.zeros(max_len)
-                for k in range(min_len, max_len):
-                    cka_res[k] = cka.linear_CKA(np.repeat(avg_acts0, k, axis=0), np.repeat(avg_acts1, k, axis=0))
-                cka_res = np.nan_to_num(cka_res, copy=True, nan=0)
-                plt.plot(cka_res)
-                plt.xlim([min_len, max_len])
-                plt.ylim([-1,1])
-                plt.ylabel('CKA Values (-1 to 1)')
-                plt.xlabel('Number of repetitions')
-                plt.savefig('prueba_cka.pdf')
-                plt.close()
+                            ftmaps_one_cls_one_stride = ftmaps_one_cls_one_stride.reshape(ftmaps_one_cls_one_stride.shape[0], -1)
+                            if compute_covariance:
+                                clusters_per_class_and_stride = [
+                                        agg_method(ftmaps_one_cls_one_stride, axis=0),
+                                        np.cov(ftmaps_one_cls_one_stride, rowvar=False)  # rowvar to represent variables in columns
+                                ]
+                            else:
+                                clusters_per_class_and_stride[cls_idx][stride_idx] = agg_method(ftmaps_one_cls_one_stride, axis=0)
 
-                # Acumulamos en la clase correspondiente el Energy score
-                # Para ello hay que multiplicar los logits por la temperatura y hacer el logsumexp
-                #all_scores[cls_idx_one_bbox].append(cka_score).item())
+                            if len(ftmaps_one_cls_one_stride) < 50:
+                                print(f'WARNING: Class {cls_idx:03}, Stride {stride_idx} -> Only {len(ftmaps_one_cls_one_stride)} samples')
 
-    return all_scores
+                        else:
+                            print(f'WARNING: SKIPPING Class {cls_idx:03}, Stride {stride_idx} -> NO SAMPLES')
+                            clusters_per_class_and_stride[cls_idx][stride_idx] = np.empty(0)
+
+            elif clustering_opt in CLUSTER_METHODS_AVAILABLE:
+
+                raise NotImplementedError("Not implemented yet")
+
+            elif clustering_opt == 'all':
+                raise NotImplementedError("As the amount of In-Distribution data is too big," \
+                                        "ir would be intractable to treat each sample as a cluster")
+
+            else:
+                raise NameError(f"The clustering_opt must be one of the following: 'one', 'all', or one of{CLUSTER_METHODS_AVAILABLE}")
+            
+        else:
+            raise NotImplementedError("Not implemented yet")
+        
+    else:
+        raise NotImplementedError("Not implemented yet")
+
+    return clusters_per_class_and_stride
+
+def generate_ind_scores_for_distance_methods(method: str, ind_activations, ind_clusters, logger, options: SimpleNamespace):
+    """
+    Generate the scores of the in-distribution data using the in-distribution clusters.
+    TODO: This function can be integrated with generating the thresholds as they can be computed on the
+    fly inside the loop (optimization). For the moment, we will compute the thresholds separately for flexibilty.
+    """
+    # TODO: For the moment method is not being used
+    if options.per_class:
+
+        if options.per_stride:
+                    
+            ind_scores = [[[] for _ in range(3)] for _ in range(len(ind_activations))]
+
+            for idx_cls, ind_activations_one_cls in enumerate(ind_activations):
+
+                for idx_stride, ind_activations_one_cls_one_stride in enumerate(ind_activations_one_cls):
+
+                    if len(ind_activations_one_cls_one_stride) > 0:
+                        
+                        # TODO: Aqui puedo introducir que el method sea una clase con funciones que computen
+                        #   la distancia entre las activaciones
+
+                        if len(ind_clusters[idx_cls][idx_stride]) > 0:
+                            ind_scores[idx_cls][idx_stride].append(
+                                pairwise_distances(ind_clusters[idx_cls][idx_stride][None,:],
+                                                ind_activations_one_cls_one_stride.reshape(ind_activations_one_cls_one_stride.shape[0], -1),
+                                                metric='l1')[0]
+                            )
+                        else:
+                            print(f'WARNING: Class {idx_cls:03}, Stride {idx_stride} -> No clusters' \
+                                   f'and {ind_activations_one_cls_one_stride.shape[0]} samples')
+
+                    else:
+                        print(f'WARNING: Class {idx_cls:03}, Stride {idx_stride} -> No samples')
+    
+    return ind_scores
 
 
-def generate_ood_thresholds(in_scores: list, tpr: float, per_class: bool, logger) -> np.array:
+def generate_ood_thresholds_for_distance_methods(ind_scores: list, tpr: float, options: SimpleNamespace, logger):
+    """
+    """
+    if options.per_class:
+
+        if options.per_stride:
+                    
+            thresholds = [[[] for _ in range(3)] for _ in range(len(ind_scores))]
+
+            for idx_cls, ind_scores_one_cls in enumerate(ind_scores):
+                for idx_stride, ind_scores_one_cls_one_stride in enumerate(ind_scores_one_cls):
+
+                    if len(ind_scores_one_cls_one_stride) > 0:
+                        # As the method is a distance method, we need to get the distance that makes the
+                        # encompasses the tpr*100% of the data (more distance, more OOD)
+                        thresholds[idx_cls][idx_stride] = np.percentile(ind_scores_one_cls_one_stride, tpr*100, method='lower')
+
+                    else:
+                        print(f'WARNING: Class {idx_cls:03}, Stride {idx_stride} -> No samples')
+    
+    return thresholds
+
+
+def generate_ood_thresholds(ind_scores: list, tpr: float, logger, per_class: bool, dist_method=False) -> np.array:
     """
     Generate the thresholds for each class using the in-distribution scores.
     If per_class=True, in_scores must be a list of lists,
@@ -646,8 +620,9 @@ def generate_ood_thresholds(in_scores: list, tpr: float, per_class: bool, logger
     tpr must be in the range [0, 1]
     """
     if per_class:
-        ood_thresholds = np.zeros(len(in_scores))
-        for idx, cl_scores in enumerate(in_scores):
+
+        ood_thresholds = np.zeros(len(ind_scores))
+        for idx, cl_scores in enumerate(ind_scores):
             if len(cl_scores) < 20:
                 if len(cl_scores) > 10:
                     logger.warning(f"Class {idx} has {len(cl_scores)} samples. The threshold may not be accurate")
@@ -657,6 +632,7 @@ def generate_ood_thresholds(in_scores: list, tpr: float, per_class: bool, logger
             else:
                 ood_thresholds[idx] = np.percentile(cl_scores, 100 - tpr*100, method='lower')
     else:
+
         raise NotImplementedError("Not implemented yet")
     
     return ood_thresholds
@@ -730,28 +706,66 @@ def run_eval(model, device, in_loader, ood_loader, logger, args):
         # OoD scores
         logger.info("Processing out-of-distribution data...")
         ood_scores = generate_predictions_with_ood_labeling(ood_loader, model, device, logger, ood_thresholds,
-                                                            args.ood_method, temper=args.temperature_energy)
+                                                            args.ood_method, temper=args.temperature_energy, )
         
-    elif args.ood_method == 'CKA':
+    elif args.ood_method == 'ftmaps':
+
+        # TODO: Abstraer todos los métodos a una clase con atributos de nombre, si es per_class, per_stride, etc.
+        #   y que tenga funciones para testear un sample y así. De esta forma nos ahorramos el siguiente todo.
+        # TODO: Tener un dict para cada metodo y que sea ese diccionario lo que se va pasando a las funciones
+        #   y asi tener poca repeticion de codigo
+
+        # El workflow es el siguiente para ftmaps methods:
+        #   1. Generar los ftmaps de las imagenes de in-distribution. Cada metodo puede requerir pinchar en una capa
+        #       distinta del modelo, por lo que hay que tenerlo en cuenta.
+        #   2. Generar los clusters de cada clase usando los ftmaps de las imagenes de in-distribution.
+        #       (Puede ser un solo cluster para toda la clase y el stride)
+        #   3. Generar los scores de in-distribution usando los clusters de in-distribution. Hay que generarlos
+        #       midiendo la distancia correspondiente al metodo que se use.
+        #   4. Generar los thresholds fijando un TPR
+        #   5. Generar los scores de out-of-distribution usando los thresholds de in-distribution
 
         # In scores
         if args.load_in_scores:
             logger.info("Loading in-distribution scores from disk...")
-            in_scores = read_json(Path(STORAGE_PATH / 'CKA_in_scores.json'))
+            in_activations = torch.load(STORAGE_PATH / 'ftmaps_in_scores.pt')
+            logger.info("Finished loading!")
+
         else:
             logger.info("Processing in-distribution data...")
-            in_scores = iterate_data_cka(in_loader, model, device, logger)
-            # Guardo los resultados en disco para no repetir el calculo
-            in_scores_serializable = [[float(score) for score in cl] for cl in in_scores]
-            write_json(in_scores_serializable, STORAGE_PATH / 'CKA_in_scores.json')
-            write_pickle(in_scores, STORAGE_PATH / 'CKA_in_scores.pkl')
+            in_activations = iterate_data_ftmaps(in_loader, model, device, logger)
+            torch.save(in_activations, STORAGE_PATH / 'ftmaps_in_scores.pt', pickle_protocol=5)
+            # # Save ftmaps to not repeat the calculations
+            # ftmaps_dir = Path(STORAGE_PATH / f'ftmaps_ind_{model.ckpt["train_args"]["name"]}')
+            # ftmaps_dir.mkdir(exist_ok=True)
+            # for cl, ftmaps_one_cls in enumerate(in_scores):
+            #     for stride_idx, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
+            #         if len(ftmaps_one_cls_one_stride) > 0:
+            #             np.save(ftmaps_dir / f'cl-{cl:03}-{stride_idx}-stride.npy', ftmaps_one_cls_one_stride)
+
+        ind_clusters = generate_ind_representation(
+            agg_method='mean',
+            clustering_opt='one',
+            ind_tensors=in_activations,
+            logger=logger,
+            per_class=True,
+            per_stride=True,
+            compute_covariance=False, 
+        )
+
+        options = SimpleNamespace(per_class=True, per_stride=True, compute_covariance=False)
+
+        in_scores = generate_ind_scores_for_distance_methods('l1', in_activations, ind_clusters, logger, options)
+
+        ood_thresholds = generate_ood_thresholds_for_distance_methods(in_scores, tpr=0.95, options=options, logger=logger)
         
-        ood_thresholds = generate_ood_thresholds(in_scores, tpr=0.95, per_class=True, logger=logger)
+        # ood_thresholds = generate_ood_thresholds(in_scores, tpr=0.95, logger=logger, per_class=True, dist_method=True)
 
         # OoD scores
         logger.info("Processing out-of-distribution data...")
-        ood_scores = generate_predictions_with_ood_labeling(ood_loader, model, device, logger, ood_thresholds,
-                                                            args.ood_method)
+        ood_scores = generate_predictions_with_ood_labeling(
+            ood_loader, model, device, logger, ood_thresholds, args.ood_method, centroids=ind_clusters
+        )
 
         """
     elif args.ood_method == 'Mahalanobis':
@@ -828,7 +842,7 @@ def main(args):
 
     logger.warning('Changing following enviroment variables:')
     #os.environ['YOLO_VERBOSE'] = 'False'
-    gpu_number = str(2)
+    gpu_number = str(3)
     os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
     logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
 
@@ -837,21 +851,40 @@ def main(args):
         args.batch = 1
 
     # Load ID data and OOD data
-    # ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader('coco128_custom.yaml', batch_size=args.batch_size)
-    #ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader('coco128_custom.yaml', batch_size=5)
+    # TODO: Aqui tengo que meter algo que compruebe que el dataset esta como YAML file
+    #if yaml_file_exists('coco.yaml'):
+    
     ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader(
         'coco.yaml',
-        batch_size=args.batch_size,
+        args,
         data_split='val',
-        workers=args.num_workers
     )
-    ood_dataset, ood_dataloader = create_YOLO_dataset_and_dataloader(
-        'VisDrone.yaml', 
-        batch_size=args.batch_size,
-        data_split='val',
-        workers=args.num_workers
-    )
-    # in_set, out_set, in_loader, ood_loader = make_id_ood(args, logger)
+    # import matplotlib.pyplot as plt
+    # a = ind_dataset[0]
+    # plt.imshow(a['img'].permute(1,2,0))
+    # plt.savefig('prueba.png')
+
+    if True:
+        ood_dataset, ood_dataloader = create_YOLO_dataset_and_dataloader(
+            'VisDrone.yaml', 
+            args=args,
+            data_split='val',
+        )
+
+    if False:
+        ood_dataset = SOS_BaseDataset(
+            imgs_path='/home/tri110414/nfs_home/datasets/street_obstacle_sequences/raw_data/',
+            ann_path='/home/tri110414/nfs_home/datasets/street_obstacle_sequences/val_annotations.json',
+            imgsz=640
+        )
+
+        ood_dataloader = build_dataloader(
+            ood_dataset,
+            batch=args.batch_size,
+            workers=args.num_workers,
+            shuffle=False,
+            rank=-1
+        )
 
     # TODO: usar el argparser para elegir el modelo que queremos cargar
     model_to_load = 'yolov8n.pt'
@@ -888,7 +921,7 @@ if __name__ == "__main__":
     # parser.add_argument("--out_datadir", help="Path to the out-of-distribution data folder.")
 
     parser.add_argument('--ood_method',
-                        choices=['MSP', 'ODIN', 'Energy', 'Mahalanobis', 'GradNorm','RankFeat','React', 'CKA'],
+                        choices=['MSP', 'ODIN', 'Energy', 'Mahalanobis', 'GradNorm','RankFeat','React', 'ftmaps'],
                         default='MSP')
 
     # arguments for ODIN

@@ -1,6 +1,7 @@
 # OOD YOLO Requirements
 
 scikit-learn>=1.3.0
+natsort>=7.1.1
 
 # Ultralytics requirements
 # Usage: pip install -r requirements.txt

@@ -233,11 +233,11 @@ def non_max_suppression(
         # If none remain process next image
         if extra_item is not None:
             if not x.shape[0]:
-                extra_item_final_list.append(np.array([0]))
+                extra_item_final_list.append(torch.empty(0, device=x.device))
                 continue
         if strides is not None:
             if not x.shape[0]:
-                strides_final_list.append(np.array([0]))
+                strides_final_list.append(torch.empty(0, device=x.device))
                 continue
         
         # Detections matrix nx6 (xyxy, conf, cls)

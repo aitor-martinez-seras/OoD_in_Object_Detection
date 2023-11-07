@@ -76,7 +76,7 @@ class BaseModel(nn.Module):
             (torch.Tensor): The last output of the model.
         """
         # Esto de momento lo modificamos a mano para las pruebas
-        modo = 'logits' 
+        modo = 'conv' 
         output_extra = []
 
         y, dt = [], []  # outputs
@@ -88,7 +88,7 @@ class BaseModel(nn.Module):
             x = m(x)  # run
             y.append(x if m.i in self.save else None)  # save output
 
-            if modo == 'cka':
+            if modo == 'conv':
                 if m.i in [15, 18, 21]:
                     output_extra.append(deepcopy(x))
 
