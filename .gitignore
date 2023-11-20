@@ -7,6 +7,8 @@ venv-yolo
 prueba*
 pruebas/
 .vscode/
+screenlog.0
+
 
 # C extensions
 *.so
