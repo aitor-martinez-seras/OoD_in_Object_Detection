@@ -10,6 +10,8 @@ def main():
     model = YOLO("yolov8n.yaml", task='detect')  # build a new model from scratch
     # model = YOLO("yolov8n.pt")  # load a pretrained model (recommended for training)
 
+    tensorboard.writer = tensorboard.SummaryWriter
+
     # Add tensorboard callbacks
     for k, v in tensorboard.callbacks.items():
         model.add_callback(k, v)
