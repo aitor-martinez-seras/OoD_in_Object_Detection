@@ -9,7 +9,7 @@ try:
 except (ImportError, AssertionError):
     SummaryWriter = None
 
-writer = None  # TensorBoard SummaryWriter instance
+writer = SummaryWriter  # TensorBoard SummaryWriter instance
 
 
 def _log_scalars(scalars, step=0):
