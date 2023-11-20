@@ -16,11 +16,11 @@ def main():
     model = YOLO("yolov8n.pt")  # load a pretrained model (recommended for training)
 
     # Use the model
-    # model.train(data="coco128.yaml", epochs=3)  # train the model
+    model.train(data="dataset_prueba.yaml", epochs=3)  # train the model
     # metrics = model.val()  # evaluate model performance on the validation set
 
     # results = model.predict(source=Path('datasets/proba'), save=True)
-    results = model.predict(source=Path('datasets/coco5'), save=True)
+    #results = model.predict(source=Path('datasets/coco5'), save=True)
     # print('*********')
 
     # print(len(results))

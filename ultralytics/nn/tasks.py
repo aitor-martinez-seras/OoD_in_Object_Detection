@@ -42,8 +42,12 @@ class BaseModel(nn.Module):
         """
         if isinstance(x, dict):  # for cases of training and validating while training.
             return self.loss(x, *args, **kwargs)
-        x, output_extra = self.predict(x, *args, **kwargs)
-        return x, output_extra
+        if hasattr(self, 'modo'):
+            x, output_extra = self.predict(x, *args, **kwargs)
+            return x, output_extra
+        else:
+            x = self.predict(x, *args, **kwargs)
+            return x
 
     def predict(self, x, profile=False, visualize=False, augment=False):
         """
@@ -60,8 +64,14 @@ class BaseModel(nn.Module):
         """
         if augment:
             return self._predict_augment(x)
-        x, output_extra = self._predict_once(x, profile, visualize)
-        return x, output_extra
+        
+        # To enable training mode and ood evaluation
+        if hasattr(self, 'modo'):
+            x, output_extra = self._predict_once(x, profile, visualize)
+            return x, output_extra
+        else:
+            x = self._predict_once(x, profile, visualize)
+            return x
 
     def _predict_once(self, x, profile=False, visualize=False):
         """
@@ -76,7 +86,6 @@ class BaseModel(nn.Module):
             (torch.Tensor): The last output of the model.
         """
         # Esto de momento lo modificamos a mano para las pruebas
-        modo = 'conv' 
         output_extra = []
 
         y, dt = [], []  # outputs
@@ -88,18 +97,22 @@ class BaseModel(nn.Module):
             x = m(x)  # run
             y.append(x if m.i in self.save else None)  # save output
 
-            if modo == 'conv':
-                if m.i in [15, 18, 21]:
-                    output_extra.append(deepcopy(x))
+            if hasattr(self, 'modo'):
+                if self.modo == 'conv':
+                    if m.i in [15, 18, 21]:
+                        output_extra.append(deepcopy(x))
 
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
 
         # En el modo logits, nos quedamos con lo ultimo que sale
-        if modo == 'logits':
-            output_extra = deepcopy(x)
-
-        return x, output_extra
+        if hasattr(self, 'modo'):
+            if self.modo == 'logits':
+                output_extra = deepcopy(x)
+    
+            return x, output_extra
+        
+        return x
 
     def _predict_augment(self, x):
         """Perform augmentations on input image x and return augmented inference."""

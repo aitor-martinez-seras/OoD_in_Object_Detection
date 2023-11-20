@@ -157,12 +157,3 @@ def create_targets_dict(data: dict) -> dict:
         cls=[data['cls'][idx].view(-1) for idx in target_idx]    
     )
     return targets
-
-
-# class SOS_CocoAnn(VisionDataset):
-
-#     def __init__(self, root, ann_file, transform=None, target_transform=None):
-#         from pycocotools.coco import COCO
-#         super(SOS_CocoAnn, self).__init__(root, transform=transform, target_transform=target_transform)
-#         self.coco = COCO(ann_file)
-#         self.ids = list(sorted(self.coco.imgs.keys()))

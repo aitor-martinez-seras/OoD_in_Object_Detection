@@ -129,94 +129,94 @@ class DetectionPredictor(BasePredictor):
         ##  1 es el batch_size (puede ser mas), 84 son el box (4) + las clases (80). 5040 son las boxes (depende del tamaño de la imagen).
         ## 2ndo, lista de 3 elementos. En cada elemento tenemos un tensor. Son los feature map segun Aitor
         # output_extra = preds[1]
-        modo = 'conv'
-        if modo == 'conv':
-            # Con CKA vamos a manejar los feature maps
-            # Para la prediccion se usan las 3 escalas de feature maps (8,16,32)
-            # y por tanto me he traido las 3 escalas, que vienen en la forma
-            # List[[N, CH, H, W]] donde cada posicion de la lista es una de las escalas
-            # N es el batch_size, CH es el numero de canales y H y W son el alto y ancho del feature map.
-            output_extra = preds[1]
-        else:
-            output_extra = preds[1][0]
-        
-        ## Cojo el [0] porque ahora mismo preds[1] es una lista de 2 elementos donde:
-        ## el primer elemento es la salida de la red neuronal
-        ## el segundo elemento hay 3 items, con lo que creemos que son los feature map.
-        preds = preds[0]
-
-        # Strides. We use this variable to mantain the info of which is the scale of each bounding box
-        #   in the final predictions. This is needed for using RoIAlign with the correct feature map
-        input_size = 640
-        s8 = input_size // 8
-        s16 = input_size // 16
-        s32 = input_size // 32
-        device = self.device
-        strides = torch.cat(
-            (torch.zeros((s8*s8), device=device),  # 0
-             torch.ones((s16*s16), device=device),  # 1
-             torch.ones((s32*s32), device=device) * 2)  # 2
-        )
-
-        if modo == 'conv':
-
-            preds, strides = ops.non_max_suppression(
-                preds,
-                self.args.conf,
-                self.args.iou,
-                agnostic=self.args.agnostic_nms,
-                max_det=self.args.max_det,
-                classes=self.args.classes,  # Usually None
-                extra_item=None,
-                strides=strides
-            )
+        if hasattr(self, 'modo'):
+            if self.model.model.modo == 'conv':
+                # Con CKA vamos a manejar los feature maps
+                # Para la prediccion se usan las 3 escalas de feature maps (8,16,32)
+                # y por tanto me he traido las 3 escalas, que vienen en la forma
+                # List[[N, CH, H, W]] donde cada posicion de la lista es una de las escalas
+                # N es el batch_size, CH es el numero de canales y H y W son el alto y ancho del feature map.
+                output_extra = preds[1]
+            else:
+                output_extra = preds[1][0]
             
-            roi_aligned_ftmaps_per_image_and_stride = extract_roi_aligned_features_from_correct_stride(
-                ftmaps=output_extra,
-                boxes=[x[:, :4] for x in preds],  # Extracting only the boxes from the predictions
-                strides=strides,
-                img_shape=img.shape,
-                device=device
+            ## Cojo el [0] porque ahora mismo preds[1] es una lista de 2 elementos donde:
+            ## el primer elemento es la salida de la red neuronal
+            ## el segundo elemento hay 3 items, con lo que creemos que son los feature map.
+            preds = preds[0]
+
+            # Strides. We use this variable to mantain the info of which is the scale of each bounding box
+            #   in the final predictions. This is needed for using RoIAlign with the correct feature map
+            input_size = img.shape[2]
+            s8 = input_size // 8
+            s16 = input_size // 16
+            s32 = input_size // 32
+            device = self.device
+            strides = torch.cat(
+                (torch.zeros((s8*s8), device=device),  # 0
+                torch.ones((s16*s16), device=device),  # 1
+                torch.ones((s32*s32), device=device) * 2)  # 2
             )
 
-            # OPCION 2: Hacer un loop para cada imagen del batch, y dentro de ese loop hacer otro loop para cada stride
-            # Con este loop recorremos la dimension de batch
-            # for idx_img, one_img_bboxes in enumerate(only_bboxes):
+            if self.model.model.modo == 'conv':
 
-            #     strides_of_each_bbox = [torch.where(strides[idx_img] == idx) for idx in range(number_of_strides)]
-            #     aux_list = list()
-            #     idx_of_each_bbox_in_batch = [list(range(len(st))) for st in strides_of_each_bbox]
-            #     which_stride = strides[idx_img]
-            #     idx_of_stride = list(range(len(strides[idx_img])))
-            #     idx_of_strides = [list(range(len(st))) for st in strides[idx_img]]
+                preds, strides = ops.non_max_suppression(
+                    preds,
+                    self.args.conf,
+                    self.args.iou,
+                    agnostic=self.args.agnostic_nms,
+                    max_det=self.args.max_det,
+                    classes=self.args.classes,  # Usually None
+                    extra_item=None,
+                    strides=strides
+                )
+                
+                roi_aligned_ftmaps_per_image_and_stride = extract_roi_aligned_features_from_correct_stride(
+                    ftmaps=output_extra,
+                    boxes=[x[:, :4] for x in preds],  # Extracting only the boxes from the predictions
+                    strides=strides,
+                    img_shape=img.shape,
+                    device=device
+                )
 
-            #     s8_preds = roi_align(
-            #         input=torch.unsqueeze(output_extra[0][idx_img], dim=0),
-            #         boxes=[one_img_bboxes],
-            #         output_size= (10, 10),
-            #         spatial_scale=output_extra[0].shape[2]/img.shape[2]
-            #     )
+                # OPCION 2: Hacer un loop para cada imagen del batch, y dentro de ese loop hacer otro loop para cada stride
+                # Con este loop recorremos la dimension de batch
+                # for idx_img, one_img_bboxes in enumerate(only_bboxes):
 
-            output_extra = roi_aligned_ftmaps_per_image_and_stride  # Sobreescibimos el output_extra con el resultado del roi_align
+                #     strides_of_each_bbox = [torch.where(strides[idx_img] == idx) for idx in range(number_of_strides)]
+                #     aux_list = list()
+                #     idx_of_each_bbox_in_batch = [list(range(len(st))) for st in strides_of_each_bbox]
+                #     which_stride = strides[idx_img]
+                #     idx_of_stride = list(range(len(strides[idx_img])))
+                #     idx_of_strides = [list(range(len(st))) for st in strides[idx_img]]
 
-        elif modo == 'logits':
-            preds = ops.non_max_suppression(preds,
-                                            self.args.conf,
-                                            self.args.iou,
-                                            agnostic=self.args.agnostic_nms,
-                                            max_det=self.args.max_det,
-                                            classes=self.args.classes,
-                                            extra_item=output_extra)
-            output_extra = preds[1]
-            # print('++++++++++++ POSTPROCESS ++++++++++++++++')
-            # # print(output_extra)
-            # print(len(output_extra))
-            # for idx, o in enumerate(output_extra):
-            #     print(f'Extra item shape: {o.shape}')
-            #     print(f'Preds shape: {preds[0][idx].shape}')
-            # print('-----------------------------------------------------------------------')
+                #     s8_preds = roi_align(
+                #         input=torch.unsqueeze(output_extra[0][idx_img], dim=0),
+                #         boxes=[one_img_bboxes],
+                #         output_size= (10, 10),
+                #         spatial_scale=output_extra[0].shape[2]/img.shape[2]
+                #     )
 
-            preds = preds[0]
+                output_extra = roi_aligned_ftmaps_per_image_and_stride  # Sobreescibimos el output_extra con el resultado del roi_align
+
+            elif self.model.model.modo == 'logits':
+                preds = ops.non_max_suppression(preds,
+                                                self.args.conf,
+                                                self.args.iou,
+                                                agnostic=self.args.agnostic_nms,
+                                                max_det=self.args.max_det,
+                                                classes=self.args.classes,
+                                                extra_item=output_extra)
+                output_extra = preds[1]
+                # print('++++++++++++ POSTPROCESS ++++++++++++++++')
+                # # print(output_extra)
+                # print(len(output_extra))
+                # for idx, o in enumerate(output_extra):
+                #     print(f'Extra item shape: {o.shape}')
+                #     print(f'Preds shape: {preds[0][idx].shape}')
+                # print('-----------------------------------------------------------------------')
+
+                preds = preds[0]
         
         results = []
         for i, pred in enumerate(preds):
@@ -225,7 +225,7 @@ class DetectionPredictor(BasePredictor):
                 pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
             path = self.batch[0]
             img_path = path[i] if isinstance(path, list) else path
-            if modo in ['logits', 'conv']:
+            if self.model.model.modo in ['logits', 'conv']:
                 results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names, boxes=pred, extra_item=output_extra[i]))
             else:
                 results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names, boxes=pred))

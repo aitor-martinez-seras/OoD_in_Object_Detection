@@ -1,55 +1,101 @@
-from typing import List
+from typing import List, Tuple, Callable
 from dataclasses import dataclass
-from abc import abstractmethod
+from abc import ABC, abstractmethod
+from pathlib import Path
 
 import argparse
 import numpy as np
 # import sklearn.metrics as sk
+from sklearn.metrics import pairwise_distances
 import torch
 import torchvision.ops as t_ops
 from scipy.optimize import linear_sum_assignment
 
 from ultralytics.yolo.engine.results import Results
-
-
-CLUSTERING_METHODS = ['DBSCAN', 'KMeans', 'GMM', 'HDBSCAN', 'OPTICS',
-                      'SpectralClustering', 'AgglomerativeClustering']
+from visualization_utils import plot_results
 
 
 @dataclass(slots=True)
-class OODMethod:
+class OODMethod(ABC):
     
     name: str
     distance_method: bool
-    logits_or_ftmaps: str
     per_class: bool
     per_stride: bool
-    cluster_method: str
     thresholds: List[float] or List[List[float]]
+    # The threshold to use when matching the predicted boxes to the ground truth boxes.
+    #   All boxes with an IoU lower than this threshold will be considered bad predictions
     iou_threshold_for_matching: float
+    # Define the minimum threshold to output a box when predicting. All boxe with
+    #   a confidence lower than this threshold will be discarded automatically
+    min_conf_threshold: float
+    which_internal_activations: str  # Where to extract internal activations from
 
-    def __init__(self, name: str, per_class: bool, per_stride: bool, cluster_method: str, 
-                 ):
+    def __init__(self, name: str, distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float,
+                 min_conf_threshold: float, which_internal_activations: str):
         self.name = name
+        self.distance_method = distance_method
         self.per_class = per_class
         self.per_stride = per_stride
-        self.cluster_method = self.check_clusters(cluster_method)
+        self.iou_threshold_for_matching = iou_threshold_for_matching
+        self.min_conf_threshold = min_conf_threshold
+        self.thresholds = None
+        self.which_internal_activations = which_internal_activations
 
-    def check_clusters(self, cluster_method: str) -> str:
-        assert cluster_method in ['no','one', 'all'] + CLUSTERING_METHODS, f"Clusters must be either 'in', 'out' or {['one', 'all'] + CLUSTERING_METHODS}"
+    # @abstractmethod
+    # def compute_scores():
+    #     pass
 
     @abstractmethod
-    def compute_scores():
+    def extract_internal_activations(self, results: Results, all_activations: List[float] or List[List[np.array]]):
+        """
+        Function to be overriden by each method to extract the internal activations of the model. In the logits
+        methods, it will be the logits, and in the ftmaps methods, it will be the ftmaps.
+        The extracted activations will be stored in the list all_activations
+        """
         pass
 
-    def log_every_n_batches(self, logger, idx_of_batch: int, number_of_batches: int, log_every: int):
-        if idx_of_batch % log_every == 0:
+    @abstractmethod
+    def format_internal_activations(self, all_activations: List[float] or List[List[np.array]]):
+        """
+        Function to be overriden by each method to format the internal activations of the model.
+        The extracted activations will be stored in the list all_activations
+        """
+        pass
+
+    @abstractmethod
+    def compute_ood_decision_on_results(self, results: Results, logger) -> List[int]:
+        """
+        Function to be overriden by each method to compute the OOD decision for each image
+        """
+        pass
+
+    @abstractmethod
+    def compute_score_one_bbox() -> List[float]:
+        """
+        Function to be overriden by each method to compute the score of one bbox.
+        The input parameters will depend on if the method is a logits method or a distance method.
+        """
+        pass
+    
+    # TODO: Aqui vamos a computar las metricas AUROC, AUPR y FPR95
+    def iterate_data_to_compute_ood_decision():
+        pass
+    
+    @staticmethod
+    def log_every_n_batches(n: int, logger, idx_of_batch: int, number_of_batches: int):
+        if idx_of_batch % n == 0:
             logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")
     
-    @classmethod
+    @staticmethod
     def create_targets_dict(data: dict) -> dict:
         """
-        Funcion que crea un diccionario con los targets de cada imagen del batch.
+        Funcion que crea un diccionario con los targets de cada imagen del batch con el siguiente formato:
+            targets = {
+                'bboxes': [list of bboxes for each image],
+                'cls': [list of classes for each image],
+            }
+        Las bboxes se llevan de coordenadas relativas a absolutas y se convierten a formato xyxy
         La funcion es necesaria porque los targets vienen en una sola dimension, 
             por lo que hay que hacer el matcheo de a que imagen pertenece cada bbox.
         """
@@ -67,11 +113,12 @@ class OODMethod:
         # En 'cls' tiene las clases
         targets = dict(
             bboxes=[t_ops.box_convert(data['bboxes'][idx], 'cxcywh', 'xyxy') * relative_to_absolute_coordinates[img_idx] for img_idx, idx in enumerate(target_idx)],
+            #bboxes=[data['bboxes'][idx] * relative_to_absolute_coordinates[img_idx] for img_idx, idx in enumerate(target_idx)],
             cls=[data['cls'][idx].view(-1) for idx in target_idx]    
         )
         return targets
 
-
+    @staticmethod
     def match_predicted_boxes_to_targets(results: Results, targets, iou_threshold: float):
         """
         Funcion que matchea las cajas predichas con las cajas Ground Truth (GT) que mejor se ajustan.
@@ -110,55 +157,646 @@ class OODMethod:
 
 
     # TODO: Todavia me queda por decidir si esto es solo para cuando quiero extraer info interna para 
-    #   modelar las In-Distribution o si tambien lo quiero para las Out-of-Distribution
-    def iterate_data(self, data_loader, model, device, logger):
+    #   modelar las In-Distribution o si tambien lo quiero para las Out-of-Distribution.
+    # Va a poder ocurrir que esta funcion sea completamente remodelada por el metodo OOD ya que se requiera que compute gradientes o cualquier
+    # otra eventualidad. Lo importante es que de aqui salga la info necesaria para generar los thresholds
+    def iterate_data_to_extract_ind_activations(self, data_loader, model, device, logger):
         """
-        """        
-        all_ftmaps_per_class_and_stride = [[[] for _ in range(3)] for _ in range(len(model.names))]
-        number_of_batches = len(data_loader)
+        Function to iterate over the data and extract the internal activations of the model for each image.
+        The extracted activations will be stored in a list.
+        """
+        if self.per_class:
+            if self.per_stride:
+                all_internal_activations = [[[] for _ in range(3)] for _ in range(len(model.names))]
+            else:
+                all_internal_activations = [[] for _ in range(len(model.names))]
 
+        number_of_batches = len(data_loader)
         for idx_of_batch, data in enumerate(data_loader):
             
-            self.log_every_n_batches(logger, idx_of_batch, number_of_batches, log_every=50)
+            self.log_every_n_batches(50, logger, idx_of_batch, number_of_batches)
                 
             ### Prepare images and targets to feed the model ###
-            if isinstance(data, dict):
-                imgs = data['img'].to(device)
-                targets = self.create_targets_dict(data)
-            else:
-                imgs, targets = data
+            imgs, targets = self.prepare_data_for_model(data, device)
 
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
             results = model.predict(imgs, save=False, verbose=False)
-            
+
             ### Match the predicted boxes to the ground truth boxes ###
             self.match_predicted_boxes_to_targets(results, targets, self.iou_threshold_for_matching)
 
-            ### Extract the internal information of the model depending on the OOD method ###
-            self.extract_internal_information(results, all_ftmaps_per_class_and_stride)
+            ### Extract the internal activations of the model depending on the OOD method ###
+            self.extract_internal_activations(results, all_internal_activations)
 
-        return all_ftmaps_per_class_and_stride
+        ### Final formatting of the internal activations ###
+        self.format_internal_activations(all_internal_activations)
+
+        return all_internal_activations
     
+    def prepare_data_for_model(self, data, device) -> Tuple[torch.Tensor, dict]:
+        """
+        Funcion que prepara los datos para poder meterlos en el modelo.
+        """
+        if isinstance(data, dict):
+            imgs = data['img'].to(device)
+            targets = self.create_targets_dict(data)
+        else:
+            imgs, targets = data
+        return imgs, targets
+
+    def iterate_data_to_plot_with_ood_labels(self, model, dataloader, device, logger, folder_path: Path, now: str):
+
+        logger.warning(f"Using a confidence threshold of {self.min_conf_threshold} for tests")
+        for idx_of_batch, data in enumerate(dataloader):
+            
+            ### Preparar imagenes y targets ###
+            imgs, targets = self.prepare_data_for_model(data, device)
+            
+            ### Procesar imagenes en el modelo para obtener logits y las cajas ###
+            results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold)
+
+            ### Comprobar si las cajas predichas son OoD ###
+            ood_decision = self.compute_ood_decision_on_results(results, logger)
+            
+            # Codigo prueba
+            # from torchvision.utils import draw_bounding_boxes
+            # import matplotlib.pyplot as plt
+            # l=5
+            # im = draw_bounding_boxes(
+            #                 imgs[l].cpu(),
+            #                 targets['bboxes'][l],
+            #                 width=5,
+            #                 font='FreeMonoBold',
+            #                 font_size=12,
+            #                 labels=[f'{model.names[0]}' for i, n in enumerate(targets['cls'][l])]
+            #             )
+            # fig,ax = plt.subplots(1,1,figsize=(20,10))
+            # plt.imshow(im.permute(1,2,0))
+            # plt.savefig('prueba_en_ood_visu.png')
+            # plt.close()
+
+            # # Plot image
+            # import matplotlib.pyplot as plt
+            # fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+            # ax.imshow(imgs[0].permute(1, 2, 0).cpu())
+            # plt.savefig('prueba.png')
+            # plt.close()
+            
+            plot_results( 
+                class_names=model.names,
+                results=results,
+                folder_path=folder_path,
+                now=now,
+                valid_preds_only=False,
+                origin_of_idx=idx_of_batch*dataloader.batch_size,
+                image_format='pdf',
+                ood_decision=ood_decision,
+                ood_method_name=self.name,
+            )
+            
+            # TODO: De momento no queremos plotear todo, solo unos pocos batches
+            if idx_of_batch > 10:
+                quit()
+    
+    def generate_thresholds(self, ind_scores: list, tpr: float, logger) -> List[float] or List[List[float]]:
+        """
+        Generate the thresholds for each class using the in-distribution scores.
+        If per_class=True, in_scores must be a list of lists,
+        where each list is the list of scores for each class.
+        tpr must be in the range [0, 1]
+        """
+        if self.distance_method:
+            # If the method measures distance, the higher the score, the more OOD. Therefore
+            # we need to get the upper bound, the tpr*100%
+            used_tpr = 100*tpr
+        else:            
+            # As the method is a similarity method, the higher the score, the more IND. Therefore
+            # we need to get the lower bound, the (1-tpr)*100%
+            used_tpr = (1 - tpr)*100
+
+        sufficient_samples = 10
+        good_number_of_samples = 50
+
+        if self.per_class:
+
+            if self.per_stride:
+
+                # Per class with stride differentiation
+                thresholds = [[[] for _ in range(3)] for _ in range(len(ind_scores))]
+                for idx_cls, ind_scores_one_cls in enumerate(ind_scores):
+                    for idx_stride, ind_scores_one_cls_one_stride in enumerate(ind_scores_one_cls):
+                        if len(ind_scores_one_cls_one_stride) > sufficient_samples:
+                            thresholds[idx_cls][idx_stride] = float(np.percentile(ind_scores_one_cls_one_stride, used_tpr, method='lower'))
+                            if len(ind_scores_one_cls_one_stride) < good_number_of_samples:
+                                logger.warning(f"Class {idx_cls:03}, Stride {idx_stride}: has {len(ind_scores_one_cls_one_stride)} samples. The threshold may not be accurate")
+                        else:
+                            logger.warning(f'Class {idx_cls:03}, Stride {idx_stride} -> Has less than {sufficient_samples} samples. No threshold is generated')
+            
+            else:
+
+                # Per class with no stride differentiation
+                thresholds = [0 for _ in range(len(ind_scores))]
+                for idx, cl_scores in enumerate(ind_scores):
+                    if len(cl_scores) > sufficient_samples:
+                        thresholds[idx] = float(np.percentile(cl_scores, used_tpr, method='lower'))
+                        if len(cl_scores) < good_number_of_samples:
+                            logger.warning(f"Class {idx}: {len(cl_scores)} samples. The threshold may not be accurate")
+                    else:
+                        logger.warning(f"Class {idx} has less than {sufficient_samples} samples. No threshold is generated")
+                        
+        else:
+            raise NotImplementedError("Not implemented yet")
+        
+        return thresholds
+
+#################################################################################
+# Create classes for each method. Methods will inherit from OODMethod,
+#   will override the abstract methods and also any other function that is needed.
+#################################################################################
+
+### Superclasses for methods using logits of the model ###
+class LogitsMethod(OODMethod):
+    
+    def __init__(self, name: str, per_class: bool, per_stride: bool, iou_threshold_for_matching: float, min_conf_threshold: float):
+        distance_method = False
+        which_internal_activations = 'logits'
+        super().__init__(name, distance_method, per_class, per_stride, iou_threshold_for_matching, min_conf_threshold, which_internal_activations)
+
+    def compute_ood_decision_on_results(self, results: Results, logger) -> List[int]:
+        """
+        Function to be overriden by each method to compute the OOD decision for each image
+        """
+        ood_decision = []  
+        for idx_img, res in enumerate(results):
+            ood_decision.append([])  # Every image has a list of decisions for each bbox
+            for idx_bbox in range(len(res.boxes.cls)):
+                cls_idx = int(res.boxes.cls[idx_bbox].cpu())
+                logits = res.extra_item[idx_bbox][4:].cpu()
+                score = self.compute_score_one_bbox(logits, cls_idx)
+                if score < self.thresholds[cls_idx]:
+                    ood_decision[idx_img].append(0)  # OOD
+                else:
+                    ood_decision[idx_img].append(1)  # InD
+
+        return ood_decision
+    
+    def extract_internal_activations(self, results: Results, all_activations: List[float]) -> List[float]:
+        """
+        The extracted activations will be stored in the list all_activations. 
+        In this case, the scores are directly computed.
+        """
+        for res in results:
+            # Loop over the valid predictions
+            for valid_idx_one_bbox in res.valid_preds:
+                cls_idx_one_bbox = int(res.boxes.cls[valid_idx_one_bbox].cpu())
+                logits_one_bbox = res.extra_item[valid_idx_one_bbox][4:].cpu()
+                all_activations[cls_idx_one_bbox].append(self.compute_score_one_bbox(logits_one_bbox, cls_idx_one_bbox))
+
+    def format_internal_activations(self, all_activations: List[float] or List[List[np.array]]):
+        """
+        Format the internal activations of the model. In this case, the activations are already well formatted.
+        """
+        pass
+
+
+class MSP(LogitsMethod):
+
+    def __init__(self, **kwargs):
+        name = 'MSP'
+        super().__init__(name, **kwargs)
+    
+    def compute_score_one_bbox(self, logits: torch.Tensor, cls_idx: int) -> float:
+        logits = logits.numpy()
+        assert cls_idx == logits.argmax(), "The max logit is not the one of the predicted class"
+        return logits[cls_idx]
+
+    # def extract_internal_activations(self, results: Results, all_activations: List[float]):
+    #     """
+    #     The extracted activations will be stored in the list all_activations
+    #     """
+    #     for res in results:
+    #         # Loop over the valid predictions
+    #         for valid_idx_one_bbox in res.valid_preds:
+                
+    #             cls_idx_one_bbox = int(res.boxes.cls[valid_idx_one_bbox].cpu())
+
+    #             logits_one_bbox = res.extra_item[valid_idx_one_bbox][4:].cpu().numpy()
+
+    #             all_activations[cls_idx_one_bbox].append(logits_one_bbox.max())
+
+    
+class Energy(LogitsMethod):
+
+    temper: float
+
+    def __init__(self, temper: float, **kwargs):
+        name = 'Energy'
+        super().__init__(name, **kwargs)
+        self.temper = temper
+    
+    def compute_score_one_bbox(self, logits, cls_idx) -> float:
+        return self.temper * torch.logsumexp(logits / self.temper, dim=0).item()
+
+    # def extract_internal_activations(self, results: Results, all_activations: List[float]):
+    #     """
+    #     The extracted activations will be stored in the list all_activations
+    #     """
+    #     for res in results:
+    #         # Loop over the valid predictions
+    #         for valid_idx_one_bbox in res.valid_preds:
+                
+    #             cls_idx_one_bbox = int(res.boxes.cls[valid_idx_one_bbox].cpu())
+
+    #             logits_one_bbox = res.extra_item[valid_idx_one_bbox][4:].cpu()
+
+    #             all_activations[cls_idx_one_bbox].append(self.temper * torch.logsumexp(logits_one_bbox / self.temper, dim=0).item())
+
+
+class ODIN(LogitsMethod):
+    pass
+
+
+### Superclasses for methods using feature maps of the model ###
+class DistanceMethod(OODMethod):
+    
+    agg_method: Callable
+    cluster_method: str
+    cluster_optimization_metric: str
+    available_cluster_methods: List[str]
+    available_cluster_optimization_metrics: List[str]
+    clusters: List[np.array] or List[List[np.array]]
+
+    # name: str, distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float, min_conf_threshold: float
+    def __init__(self, name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str, **kwargs):
+        distance_method = True  # Always True for distance methods
+        which_internal_activations = 'ftmaps'  # This could be changed in subclasses
+        super().__init__(name, distance_method, per_class, per_stride, which_internal_activations=which_internal_activations,**kwargs)
+        self.available_cluster_methods = ['one','all','DBSCAN', 'KMeans', 'GMM', 'HDBSCAN', 'OPTICS', 'SpectralClustering', 'AgglomerativeClustering']
+        self.available_cluster_optimization_metrics = ['silhouette', 'calinski_harabasz', 'davies_bouldin']
+        self.cluster_method = self.check_cluster_method_selected(cluster_method)
+        self.cluster_optimization_metric = self.check_cluster_optimization_metric_selected(cluster_optimization_metric)
+        if agg_method == 'mean':
+            self.agg_method = np.mean
+        elif agg_method == 'median':
+            self.agg_method = np.median
+        else:
+            raise NameError(f"The agg_method argument must be one of the following: 'mean', 'median'. Current value: {agg_method}")
+        
+    # TODO: Quiza estas formulas acaben devolviendo un Callable con el propio método que implementen
+    def check_cluster_method_selected(self, cluster_method: str) -> str:
+        assert cluster_method in self.available_cluster_methods, f"cluster_method must be one of {self.available_cluster_methods}, but got {cluster_method}"
+        return cluster_method
+
+    def check_cluster_optimization_metric_selected(self, cluster_optimization_metric: str) -> str:
+        assert cluster_optimization_metric in self.available_cluster_optimization_metrics, f"cluster_method must be one" \
+          f"of {self.available_cluster_optimization_metrics}, but got {cluster_optimization_metric}"
+        return cluster_optimization_metric
+
+    def compute_score_one_bbox(self, cluster: np.array, activations: np.array) -> List[float]:
+        return self.compute_distance(cluster, activations)
+
+    # TODO: Juntar las dos funciones de debajo en una sola, ya que podemos devolver una lista de floats siempre
+    #   y en el caso de que solo hayamos enviado una bbox, la lista tendra un solo elemento
     @abstractmethod
-    def extract_internal_information(self, results: Results, all_info: List[np.array] or List[List[np.array]]):
+    def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
         """
-        Function to be overriden by each method to extract the internal information of the model. In the logits
-        methods, it will be the logits, and in the ftmaps methods, it will be the ftmaps.
-        The extracted information will be stored in the list all_info
         """
         pass
+
+    def extract_internal_activations(self, results: Results, all_activations: List[List[np.array]]):
+        """
+        Extract the ftmaps of the selected boxes in their corresponding stride and class.
+        The extracted activations will be stored in the list all_activations with the following structure:
+            all_activations = [
+                [  # Class 0
+                    [  # Stride 0
+                        ndarray[C, H, W],  # Bbox 0 of class 0 in stride 0
+                        ndarray[C, H, W],  # Bbox 1 of class 0 in stride 0
+                        ...
+                    ],
+                    [  # Stride 1
+                        ndarray[C, H, W],  # Bbox 0 of class 0 in stride 1
+                        ndarray[C, H, W],  # Bbox 1 of class 0 in stride 1
+                        ...
+                    ],
+                    ...
+                ],
+                [ # Class 1
+                    ...
+                ],
+                ...
+            ]
+        """        
+        # Loop each image fo the batch
+        for res in results:
+            cls_idx_one_pred = res.boxes.cls.cpu()
+            # Recorremos cada stride y de ahí nos quedamos con las cajas que hayan sido marcadas como validas
+            # Loop each stride and get only the ftmaps of the boxes that are valid predictions
+            for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(res.extra_item):
+                if len(bbox_idx_in_one_stride) > 0:  # Check if there are any valid predictions in this stride
+                    for i, bbox_idx in enumerate(bbox_idx_in_one_stride):
+                        bbox_idx = bbox_idx.item()
+                        if bbox_idx in res.valid_preds:
+                            pred_cls = int(cls_idx_one_pred[bbox_idx].item())
+                            all_activations[pred_cls][stride_idx].append(ftmaps[i].cpu().numpy())
+
+    def format_internal_activations(self, all_activations: List[List[List[np.array]]]):
+        """
+        Format the internal activations of the model. In this case, the ftmaps are converted to numpy arrays.
+        The extracted activations will be stored in the list all_activations with the following structure:
+            all_activations = [
+                [  # Class 0
+                    [  # Stride 0
+                        ndarray[N_0_0, C, H, W],  # Bboxes of class 0 in stride 0
+                        ...
+                    ],
+                    [  # Stride 1
+                        ndarray[N_0_1, C, H, W],  # Bboxes of class 0 in stride 1
+                        ...
+                    ],
+                    ...
+                ],
+                [ # Class 1
+                    [  # Stride 0
+                        ndarray[N_1_0, C, H, W],  # Bboxes of class 1 in stride 0
+                        ...
+                    ],
+                    [  # Stride 1
+                        ndarray[N_1_1, C, H, W],  # Bboxes of class 1 in stride 1
+                        ...
+                    ],
+                ],
+                ...
+            ]
+        N_0_0 is the number of bboxes of class 0 in stride 0, and so on.
+        """
+        # Convert the list inside each class and stride to numpy arrays
+        for idx_cls, ftmaps_one_cls in enumerate(all_activations):
+            for idx_stride, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
+                if len(ftmaps_one_cls_one_stride) > 0:
+                    all_activations[idx_cls][idx_stride] = np.stack(ftmaps_one_cls_one_stride, axis=0)
+                else:
+                    all_activations[idx_cls][idx_stride] = np.empty(0)
+   
+
+    def compute_scores_from_activations(self, activations: List[np.array] or List[List[np.array]], logger):
+        """
+        Compute the scores for each class using the in-distribution activations (usually feature maps). They come in form of a list of ndarrays when
+            per_class True and per_stride are False, where each position of the list refers to one class and the array is a tensor of shape [N, C, H, W]. 
+            When is per_class and per_stride, the first list refers to classes and the second to the strides, being the arrays of the same shape as presented.
+        """
+        if self.per_class:
+
+            if self.per_stride:
+                    
+                scores = [[[] for _ in range(3)] for _ in range(len(activations))]
+
+                if self.cluster_method == 'one':
+                    self.compute_scores_one_cluster_per_class_and_stride(activations, scores, logger)
+                else:
+                    raise NotImplementedError("Not implemented yet")
+                
+            else:
+                raise NotImplementedError("Not implemented yet")
+            
+        else:
+            raise NotImplementedError("Not implemented yet")
+        
+        return scores
     
-    # TODO: Esta funcion puede valer para todos los metodos OOD
-    def compute_ood_decision():
-        pass
+    # TODO: Esta funcion seguramente se pueda generalizar
+    def compute_scores_one_cluster_per_class_and_stride(self, activations: List[List[np.array]], scores: List[List[np.array]], logger):
+        """
+        This function has the logic of looping over the classes and strides to then call the function that computes the scores on one class and one stride.
+        """
+        for idx_cls, activations_one_cls in enumerate(activations):
 
-# Create classes for each method
+            logger.info(f'Class {idx_cls:03} of {len(activations)}')
+            for idx_stride, activations_one_cls_one_stride in enumerate(activations_one_cls):
+                
+                if len(activations_one_cls_one_stride) > 0:
+
+                    if len(self.clusters[idx_cls][idx_stride]) > 0:
+
+                        scores[idx_cls][idx_stride] = self.compute_scores_one_class_one_stride(
+                            self.clusters[idx_cls][idx_stride][None, :], 
+                            self.activations_transformation(activations_one_cls_one_stride)
+                            # activations_one_cls_one_stride.reshape(activations_one_cls_one_stride.shape[0], -1)
+                        )
+
+                    if len(activations_one_cls_one_stride) < 50:
+                        logger.warning(f'WARNING: Class {idx_cls:03}, Stride {idx_stride} -> Only {len(activations_one_cls_one_stride)} samples')
+
+                else:
+                    logger.warning(f'SKIPPING Class {idx_cls:03}, Stride {idx_stride} -> NO SAMPLES')
+                    scores[idx_cls][idx_stride] = np.empty(0)        
+
+    def compute_scores_one_class_one_stride(self,clusters_one_cls_one_stride: np.array,  ind_activations_one_cls_one_stride: np.array) -> List[float]:
+        """
+        Compute the scores for one class using the in-distribution activations (usually feature maps).
+        """
+        scores = []
+        if len(ind_activations_one_cls_one_stride) > 0:
+            if len(clusters_one_cls_one_stride) > 0:
+                scores = self.compute_distance(clusters_one_cls_one_stride, ind_activations_one_cls_one_stride)
+            else:
+                raise ValueError("The clusters must have at least one sample")
+        return scores
+
+    def compute_ood_decision_on_results(self, results: Results, logger) -> List[int]:
+        """
+        Function to be overriden by each method to compute the OOD decision for each image
+        """
+        ood_decision = []  
+        for idx_img, res in enumerate(results):
+            ood_decision.append([])  # Every image has a list of decisions for each bbox
+            for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(res.extra_item):
+
+                if len(bbox_idx_in_one_stride) > 0:  # Check if there are any predictions in this stride
+                    
+                    for idx, ftmap in enumerate(ftmaps):
+                        bbox_idx = idx
+                        cls_idx = int(res.boxes.cls[bbox_idx].cpu())
+                        ftmap = ftmap.cpu().unsqueeze(0).numpy()  # To obtain a tensor of shape [1, C, H, W]
+                        # ftmap = ftmap.cpu().flatten().unsqueeze(0).numpy()
+                        # [None, :] is to do the same as unsqueeze(0) but with numpy
+                        if len(self.clusters[cls_idx][stride_idx]) == 0:
+                            logger.warning(f'WARNING: Class {cls_idx:03}, Stride {stride_idx} -> No cluster created')
+                            distance = 1000
+                        else:
+                            distance = self.compute_distance(
+                                self.clusters[cls_idx][stride_idx][None, :], 
+                                self.activations_transformation(ftmap)
+                            )[0]
+                        
+                        # d = pairwise_distances(clusters[cls_idx][stride_idx][None,:], ftmap.cpu().numpy().reshape(1, -1), metric='l1')
+
+                        # print('------------------------------')
+                        # print('idx_img:\t', idx_of_batch*dataloader.batch_size + idx_img)
+                        # print('bbox_idx:\t', bbox_idx)
+                        # print('cls:\t\t', cls_idx)
+                        # print('conf:\t\t', res.boxes.conf[bbox_idx])
+                        # print('ftmap:\t\t',ftmap.shape)
+                        # print('ftmap_reshape:\t', ftmap.cpu().numpy().reshape(1, -1).shape)
+                        # print('distance:\t', distance)
+                        # print('threshold:\t', self.thresholds[cls_idx][stride_idx])
+
+                        if self.thresholds[cls_idx][stride_idx]:
+                            if distance < self.thresholds[cls_idx][stride_idx]:
+                                ood_decision[idx_img].append(1)  # InD
+                            else:
+                                ood_decision[idx_img].append(0)  # OOD
+                        else:
+                            # logger.warning(f'WARNING: Class {cls_idx:03}, Stride {stride_idx} -> No threshold!')
+                            ood_decision[idx_img].append(0)  # OOD
+
+        return ood_decision
+
+    def generate_clusters(self, ind_tensors: List[np.array] or List[List[np.array]], logger) -> List[np.array] or List[List[np.array]]:
+        """
+        Generate the clusters for each class using the in-distribution tensors (usually feature maps).
+        If per_stride, ind_tensors must be a list of lists, where each position is
+            a list of tensors, one for each stride List[List[N, C, H, W]].
+            Otherwise each position is just a tensor List[[N, C, H, W]].
+        """
+        if self.per_class:
+
+            if self.per_stride:
+
+                clusters_per_class_and_stride = [[[] for _ in range(3)] for _ in range(len(ind_tensors))]
+
+                if self.cluster_method == 'one':
+                    self.generate_one_cluster_per_class_and_stride(ind_tensors, clusters_per_class_and_stride, logger)
+
+                elif self.cluster_method in self.available_cluster_methods:
+                    raise NotImplementedError("Not implemented yet")
+
+                elif self.cluster_method == 'all':
+                    raise NotImplementedError("As the amount of In-Distribution data is too big," \
+                                            "ir would be intractable to treat each sample as a cluster")
+
+                else:
+                    raise NameError(f"The clustering_opt must be one of the following: 'one', 'all', or one of {self.available_cluster_methods}." \
+                                    f"Current value: {self.cluster_method}")
+                
+            else:
+                raise NotImplementedError("Not implemented yet")
+            
+        else:
+            raise NotImplementedError("Not implemented yet")
+
+        return clusters_per_class_and_stride
+    
+    def generate_one_cluster_per_class_and_stride(self, ind_tensors: List[List[np.array]], clusters_per_class_and_stride: List[List[np.array]], logger):
+        for idx_cls, ftmaps_one_cls in enumerate(ind_tensors):
+
+            logger.info(f'Class {idx_cls:03} of {len(ind_tensors)}')
+            for idx_stride, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
+                
+                if len(ftmaps_one_cls_one_stride) > 1:
+
+                    #ftmaps_one_cls_one_stride = ftmaps_one_cls_one_stride.reshape(ftmaps_one_cls_one_stride.shape[0], -1)
+                    ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride)
+                    clusters_per_class_and_stride[idx_cls][idx_stride] = self.agg_method(ftmaps_one_cls_one_stride, axis=0)
+
+                    if len(ftmaps_one_cls_one_stride) < 50:
+                        logger.warning(f'WARNING: Class {idx_cls:03}, Stride {idx_stride} -> Only {len(ftmaps_one_cls_one_stride)} samples')
+
+                else:
+                    logger.warning(f'SKIPPING Class {idx_cls:03}, Stride {idx_stride} -> NO SAMPLES')
+                    clusters_per_class_and_stride[idx_cls][idx_stride] = np.empty(0)
+
+    def activations_transformation(self, activations: np.array) -> np.array:
+        """
+        Transform the activations to the shape needed to compute the distance.
+        By default, it flattens the activations leaving the batch dimension as the first dimension.
+        """
+        return activations.reshape(activations.shape[0], -1)
 
 
+class Mahalanobis(DistanceMethod):
+    # if compute_covariance:
+    #     clusters_per_class_and_stride = [
+    #             self.agg_method(ftmaps_one_cls_one_stride, axis=0),
+    #             np.cov(ftmaps_one_cls_one_stride, rowvar=False)  # rowvar to represent variables in columns
+    #     ]
+    pass
+
+class L1DistanceOneClusterPerStride(DistanceMethod):
+    
+        # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
+        def __init__(self, agg_method, **kwargs):
+            name = 'L1DistancePerStride'
+            per_class = True
+            per_stride = True
+            cluster_method = 'one'
+            cluster_optimization_metric = 'silhouette'
+            super().__init__(name, agg_method, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
+        
+        def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
+
+            distances = pairwise_distances(
+                cluster,
+                activations,
+                metric='l1'
+                )
+
+            return distances[0]
+        
+
+class L2DistanceOneClusterPerStride(DistanceMethod):
+    
+        # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
+        def __init__(self, agg_method, **kwargs):
+            name = 'L2DistancePerStride'
+            per_class = True
+            per_stride = True
+            cluster_method = 'one'
+            cluster_optimization_metric = 'silhouette'
+            super().__init__(name, agg_method, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
+        
+        def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
+
+            distances = pairwise_distances(
+                cluster,
+                activations,
+                metric='l2'
+                )
+
+            return distances[0]
+        
+
+class GAPL2DistanceOneClusterPerStride(DistanceMethod):
+    
+        # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
+        def __init__(self, agg_method, **kwargs):
+            name = 'GAP_L2DistancePerStride'
+            per_class = True
+            per_stride = True
+            cluster_method = 'one'
+            cluster_optimization_metric = 'silhouette'
+            super().__init__(name, agg_method, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
+        
+        def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
+
+            distances = pairwise_distances(
+                cluster,
+                activations,
+                metric='l2'
+                )
+
+            return distances[0]
+        
+        def activations_transformation(self, activations: np.array) -> np.array:
+            """
+            Transform the activations to the shape needed to compute the distance.
+            By default, it flattens the activations leaving the batch dimension as the first dimension.
+            """
+            return np.mean(activations, axis=(2,3))  # Already reshapes to [N, features]
 
 ############################################################
 
-# Code copied from https://github.com/KingJamesSong/RankFeat/blob/main/utils/test_utils.py
+# Code below copied from https://github.com/KingJamesSong/RankFeat/blob/main/utils/test_utils.py
 
 ############################################################
 
