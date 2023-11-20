@@ -1,0 +1,119 @@
+path: ../datasets/OAK/
+train: train.txt
+val: val.txt
+test: val.txt
+nc: 113
+names:
+  0: aeroplane
+  1: bicycle
+  2: bird
+  3: boat
+  4: bottle
+  5: bus
+  6: car
+  7: cat
+  8: chair
+  9: cow
+  10: dining table
+  11: dog
+  12: horse
+  13: motorcycle
+  14: person
+  15: potted plant
+  16: sheep
+  17: sofa
+  18: train
+  19: monitor
+  20: stroller
+  21: cabinet
+  22: door
+  23: curtain
+  24: painting
+  25: shelf
+  26: transformer
+  27: fence
+  28: desk
+  29: bridge
+  30: lamp
+  31: dome
+  32: railing
+  33: cushion
+  34: box
+  35: column
+  36: signboard
+  37: tactile paving
+  38: counter
+  39: sink
+  40: barrier
+  41: refrigerator
+  42: stairs
+  43: case
+  44: crutch
+  45: graffiti
+  46: coffee table
+  47: toilet
+  48: book
+  49: bench
+  50: road barrier gate
+  51: palm
+  52: fruit
+  53: computer
+  54: arcade machine
+  55: parking meter
+  56: light
+  57: truck
+  58: awning
+  59: streetlight
+  60: booth
+  61: shopping cart
+  62: apparel
+  63: ottoman
+  64: van
+  65: gas bottle
+  66: fountain
+  67: zebra crossing
+  68: toy
+  69: stool
+  70: basket
+  71: bag
+  72: scooter
+  73: slide
+  74: ball
+  75: food
+  76: tennis court
+  77: pot
+  78: construction vehicles
+  79: sculpture
+  80: vase
+  81: traffic light
+  82: trashcan
+  83: fan
+  84: plate
+  85: bulletin board
+  86: radiator
+  87: cup
+  88: clock
+  89: flag
+  90: hot dog
+  91: manhole
+  92: fireplug
+  93: umbrella
+  94: gravestone
+  95: air conditioner
+  96: mailbox
+  97: push plate actuator
+  98: knife
+  99: phone
+  100: fork
+  101: waiting shed
+  102: spoon
+  103: faucet
+  104: vending machine
+  105: frisbee
+  106: banana
+  107: balloon
+  108: wheelchair
+  109: windmill
+  110: trafficcone
+  111: ship
+  112: pillow
