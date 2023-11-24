@@ -1,0 +1,46 @@
+path: ../datasets/OAK_40_classes/
+train: train.txt
+val: val.txt
+test: val.txt
+nc: 40
+names:
+  0: aeroplane
+  1: bicycle
+  2: bird
+  3: boat
+  4: bottle
+  5: bus
+  6: car
+  7: cat
+  8: chair
+  9: cow
+  10: dining table
+  11: dog
+  12: horse
+  13: motorcycle
+  14: person
+  15: potted plant
+  16: sheep
+  17: sofa
+  18: train
+  19: monitor
+  20: stroller
+  21: cabinet
+  22: door
+  23: curtain
+  24: painting
+  25: shelf
+  26: transformer
+  27: fence
+  28: desk
+  29: bridge
+  30: lamp
+  31: dome
+  32: railing
+  33: cushion
+  34: box
+  35: column
+  36: signboard
+  37: tactile paving
+  38: counter
+  39: sink
