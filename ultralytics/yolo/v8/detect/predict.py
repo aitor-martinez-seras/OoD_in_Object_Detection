@@ -129,7 +129,7 @@ class DetectionPredictor(BasePredictor):
         ##  1 es el batch_size (puede ser mas), 84 son el box (4) + las clases (80). 5040 son las boxes (depende del tamaño de la imagen).
         ## 2ndo, lista de 3 elementos. En cada elemento tenemos un tensor. Son los feature map segun Aitor
         # output_extra = preds[1]
-        if hasattr(self, 'modo'):
+        if hasattr(self.model.model, 'modo'):
             if self.model.model.modo == 'conv':
                 # Con CKA vamos a manejar los feature maps
                 # Para la prediccion se usan las 3 escalas de feature maps (8,16,32)
