@@ -244,29 +244,9 @@ def generate_ultralytics_yolo_annotations(split: str, n_classes=0):
                 # For normalization, we need to infer the image size from the image
                 img = Image.open(image_new_path)
                 img_width, img_height = img.size
-
                 # Then, we have to get the annotations from the json file
                 one_image_annotations = extract_one_img_annotations_from_json(json_file, n_classes, img_width, img_height)
-
-                # with open(json_file) as f:
-                #     data = json.load(f)
-                #     one_image_annotations = []
-                #     for ann in data:
-                #         if ann['id'] < n_classes:
-                #             # Create the .txt file with the annotations
-                #             # They must be in normalized cxcywh
-                #             # x1 and y1 are the top left corner of the bbox
-                #             x_center = (ann['box2d']['x1'] + ann['box2d']['x2']) / 2
-                #             y_center = (ann['box2d']['y1'] + ann['box2d']['y2']) / 2
-                #             width = ann['box2d']['x2'] - ann['box2d']['x1']
-                #             height = ann['box2d']['y2'] - ann['box2d']['y1']
-                #             # Append the annotation to the list with f strings and normalizing it
-                #             one_image_annotations.append(
-                #                 f'{ann["id"]} {x_center/img_width} {y_center/img_height} {width/img_width} {height/img_height}\n'
-                #             )
-                #         else:
-                #             pass  # If the class is not in the classes_dict, we don't append it to the list
-                
+                # Write the annotations in the .txt file                
                 with open(new_path_labels_train_one_video / f'{json_file.stem}.txt', 'w') as f:
                     f.writelines(one_image_annotations)
 
@@ -301,23 +281,7 @@ def generate_ultralytics_yolo_annotations(split: str, n_classes=0):
                 img_width, img_height = img.size
                 # Then, we have to get the annotations from the json file
                 one_image_annotations = extract_one_img_annotations_from_json(json_file, n_classes, img_width, img_height)
-
-                # with open(json_file) as f:
-                #     data = json.load(f)
-                #     one_image_annotations = []
-                #     for ann in data:
-                #         # Create the .txt file with the annotations
-                #         # They must be in normalized cxcywh
-                #         # x1 and y1 are the top left corner of the bbox
-                #         x_center = (ann['box2d']['x1'] + ann['box2d']['x2']) / 2
-                #         y_center = (ann['box2d']['y1'] + ann['box2d']['y2']) / 2
-                #         width = ann['box2d']['x2'] - ann['box2d']['x1']
-                #         height = ann['box2d']['y2'] - ann['box2d']['y1']
-                #         # Append the annotation to the list with f strings and normalizing it
-                #         one_image_annotations.append(
-                #             f'{ann["id"]} {x_center/img_width} {y_center/img_height} {width/img_width} {height/img_height}\n'
-                #         )
-                
+                # Write the annotations in the .txt file                
                 with open(new_path_labels_val_one_video / f'{json_file.stem}.txt', 'w') as f:
                     f.writelines(one_image_annotations)
 
@@ -332,5 +296,5 @@ def generate_ultralytics_yolo_annotations(split: str, n_classes=0):
 
 
 if __name__ == '__main__':
-    generate_ultralytics_yolo_annotations(split='both', n_classes=20)
+    generate_ultralytics_yolo_annotations(split='both', n_classes=30)
     
