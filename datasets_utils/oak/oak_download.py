@@ -193,22 +193,10 @@ def check_and_download_one_folder(row):
     else:
         status = f'{output_folder_path.name}: OK'
     print(status)
-    return status   
-
-
-def generate_one_csv(url: str, csv_path: str):
-    sess = _get_session(proxy=None, use_cookies=False)
-    return_code, gdrive_root_folder = parse_google_drive_link(sess, url, quiet=False, remaining_ok=True, verify=True)
-    df = {'names': [], 'urls': []}
-    for g_folder in gdrive_root_folder:
-        df['names'].append(g_folder[1])
-        df['urls'].append(f'https://drive.google.com/drive/folders/{g_folder[0]}')
-    df = pd.DataFrame(df)
-    df.to_csv(csv_path, header=False, index=False)
+    return status
     
 
-
-def download_or_check_oak_multiprocessing(split:str, option: str, workers, generate_csvs=True):
+def download_or_check_oak_multiprocessing(split:str, option: str, workers):
     global root_path
 
     images_path = 'Raw'
@@ -249,16 +237,26 @@ if __name__ == '__main__':
         description='Downloads the OAK dataset. It must be restarted until message "SUCCESFULLY FINISHED ALL DOWNLOADS" appears',
     )
     #parser.add_argument('-s', '--split', type=str, help='train, val or test')
-    parser.add_argument('-opt', '--option', type=str, help='images or labels')
-    parser.add_argument('-w', '--workers', type=int, default=64, help='images or labels')
+    parser.add_argument('-opt', '--option', type=str, help='images, labels or videos')
+    parser.add_argument('-w', '--workers', type=int, default=64, help='num workers')
     #parser.add_argument('--only_check', action='store_true', help='only check if the files are downloaded')
     #parser.add_argument('-ow', '--overwrite_folders', action='store_true', help='images or labels')
     args = parser.parse_args()
 
     # overwrite_folders = args.overwrite_folders
-    download_or_check_oak_multiprocessing(args.split, args.option, args.workers)
-    
+    download_or_check_oak_multiprocessing('train', args.option, args.workers)
 
+
+
+# def generate_one_csv(url: str, csv_path: str):
+#     sess = _get_session(proxy=None, use_cookies=False)
+#     return_code, gdrive_root_folder = parse_google_drive_link(sess, url, quiet=False, remaining_ok=True, verify=True)
+#     df = {'names': [], 'urls': []}
+#     for g_folder in gdrive_root_folder:
+#         df['names'].append(g_folder[1])
+#         df['urls'].append(f'https://drive.google.com/drive/folders/{g_folder[0]}')
+#     df = pd.DataFrame(df)
+#     df.to_csv(csv_path, header=False, index=False)
 
 # def download_oak_images():
 
