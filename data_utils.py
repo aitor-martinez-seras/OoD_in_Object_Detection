@@ -9,7 +9,7 @@ import torchvision.ops as t_ops
 from torch.utils.data import DataLoader
 
 from ultralytics.yolo.data.utils import check_det_dataset
-from ultralytics.yolo.data.build import build_yolo_dataset, build_dataloader
+from ultralytics.yolo.data.build import build_yolo_dataset, build_dataloader, build_tao_dataset
 from ultralytics.yolo.utils import DEFAULT_CFG
 from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.data import YOLODataset
@@ -122,6 +122,45 @@ def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, args, dat
     #     classes=cfg.classes,
     #     data=data_dict,
     #     fraction=fraction)
+
+    dataloader = build_dataloader(
+        dataset=dataset,
+        batch=args.batch_size,
+        workers=args.workers,
+        shuffle=False,
+        rank=-1  # For distributed computing, leave -1 if no distributed computing is done
+    )
+
+    return dataset, dataloader
+
+
+def create_TAO_dataset_and_dataloader(dataset_yaml_file_name_or_path, args, data_split: str,
+                                       stride: int = 32, fraction: float = 1.0,):
+
+    # TODO: En overrides se definirian ciertos parametros que se quieran tocar de la configuracion por defecto,
+    # de tal forma que get_cfg() se encarga de coger esa configuracion por defecto y sobreescribirla con 
+    # lo que nosotros hayamos definido en overrides. Lo mejor para definir estos overrides es sacarlos tanto de
+    # otro archivo de configuracion que nosotros cargemos como queramos (desde un YAML o de un script de python)
+    # como sacarlo del argparser
+    overrides = {}
+    cfg = get_cfg(DEFAULT_CFG, overrides=overrides)
+
+    data_dict = check_det_dataset(dataset_yaml_file_name_or_path)
+    imgs_path = data_dict[data_split]
+
+    # TODO: Split train dataset into two subsets, one for modeling the in-distribution 
+    #   and the other for defining the thresholds using 
+    #   https://github.com/ultralytics/ultralytics/blob/437b4306d207f787503fa1a962d154700e870c64/ultralytics/data/utils.py#L586
+
+    dataset = build_tao_dataset(
+        cfg=cfg,
+        img_path=imgs_path,  # Path to the folder containing the images
+        batch=args.batch_size,
+        data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
+        mode='test',  # This is for disabling data augmentation
+        rect=False,
+        stride=32,
+    )
 
     dataloader = build_dataloader(
         dataset=dataset,

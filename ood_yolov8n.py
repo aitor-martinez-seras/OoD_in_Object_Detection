@@ -10,12 +10,15 @@ import torch
 
 import log
 from ultralytics import YOLO
+from ultralytics.yolo.data import build_dataloader, build_tao_dataset
+
 from ood_utils import get_measures, arg_parser, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, ODIN, \
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride
 from datasets_utils.sos.sos_dataset import SOS_BaseDataset
 from datasets_utils.oak.oak_dataset import OAKDataset
+from datasets_utils.tao.tao_dataset import TAODataset
 
-from data_utils import read_json, write_json, create_YOLO_dataset_and_dataloader, build_dataloader
+from data_utils import read_json, write_json, create_YOLO_dataset_and_dataloader, build_dataloader, create_TAO_dataset_and_dataloader
 
 
 NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -166,11 +169,11 @@ def main(args):
     # TODO: This is for reproducibility 
     # torch.backends.cudnn.benchmark = True
 
-    logger.warning('Changing following enviroment variables:')
-    #os.environ['YOLO_VERBOSE'] = 'False'
-    gpu_number = str(2)
-    os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
-    logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
+    # logger.warning('Changing following enviroment variables:')
+    # os.environ['YOLO_VERBOSE'] = 'False'
+    # gpu_number = str(2)
+    # os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
+    # logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
 
     if args.ood_method == 'GradNorm':
         args.batch = 1
@@ -180,39 +183,83 @@ def main(args):
     # TODO: Aqui tengo que meter algo que compruebe que el dataset esta como YAML file
     #if yaml_file_exists('coco.yaml'):
     
-    ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader(
-        'OAK_full.yaml',
-        args,
-        data_split='train',
-    )
 
+    ### OAK dataset ###
     if False:
-        ood_dataset, ood_dataloader = create_YOLO_dataset_and_dataloader(
-            'VisDrone.yaml', 
-            args=args,
-            data_split='val',
+        ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader(
+            'OAK_full.yaml',
+            args,
+            data_split='train',
         )
+        if False:
+            ood_dataset, ood_dataloader = create_YOLO_dataset_and_dataloader(
+                'VisDrone.yaml', 
+                args=args,
+                data_split='val',
+            )
+        else:
+            # ood_dataset = SOS_BaseDataset(
+            #     imgs_path='/home/tri110414/nfs_home/datasets/street_obstacle_sequences/raw_data/',
+            #     ann_path='/home/tri110414/nfs_home/datasets/street_obstacle_sequences/val_annotations.json',
+            #     imgsz=640
+            # )
 
-    else:
-        # ood_dataset = SOS_BaseDataset(
-        #     imgs_path='/home/tri110414/nfs_home/datasets/street_obstacle_sequences/raw_data/',
-        #     ann_path='/home/tri110414/nfs_home/datasets/street_obstacle_sequences/val_annotations.json',
-        #     imgsz=640
+            ood_dataset = OAKDataset(
+                imgs_path='/home/tri110414/nfs_home/datasets/OAK/val/Raw',
+                ann_path='/home/tri110414/nfs_home/datasets/OAK/val/val_annotations_coco.json',
+                imgsz=1152
+            )
+
+            ood_dataloader = build_dataloader(
+                ood_dataset,
+                batch=args.batch_size,
+                workers=args.num_workers,
+                shuffle=False,
+                rank=-1
+            )
+
+    ### TAO dataset ###
+    if True:
+        # ind_dataset = TAODataset(
+        #     imgs_path='/home/tri110414/nfs_home/datasets/TAO/frames/train',
+        #     ann_path='/home/tri110414/nfs_home/datasets/TAO/annotations/train.json',
+        #     imgsz=1152
         # )
 
-        ood_dataset = OAKDataset(
-            imgs_path='/home/tri110414/nfs_home/datasets/OAK/val/Raw',
-            ann_path='/home/tri110414/nfs_home/datasets/OAK/val/val_annotations_coco.json',
-            imgsz=1152
+        # ind_dataloader = build_dataloader(
+        #     ind_dataset,
+        #     batch=args.batch_size,
+        #     workers=args.num_workers,
+        #     shuffle=False,
+        #     rank=-1
+        # )
+
+        # # ood_dataset = TAODataset(
+        # #     imgs_path='/home/tri110414/nfs_home/datasets/TAO/frames/train',
+        # #     ann_path='/home/tri110414/nfs_home/datasets/TAO/annotations/train.json',
+        # #     imgsz=1152
+        # # )
+
+        # ood_dataloader = build_dataloader(
+        #     ind_dataset,  # TODO: Change this to the OOD dataset
+        #     batch=args.batch_size,
+        #     workers=args.num_workers,
+        #     shuffle=False,
+        #     rank=-1
+        # )
+
+        ind_dataset, ind_dataloader = create_TAO_dataset_and_dataloader(
+            'tao_coco.yaml',
+            args,
+            data_split='train',
         )
 
-        ood_dataloader = build_dataloader(
-            ood_dataset,
-            batch=args.batch_size,
-            workers=args.num_workers,
-            shuffle=False,
-            rank=-1
+        ood_dataset, ood_dataloader = create_TAO_dataset_and_dataloader(
+            'tao_coco.yaml',
+            args,
+            data_split='train',
         )
+
 
     # TODO: usar el argparser para elegir el modelo que queremos cargar
     model_to_load = 'yolov8n.pt'
