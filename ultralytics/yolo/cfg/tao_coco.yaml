@@ -7,8 +7,7 @@ test: annotations/test_without_annotations.json  # TODO: Can we have the annotai
 # Define the dataset class if needed, else by default is YOLODataset
 dataset_class: TAODataset
 coco_classes: True  # use COCO classes
-
-#IMGS_PATH = /frames',
+use_all_frames: False  # use all frames in the videos, not only the annotated ones
 
 # Classes
 names:
