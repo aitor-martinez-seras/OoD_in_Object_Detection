@@ -45,6 +45,7 @@ COCO_TO_TAO_MAPPING = {"13": 91, "34": 58, "33": 621, "49": 747, "8": 118, "51":
 #   If we want to have image with no annotations included, empty annotations should be added.
 
 #####################################################
+# IMPORTANT NOTE: Bboxes MUST be in format CXCYWH, which in this version of Ultralytics YOLO is called "xywh" format
 # Bboxes MUST be NORMALIZED in order to properly work
 #####################################################
 
@@ -112,10 +113,11 @@ class TAODataset(BaseDataset):
             hyp.mosaic = hyp.mosaic if self.augment and not self.rect else 0.0
             hyp.mixup = hyp.mixup if self.augment and not self.rect else 0.0
             transforms = v8_transforms(self, self.imgsz, hyp)
+            # transforms = Compose([LetterBox(new_shape=(self.imgsz, self.imgsz), scaleup=False)])
         else:
             transforms = Compose([LetterBox(new_shape=(self.imgsz, self.imgsz), scaleup=False)])
         transforms.append(
-            Format(bbox_format='xywh',
+            Format(bbox_format='xywh',  # In reality it is "CXCYWH"
                    normalize=True,
                    return_mask=self.use_segments,
                    return_keypoint=self.use_keypoints,
@@ -174,22 +176,26 @@ class TAODataset(BaseDataset):
 
             
             if len(current_img_cls) > 0:
-                # Normalize bboxes
+                # Classes
+                classes = np.array(current_img_cls, dtype=np.float32)
+                # Convert boxes from xywh to cxcywh and normalize bboxes
                 h, w = (current_img_info['height'], current_img_info['width'])  # Convetion is HxW
                 bboxes = np.array(current_img_boxes, dtype=np.float32)
-                bboxes[:, [0, 2]] /= w
-                bboxes[:, [1, 3]] /= h
+                bboxes[:, 0] += bboxes[:, 2] / 2  # X from left corner to center
+                bboxes[:, 1] += bboxes[:, 3] / 2  # Y from top corner to center
+                bboxes[:, [0, 2]] /= w  # Normalize X
+                bboxes[:, [1, 3]] /= h  # Normalize Y
                 # Append to labels list
                 labels.append(
                         {
                             'im_file': current_img_info['file_name'],
                             'shape': (h, w),  # Height x Width is the convention
-                            'cls': np.array(current_img_cls, dtype=np.float32),
-                            'bboxes': bboxes,
+                            'cls': classes[:, np.newaxis],  # [N, 1]
+                            'bboxes': bboxes,  # [N, 4]
                             'segments': [],
                             'keypoints': None,
                             'normalized': True,  # In order to properly work, bboxes must be normalized
-                            'bbox_format': 'xywh',
+                            'bbox_format': 'xywh',  # "xywh" format is referred to "CXCYWH" format in this version of Ultralytics YOLO
                             'track_id': np.array(current_img_track_id, dtype=np.float32),
                         }
                 )

@@ -88,7 +88,7 @@ class OODMethod(ABC):
             logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")
     
     @staticmethod
-    def create_targets_dict(data: dict) -> dict:
+    def create_targets_dict(data: dict, bbox_initial_format: str) -> dict:
         """
         Funcion que crea un diccionario con los targets de cada imagen del batch con el siguiente formato:
             targets = {
@@ -111,6 +111,7 @@ class OODMethod(ABC):
         # Targets es un diccionario con dos listas, con tantas posiciones como imagenes en el batch
         # En 'bboxes' tiene las bboxes. Hay que convertirlas a xyxy y pasar a coordenadas absolutas
         # En 'cls' tiene las clases
+        # NOTE: Las bboxes viene en formato cxcywh, a pesar de que se llame xywh, ya que en esta version de Ultralytics es asi
         targets = dict(
             bboxes=[t_ops.box_convert(data['bboxes'][idx], 'cxcywh', 'xyxy') * relative_to_absolute_coordinates[img_idx] for img_idx, idx in enumerate(target_idx)],
             #bboxes=[data['bboxes'][idx] * relative_to_absolute_coordinates[img_idx] for img_idx, idx in enumerate(target_idx)],
@@ -171,13 +172,20 @@ class OODMethod(ABC):
             else:
                 all_internal_activations = [[] for _ in range(len(model.names))]
 
+        # Obtain the bbox format from the last transform of the dataset
+        if hasattr(data_loader.dataset.transforms.transforms[-1], "bbox_format"):
+            bbox_format = data_loader.dataset.transforms.transforms[-1].bbox_format
+        else:
+            bbox_format=data_loader.dataset.labels[0]['bbox_format']
+
+        # Start iterating over the data
         number_of_batches = len(data_loader)
         for idx_of_batch, data in enumerate(data_loader):
             
             self.log_every_n_batches(50, logger, idx_of_batch, number_of_batches)
                 
             ### Prepare images and targets to feed the model ###
-            imgs, targets = self.prepare_data_for_model(data, device)
+            imgs, targets = self.prepare_data_for_model(data, device, bbox_initial_format=bbox_format)
 
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
             results = model.predict(imgs, save=False, verbose=False)
@@ -193,13 +201,67 @@ class OODMethod(ABC):
 
         return all_internal_activations
     
-    def prepare_data_for_model(self, data, device) -> Tuple[torch.Tensor, dict]:
+    # # Codigo para debuger
+    # USING DATA (directly from dataloader)
+    # import matplotlib.pyplot as plt
+    # l = 5
+    # imagen = np.array(data['img'][l].permute(1,2,0))
+    # plt.imshow(imagen)
+    # plt.savefig('imagen.png')
+    # plt.close()
+
+    # from torchvision.utils import draw_bounding_boxes
+    # import matplotlib.pyplot as plt
+    # target_idx = [torch.where(data['batch_idx'] == l) for img_idx in range(len(data['im_file']))]
+    # relative_to_absolute_coordinates = [np.array(data['resized_shape'][img_idx] + data['resized_shape'][img_idx]) for img_idx in range(len(data['im_file']))]
+    # bboxes= t_ops.box_convert(data['bboxes'][target_idx[0]], 'xywh', 'xyxy')
+    # im = draw_bounding_boxes(
+    #                 data['img'][l],
+    #                 bboxes*640,
+    #                 width=5,
+    #                 font='FreeMonoBold',
+    #                 font_size=12,
+    #                 labels=[f'{model.names[n.item()]}' for i, n in enumerate(targets['cls'][l])]
+    #             )
+    # fig,ax = plt.subplots(1,1,figsize=(20,10))
+    # plt.imshow(im.permute(1,2,0))
+    # plt.savefig('prueba_en_ood_visu.png')
+    # plt.close()
+
+    # bboxes=[t_ops.box_convert(data['bboxes'][idx], bbox_initial_format, 'xyxy') * relative_to_absolute_coordinates[img_idx] for img_idx, idx in enumerate(target_idx)]
+
+    # USING PROCESSED IMAGES
+    # from torchvision.utils import draw_bounding_boxes
+    # import matplotlib.pyplot as plt
+    # l=5
+    # im = draw_bounding_boxes(
+    #                 imgs[l].cpu(),
+    #                 targets['bboxes'][l],
+    #                 width=5,
+    #                 font='FreeMonoBold',
+    #                 font_size=12,
+    #                 labels=[f'{model.names[n.item()]}' for i, n in enumerate(targets['cls'][l])]
+    #             )
+    # fig,ax = plt.subplots(1,1,figsize=(20,10))
+    # plt.imshow(im.permute(1,2,0))
+    # plt.savefig('prueba_en_ood_visu.png')
+    # plt.close()
+
+    # # Plot image
+    # import matplotlib.pyplot as plt
+    # fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+    # ax.imshow(imgs[l].permute(1, 2, 0).cpu())
+    # plt.savefig('prueba.png')
+    # plt.close()
+
+
+    def prepare_data_for_model(self, data, device, bbox_initial_format) -> Tuple[torch.Tensor, dict]:
         """
         Funcion que prepara los datos para poder meterlos en el modelo.
         """
         if isinstance(data, dict):
             imgs = data['img'].to(device)
-            targets = self.create_targets_dict(data)
+            targets = self.create_targets_dict(data, bbox_initial_format)
         else:
             imgs, targets = data
         return imgs, targets
@@ -217,30 +279,6 @@ class OODMethod(ABC):
 
             ### Comprobar si las cajas predichas son OoD ###
             ood_decision = self.compute_ood_decision_on_results(results, logger)
-            
-            # Codigo prueba
-            # from torchvision.utils import draw_bounding_boxes
-            # import matplotlib.pyplot as plt
-            # l=5
-            # im = draw_bounding_boxes(
-            #                 imgs[l].cpu(),
-            #                 targets['bboxes'][l],
-            #                 width=5,
-            #                 font='FreeMonoBold',
-            #                 font_size=12,
-            #                 labels=[f'{model.names[0]}' for i, n in enumerate(targets['cls'][l])]
-            #             )
-            # fig,ax = plt.subplots(1,1,figsize=(20,10))
-            # plt.imshow(im.permute(1,2,0))
-            # plt.savefig('prueba_en_ood_visu.png')
-            # plt.close()
-
-            # # Plot image
-            # import matplotlib.pyplot as plt
-            # fig, ax = plt.subplots(1, 1, figsize=(10, 10))
-            # ax.imshow(imgs[0].permute(1, 2, 0).cpu())
-            # plt.savefig('prueba.png')
-            # plt.close()
             
             plot_results( 
                 class_names=model.names,

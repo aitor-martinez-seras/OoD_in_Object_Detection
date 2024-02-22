@@ -259,6 +259,19 @@ def main(args):
             args,
             data_split='train',
         )
+    else:
+        # COCO
+        ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader(
+            'coco.yaml',
+            args,
+            data_split='train',
+        )
+
+        ood_dataset, ood_dataloader = create_YOLO_dataset_and_dataloader(
+            'coco.yaml',
+            args,
+            data_split='val',
+        )
 
 
     # TODO: usar el argparser para elegir el modelo que queremos cargar
