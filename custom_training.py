@@ -52,12 +52,10 @@ def main():
     else:
         yaml_file = "tao_coco.yaml"
         #yaml_file = "coco128_custom.yaml"
+        #yaml_file = "coco.yaml"
         model.train(
-            # data="OAK_full.yaml",
             data=yaml_file,
-            # cfg="ultralytics/yolo/cfg/config_for_oak.yaml.yaml",
-            # cfg="config_for_oak.yaml",
-            cfg="config_for_oak_adam.yaml",
+            cfg="config_for_tao_adam.yaml",
             epochs=150,
             mixup=0.0,
             close_mosaic=20,

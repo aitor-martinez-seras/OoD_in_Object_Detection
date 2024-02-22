@@ -11,6 +11,8 @@ screenlog.0
 OAK/
 runs/
 runs_OAK/
+runs*
+nohup.out
 
 
 # C extensions
