@@ -98,34 +98,6 @@ class TAODataset(BaseDataset):
         label['instances'] = Instances(bboxes, segments, keypoints, bbox_format=bbox_format, normalized=normalized)
         return label
 
-    def build_transforms(self, hyp=None):
-        """Builds and appends transforms to the list.
-        Users can custom augmentations here
-        like:
-            if self.augment:
-                # Training transforms
-                return Compose([])
-            else:
-                # Val transforms
-                return Compose([])
-        """
-        if self.augment:
-            hyp.mosaic = hyp.mosaic if self.augment and not self.rect else 0.0
-            hyp.mixup = hyp.mixup if self.augment and not self.rect else 0.0
-            transforms = v8_transforms(self, self.imgsz, hyp)
-            # transforms = Compose([LetterBox(new_shape=(self.imgsz, self.imgsz), scaleup=False)])
-        else:
-            transforms = Compose([LetterBox(new_shape=(self.imgsz, self.imgsz), scaleup=False)])
-        transforms.append(
-            Format(bbox_format='xywh',  # In reality it is "CXCYWH"
-                   normalize=True,
-                   return_mask=self.use_segments,
-                   return_keypoint=self.use_keypoints,
-                   batch_idx=True,
-                   mask_ratio=hyp.mask_ratio,
-                   mask_overlap=hyp.overlap_mask))
-        return transforms
-
     def get_labels(self):
         # load dataset
         self.dataset,self.anns,self.cats,self.imgs = dict(),dict(),dict(),dict()
@@ -202,6 +174,34 @@ class TAODataset(BaseDataset):
             
         print(f'Done! (t={time.perf_counter() - t_init:0.2f}s)')
         return labels
+
+    def build_transforms(self, hyp=None):
+        """Builds and appends transforms to the list.
+        Users can custom augmentations here
+        like:
+            if self.augment:
+                # Training transforms
+                return Compose([])
+            else:
+                # Val transforms
+                return Compose([])
+        """
+        if self.augment:
+            hyp.mosaic = hyp.mosaic if self.augment and not self.rect else 0.0
+            hyp.mixup = hyp.mixup if self.augment and not self.rect else 0.0
+            transforms = v8_transforms(self, self.imgsz, hyp)
+            # transforms = Compose([LetterBox(new_shape=(self.imgsz, self.imgsz), scaleup=False)])
+        else:
+            transforms = Compose([LetterBox(new_shape=(self.imgsz, self.imgsz), scaleup=False)])
+        transforms.append(
+            Format(bbox_format='xywh',  # In reality it is "CXCYWH"
+                   normalize=True,
+                   return_mask=self.use_segments,
+                   return_keypoint=self.use_keypoints,
+                   batch_idx=True,
+                   mask_ratio=hyp.mask_ratio,
+                   mask_overlap=hyp.overlap_mask))
+        return transforms
     
     def close_mosaic(self, hyp):
         """Sets mosaic, copy_paste and mixup options to 0.0 and builds transformations."""

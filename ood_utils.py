@@ -156,7 +156,6 @@ class OODMethod(ABC):
                 if results[img_idx].assignment_score_matrix[i, assigment] > iou_threshold:
                     results[img_idx].valid_preds.append(i)
 
-
     # TODO: Todavia me queda por decidir si esto es solo para cuando quiero extraer info interna para 
     #   modelar las In-Distribution o si tambien lo quiero para las Out-of-Distribution.
     # Va a poder ocurrir que esta funcion sea completamente remodelada por el metodo OOD ya que se requiera que compute gradientes o cualquier
@@ -200,60 +199,6 @@ class OODMethod(ABC):
         self.format_internal_activations(all_internal_activations)
 
         return all_internal_activations
-    
-    # # Codigo para debuger
-    # USING DATA (directly from dataloader)
-    # import matplotlib.pyplot as plt
-    # l = 5
-    # imagen = np.array(data['img'][l].permute(1,2,0))
-    # plt.imshow(imagen)
-    # plt.savefig('imagen.png')
-    # plt.close()
-
-    # from torchvision.utils import draw_bounding_boxes
-    # import matplotlib.pyplot as plt
-    # target_idx = [torch.where(data['batch_idx'] == l) for img_idx in range(len(data['im_file']))]
-    # relative_to_absolute_coordinates = [np.array(data['resized_shape'][img_idx] + data['resized_shape'][img_idx]) for img_idx in range(len(data['im_file']))]
-    # bboxes= t_ops.box_convert(data['bboxes'][target_idx[0]], 'xywh', 'xyxy')
-    # im = draw_bounding_boxes(
-    #                 data['img'][l],
-    #                 bboxes*640,
-    #                 width=5,
-    #                 font='FreeMonoBold',
-    #                 font_size=12,
-    #                 labels=[f'{model.names[n.item()]}' for i, n in enumerate(targets['cls'][l])]
-    #             )
-    # fig,ax = plt.subplots(1,1,figsize=(20,10))
-    # plt.imshow(im.permute(1,2,0))
-    # plt.savefig('prueba_en_ood_visu.png')
-    # plt.close()
-
-    # bboxes=[t_ops.box_convert(data['bboxes'][idx], bbox_initial_format, 'xyxy') * relative_to_absolute_coordinates[img_idx] for img_idx, idx in enumerate(target_idx)]
-
-    # USING PROCESSED IMAGES
-    # from torchvision.utils import draw_bounding_boxes
-    # import matplotlib.pyplot as plt
-    # l=5
-    # im = draw_bounding_boxes(
-    #                 imgs[l].cpu(),
-    #                 targets['bboxes'][l],
-    #                 width=5,
-    #                 font='FreeMonoBold',
-    #                 font_size=12,
-    #                 labels=[f'{model.names[n.item()]}' for i, n in enumerate(targets['cls'][l])]
-    #             )
-    # fig,ax = plt.subplots(1,1,figsize=(20,10))
-    # plt.imshow(im.permute(1,2,0))
-    # plt.savefig('prueba_en_ood_visu.png')
-    # plt.close()
-
-    # # Plot image
-    # import matplotlib.pyplot as plt
-    # fig, ax = plt.subplots(1, 1, figsize=(10, 10))
-    # ax.imshow(imgs[l].permute(1, 2, 0).cpu())
-    # plt.savefig('prueba.png')
-    # plt.close()
-
 
     def prepare_data_for_model(self, data, device, bbox_initial_format) -> Tuple[torch.Tensor, dict]:
         """
