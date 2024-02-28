@@ -1,0 +1,1 @@
+nohup python custom_training_tao.py -e 150 -m x -d 3 --batch_size 16 -cl_ms 30 > nohup_yolov8x.log & 
