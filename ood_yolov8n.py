@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 from typing import Type
+import argparse
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,13 +11,10 @@ import torch
 
 import log
 from ultralytics import YOLO
-from ultralytics.yolo.data import build_dataloader, build_tao_dataset
+from ultralytics.yolo.data import build_dataloader
 
-from ood_utils import get_measures, arg_parser, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, ODIN, \
+from ood_utils import get_measures, configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, ODIN, \
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride
-from datasets_utils.sos.sos_dataset import SOS_BaseDataset
-from datasets_utils.oak.oak_dataset import OAKDataset
-from datasets_utils.tao.tao_dataset import TAODataset
 
 from data_utils import read_json, write_json, create_YOLO_dataset_and_dataloader, build_dataloader, create_TAO_dataset_and_dataloader
 
@@ -30,6 +28,25 @@ CONF_THRESHOLD = 0.15
 
 OOD_METHOD_CHOICES = ['MSP', 'ODIN', 'Energy', 'Mahalanobis', 'GradNorm','RankFeat','React', 'L1_cl_stride', 'L2_cl_stride', \
                       'GAP_L2_cl_stride']
+
+
+def arg_parser():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--workers", type=int, default=0,
+                        help="Number of background threads used to load data.")
+
+    parser.add_argument("--logdir", default='logs',
+                        help="Where to log test info (small).")
+    parser.add_argument("--batch-size", type=int, default=8,
+                        help="Batch size.")
+    parser.add_argument("--name", default='prueba',
+                        help="Name of this run. Used for monitoring and checkpointing.")
+
+    parser.add_argument("--model", default="YOLO", help="Which variant to use")
+    parser.add_argument("--model_path", type=str, help="Path to the model you want to test")
+
+    return parser
 
 
 def select_ood_detection_method(args) -> Type[OODMethod]:
@@ -51,19 +68,7 @@ def select_ood_detection_method(args) -> Type[OODMethod]:
     else:
         raise NotImplementedError("Not implemented yet")
 
-def configure_extra_output_of_the_model(model, ood_method: Type[OODMethod]):
-        
-        # TODO: Tenemos que definir que un atributo de los ood methods define de donde sacar
-        #   el extra_item. De momento nos limitamos a usar el modo "logits" y "ftmaps"
-        if isinstance(ood_method, LogitsMethod):
-            modo = 'logits'
-        elif isinstance(ood_method, DistanceMethod):
-            modo = 'conv'
-        else:
-            raise NotImplementedError("Not implemented yet")
-        
-        # Modify the model's attributes to output the desired extra_item
-        model.model.modo = modo  # This attribute is created in the DetectionModel class
+
 
 
 def obtain_thresholds_for_ood_detection_method(ood_method: Type[OODMethod], model, device, in_loader, logger, args):
