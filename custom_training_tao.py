@@ -2,7 +2,7 @@ from pathlib import Path
 from datetime import datetime
 import argparse
 import json
-from typing import Literal
+from typing import Literal, List
 
 from tap import Tap
 
@@ -16,20 +16,20 @@ class SimpleArgumentParser(Tap):
     # Required arguments
     epochs: int  # Number of epochs to train for.
     model: Literal["n", "s", "m", "l", "x"]  # Which variant of the model YOLO to use
-    devices: int  # Device to use for training on GPU. Indicate more than one to use multiple GPUs. Use -1 for CPU.
+    devices: List[int]  # Device to use for training on GPU. Indicate more than one to use multiple GPUs. Use -1 for CPU.
     # Optional arguments
     dataset: str = "tao_coco"
     batch_size: int = 16  # Batch size.
     workers: int = 8  # Number of background threads used to load data.
     close_mosaic: int = 20  # Close mosaic augmentation
-    model_path: str  # Path to the model you want to use as a starting point. Deactivates using sizes.
+    model_path: str = ''  # Path to the model you want to use as a starting point. Deactivates using sizes.
     from_scratch: bool = False # Train the model from scratch, not pretrained in COCO.
 
     def configure(self):
         self.add_argument("-e", "--epochs")
         self.add_argument("-m", "--model")
         self.add_argument("-d", "--devices")
-        self.add_argument("-cl_ms", "--close_mosaicº")
+        self.add_argument("-cl_ms", "--close_mosaic")
 
 
 # def arg_parser():
@@ -93,9 +93,9 @@ def main():
         workers=args.workers,
         name=folder_name,
     )
-
-    with open(ROOT / folder_name / 'script_args.json', 'w') as json_file:
-        json.dump(args_dict, json_file, indent=4)
+    args.save(ROOT / folder_name / 'script_args.json')
+    # with open(ROOT / folder_name / 'script_args.json', 'w') as json_file:
+    #     json.dump(args_dict, json_file, indent=4)
 
 # path = model.export(format="onnx")  # export the model to ONNX format
 

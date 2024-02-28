@@ -1,4 +1,4 @@
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, Type
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -17,7 +17,19 @@ from visualization_utils import plot_results
 
 @dataclass(slots=True)
 class OODMethod(ABC):
-    
+    """
+    Base class for all the OOD methods. It contains the basic structure of the methods and the abstract methods that
+    need to be overriden by each method. It also contains some helper functions that can be used by all the methods.
+    Attributes:
+        name: str -> Name of the method
+        distance_method: bool -> True if the method uses a distance to measure the OOD, False if it uses a similarity
+        per_class: bool -> True if the method computes a threshold for each class, False if it computes a single threshold
+        per_stride: bool -> True if the method computes a threshold for each stride, False if it computes a single threshold
+        thresholds: List[float] or List[List[float]] -> The thresholds for each class and stride
+        iou_threshold_for_matching: float -> The threshold to use when matching the predicted boxes to the ground truth boxes
+        min_conf_threshold: float -> Define the minimum threshold to output a box when predicting
+        which_internal_activations: str -> Where to extract internal activations from. It can be 'logits' or 'ftmaps'
+    """
     name: str
     distance_method: bool
     per_class: bool
@@ -705,6 +717,7 @@ class Mahalanobis(DistanceMethod):
     #     ]
     pass
 
+
 class L1DistanceOneClusterPerStride(DistanceMethod):
     
         # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
@@ -777,31 +790,106 @@ class GAPL2DistanceOneClusterPerStride(DistanceMethod):
             """
             return np.mean(activations, axis=(2,3))  # Already reshapes to [N, features]
 
+
+# Class for extracting convolutional activations from the model
+class ActivationsExtractor(DistanceMethod):
+
+    # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
+    def __init__(self, agg_method, **kwargs):
+        name = 'ActivationsExtractor'
+        per_class = True
+        per_stride = True
+        cluster_method = 'one'
+        cluster_optimization_metric = 'silhouette'
+        super().__init__(name, agg_method, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
+
+    def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
+        raise NotImplementedError("Not implemented yet")
+    
+    def activations_transformation(self, activations: np.array) -> np.array:
+        """
+        Transform the activations to the shape needed to compute the distance.
+        By default, it flattens the activations leaving the batch dimension as the first dimension.
+        """
+        raise NotImplementedError("Not implemented yet")
+        return np.mean(activations, axis=(2,3))  # Already reshapes to [N, features]
+    
+    def iterate_data_to_extract_ind_activations_and_create_its_annotations(self, data_loader, model, device, split: str):
+        """
+        Custom function to iterate over the data to extract the internal activations of the model along
+        with the annotations for the dataset. They will be in the same order as in the 
+        """
+        if self.per_class:
+            if self.per_stride:
+                all_internal_activations = [[[] for _ in range(3)] for _ in range(len(model.names))]
+                all_labels_for_internal_activations = [[[] for _ in range(3)] for _ in range(len(model.names))]
+            else:
+                all_internal_activations = [[] for _ in range(len(model.names))]
+
+        # TODO: Cargar anotaciones del json en funcion del parametro split y REFERENCIAR A ROOT PATH con parents y demas
+        tao_frames_root_path = Path('/home/tri110414/nfs_home/datasets/TAO/frames')
+        with open('annotations/train.json') as f:
+            data = json.load(f)
+
+        # Obtain the bbox format from the last transform of the dataset
+        if hasattr(data_loader.dataset.transforms.transforms[-1], "bbox_format"):
+            bbox_format = data_loader.dataset.transforms.transforms[-1].bbox_format
+        else:
+            bbox_format=data_loader.dataset.labels[0]['bbox_format']
+
+        # Start iterating over the data
+        number_of_batches = len(data_loader)
+        for idx_of_batch, data in enumerate(data_loader):
+            
+            if idx_of_batch % 50 == 0:
+                print(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")
+                
+            ### Prepare images and targets to feed the model ###
+            imgs, targets = self.prepare_data_for_model(data, device, bbox_initial_format=bbox_format)
+
+            ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
+            results = model.predict(imgs, save=False, verbose=False)
+
+            ### Match the predicted boxes to the ground truth boxes ###
+            self.match_predicted_boxes_to_targets(results, targets, self.iou_threshold_for_matching)
+
+            ### Extract the internal activations of the model depending on the OOD method ###
+            self.extract_internal_activations(results, all_internal_activations)
+
+            # TODO: Ir recolectando los targets para poder hacer el match con las predicciones.
+            #   Recolectar haciendo una lista de listas de listas similar, solo que en vez de un array
+            #   por posicion va a ser un dict por cada posicion con la anotacion correspondiente
+
+        ### Final formatting of the internal activations ###
+        self.format_internal_activations(all_internal_activations)
+
+        # TODO: Tras recolectar, hay que asignar las anotaciones a las predicciones y hacer el match pero
+        #   manteniendo el orden de los videos
+
+        return all_internal_activations
+    
+
+### Other methods ###
+
+def configure_extra_output_of_the_model(model, ood_method: Type[OODMethod]):
+        
+        # TODO: Tenemos que definir que un atributo de los ood methods define de donde sacar
+        #   el extra_item. De momento nos limitamos a usar el modo "logits" y "ftmaps"
+        if isinstance(ood_method, LogitsMethod):
+            modo = 'logits'
+        elif isinstance(ood_method, DistanceMethod):
+            modo = 'conv'
+        else:
+            raise NotImplementedError("Not implemented yet")
+        
+        # Modify the model's attributes to output the desired extra_item
+        model.model.modo = modo  # This attribute is created in the DetectionModel class
+
 ############################################################
 
 # Code below copied from https://github.com/KingJamesSong/RankFeat/blob/main/utils/test_utils.py
 
 ############################################################
-
-
-def arg_parser():
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--workers", type=int, default=0,
-                        help="Number of background threads used to load data.")
-
-    parser.add_argument("--logdir", default='logs',
-                        help="Where to log test info (small).")
-    parser.add_argument("--batch-size", type=int, default=8,
-                        help="Batch size.")
-    parser.add_argument("--name", default='prueba',
-                        help="Name of this run. Used for monitoring and checkpointing.")
-
-    parser.add_argument("--model", default="YOLO", help="Which variant to use")
-    parser.add_argument("--model_path", type=str, help="Path to the model you want to test")
-
-    return parser
-
 
 def stable_cumsum(arr, rtol=1e-05, atol=1e-08):
     """Use high precision for cumsum and check that final value matches sum
