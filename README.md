@@ -12,7 +12,7 @@ To install the package:
 ```bash
 ├── datasets
 │   ├── coco
-│   └── OAK
+│   └── TAO
 └── source_code_folder
     ├── datasets_utils
     ├── data_utils.py
@@ -29,9 +29,9 @@ Datasets must be outside the source code folder
 
 # Download datasets
 
-## OAK
+## TAO
 
-Follow instructions inside ```datasets_utils/oak/instructions.md```
+Follow instructions inside ```datasets_utils/tao/instructions.md```
 
 ### Dataset description
 
