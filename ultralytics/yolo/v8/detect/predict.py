@@ -76,7 +76,7 @@ def extract_roi_aligned_features_from_correct_stride(ftmaps: List[Tensor], boxes
         # output_size -> define el tamaño de salida de la ROI. Tiene que ser menor que el tamaño de feature maps, y se 
         #       trata de un hyperparametro que hay que ajustar. En este caso lo ponemos a 10x10 por probar.
         # spatial_scale -> es el factor de escala entre las cajas y el feature map. En este caso lo calculamos como el
-        #       ancho del feature map entre el ancho de la imagen original ( H/640 )
+        #       ancho del feature map entre el ancho de la imagen original ( W/640 )
         roi_aligned_ftmaps_one_stride = roi_align(
             input=ftmaps[idx_stride],
             boxes=boxes_with_img_idx[which_idx_for_current_stride],
