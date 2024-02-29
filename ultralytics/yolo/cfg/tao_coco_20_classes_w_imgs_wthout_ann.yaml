@@ -1,0 +1,36 @@
+# Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
+path: ../datasets/TAO/  # dataset root dir
+train: annotations/train.json  # train images (relative to 'path') 
+val: annotations/validation.json  # val images (relative to 'path') 
+test: annotations/test_without_annotations.json  # TODO: Can we have the annotaions from BURST?
+
+# Define the dataset class if needed, else by default is YOLODataset
+dataset_class: TAODataset
+# Define the options wanted for the load of the dataset
+coco_classes: True  # use COCO classes
+remove_images_with_no_annotations: False  # remove images with no annotations after the filtering of COCO classes or further filtering
+use_all_frames: False  # use all frames in the videos, not only the annotated ones
+
+# Classes
+names:
+  0: person
+  1: bicycle
+  2: car
+  3: motorcycle
+  4: airplane
+  5: bus
+  6: train
+  7: truck
+  8: boat
+  9: traffic light
+  10: fire hydrant
+  11: stop sign
+  12: parking meter
+  13: bench
+  14: bird
+  15: cat
+  16: dog
+  17: horse
+  18: sheep
+  19: cow
+  

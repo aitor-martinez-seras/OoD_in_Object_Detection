@@ -8,7 +8,7 @@ test: annotations/test_without_annotations.json  # TODO: Can we have the annotai
 dataset_class: TAODataset
 # Define the options wanted for the load of the dataset
 coco_classes: True  # use COCO classes
-remove_images_with_no_annotations: True  # remove images with no annotations after the filtering of COCO classes or further filtering
+remove_images_with_no_annotations: False  # remove images with no annotations after the filtering of COCO classes or further filtering
 use_all_frames: False  # use all frames in the videos, not only the annotated ones
 
 # Classes

@@ -65,7 +65,8 @@ class TAODataset(BaseDataset):
         super().__init__(*args, **kwargs)
         # The paths of the images are loaded by BaseDataset class but in this case in a wrong way,
         # so we need to recreate the paths of the images using the labels
-        self.recreate_im_file_paths_using_labels()
+        if self.data["remove_images_with_no_annotations"]:
+            self.recreate_im_file_paths_using_labels()
         assert len(self.labels) == len(self.im_files), 'Number of labels and images must match as they are loaded by index out of self.labels and self.im_files'
     
     def recreate_im_file_paths_using_labels(self):
@@ -99,12 +100,14 @@ class TAODataset(BaseDataset):
         return label
 
     def get_labels(self):
+
+        ### Load the labels from the .json file ###
+        # TODO: Optimize this to be able to load the annotations without creating new attributes in the object
         # load dataset
         self.dataset,self.anns,self.cats,self.imgs = dict(),dict(),dict(),dict()
         self.imgToAnns, self.catToImgs = defaultdict(list), defaultdict(list)
-
         print(f'** Getting labels of {self.img_path} **')
-        
+
         # Use pycocotools to load annotations
         print('Loading annotations into memory...')
         tic = time.time()
@@ -115,11 +118,24 @@ class TAODataset(BaseDataset):
         self.dataset = dataset
         self.createIndex()
 
-        # Now properly load in the labels list
-        print('Converting labels to Ultralytics format...')
-        if self.data["coco_classes"] == True:
+        ### Extract the options desired from the .yaml file ##
+        
+        # Check if we want to load only the COCO classes
+        load_only_coco_classes = self.data["coco_classes"]
+        if load_only_coco_classes == True:
             print('Loading only COCO classes')
             list_of_coco_ids_in_tao = list(self.tao_to_coco_mapping.keys())
+        
+        # Check if we want to remove the images with no annotations
+        remove_images_with_no_annotations = self.data["remove_images_with_no_annotations"]
+
+        # Check if we want ALL the frames to be loaded, not only the ones with annotations
+        # TODO: Future implementation
+        use_all_frames = self.data["use_all_frames"]
+        
+        ### Load the annotations in the correct format and with the selected options ###
+
+        print('Converting labels to Ultralytics format...')
         t_init = time.perf_counter()
         cat_ids = []
         area = []
@@ -134,21 +150,36 @@ class TAODataset(BaseDataset):
             current_img_anns = [self.anns[ann_id] for ann_id in ann_ids_for_img]
 
             # If indicated in the YAML file, we only load the annotations of the COCO classes
-            if self.data["coco_classes"]:
+            if load_only_coco_classes:
                 for ann in current_img_anns:
                     if ann['category_id'] in list_of_coco_ids_in_tao:
-                        current_img_boxes.append(ann['bbox'])
-                        current_img_cls.append(self.tao_to_coco_mapping[ann['category_id']])
-                        current_img_track_id.append(ann['track_id'])
+                        ann_coco_cat = self.tao_to_coco_mapping[ann['category_id']]
+                        # Further filtering of COCO classes
+                        if ann_coco_cat in self.data["names"]:
+                            current_img_boxes.append(ann['bbox'])
+                            current_img_cls.append(ann_coco_cat)
+                            current_img_track_id.append(ann['track_id'])
             else:
                 for ann in current_img_anns:
                     current_img_boxes.append(ann['bbox'])
                     current_img_cls.append(ann['category_id'])
                     current_img_track_id.append(ann['track_id'])
 
-            
-            if len(current_img_cls) > 0:
-                # Classes
+            # TODO: Make the option to load all images and add empty annotations to the ones with no annotations
+            if len(current_img_cls) == 0:
+
+                if remove_images_with_no_annotations:
+                    # Only enters if there is no annotations (len=0) and we want to remove images with no annotations
+                    continue  # Dont append anything to labels list
+
+                else:  # If there is no annotations (len=0) and we want to keep images with no annotations
+                    classes = np.array([], dtype=np.float32)
+                    #bboxes = np.array([[]], dtype=np.float32)
+                    #classes = np.array((0), dtype=np.float32)
+                    bboxes = np.empty((0, 4), dtype=np.float32)
+                    h, w = (current_img_info['height'], current_img_info['width'])  # Convetion is HxW
+
+            else:  # If there are annotations
                 classes = np.array(current_img_cls, dtype=np.float32)
                 # Convert boxes from xywh to cxcywh and normalize bboxes
                 h, w = (current_img_info['height'], current_img_info['width'])  # Convetion is HxW
@@ -157,20 +188,21 @@ class TAODataset(BaseDataset):
                 bboxes[:, 1] += bboxes[:, 3] / 2  # Y from top corner to center
                 bboxes[:, [0, 2]] /= w  # Normalize X
                 bboxes[:, [1, 3]] /= h  # Normalize Y
-                # Append to labels list
-                labels.append(
-                        {
-                            'im_file': current_img_info['file_name'],
-                            'shape': (h, w),  # Height x Width is the convention
-                            'cls': classes[:, np.newaxis],  # [N, 1]
-                            'bboxes': bboxes,  # [N, 4]
-                            'segments': [],
-                            'keypoints': None,
-                            'normalized': True,  # In order to properly work, bboxes must be normalized
-                            'bbox_format': 'xywh',  # "xywh" format is referred to "CXCYWH" format in this version of Ultralytics YOLO
-                            'track_id': np.array(current_img_track_id, dtype=np.float32),
-                        }
-                )
+                
+            # Append to labels list
+            labels.append(
+                    {
+                        'im_file': current_img_info['file_name'],
+                        'shape': (h, w),  # Height x Width is the convention
+                        'cls': classes[:, np.newaxis],  # [N, 1]
+                        'bboxes': bboxes,  # [N, 4]
+                        'segments': [],
+                        'keypoints': None,
+                        'normalized': True,  # In order to properly work, bboxes must be normalized
+                        'bbox_format': 'xywh',  # "xywh" format is referred to "CXCYWH" format in this version of Ultralytics YOLO
+                        'track_id': np.array(current_img_track_id, dtype=np.float32),
+                    }
+            )
             
         print(f'Done! (t={time.perf_counter() - t_init:0.2f}s)')
         return labels
