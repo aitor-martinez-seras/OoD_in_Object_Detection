@@ -36,3 +36,7 @@ Follow instructions inside ```datasets_utils/tao/instructions.md```
 ### Dataset description
 
 Each frame of the annotated dataset is corresponding with the frame number ```(n * 30) - 1```
+
+# YOLO Sizes
+
+![Yolo_sizes_image](ultralytics/assets/yolov8_sizes.png)
