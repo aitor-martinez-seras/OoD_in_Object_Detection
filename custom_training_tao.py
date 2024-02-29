@@ -28,7 +28,6 @@ class SimpleArgumentParser(Tap):
     def configure(self):
         self.add_argument("-e", "--epochs")
         self.add_argument("-m", "--model")
-        self.add_argument("-d", "--devices")
         self.add_argument("-cl_ms", "--close_mosaic")
 
 
@@ -59,6 +58,11 @@ def main():
     # Constants
     ROOT = Path().cwd()  # Assumes this script is in the root of the project
     NOW = datetime.now().strftime("%Y%m%d_%H%M")
+
+    # Dataset selection
+    yaml_file = f"{args.dataset}.yaml"
+    # dataset_info = yaml_load(ROOT / 'ultralytics/yolo/cfg' / yaml_file)
+    # number_of_classes = len(dataset_info['names'])
     
     # TODO: Future work
     if args.model_path:
@@ -74,12 +78,9 @@ def main():
         # Use pretrained model on COCO
         model = YOLO(f"yolov8{args.model}.pt")  # https://docs.ultralytics.com/es/yolov5/tutorials/train_custom_data/#3-select-a-model
         string_for_folder = "pretrained"
-    
+
     # Name of the folder to save the model, logs, etc.
     folder_name = f'{NOW}_{args.dataset}_yolov8{args.model}_{string_for_folder}'
-    
-    # Dataset selection
-    yaml_file = f"{args.dataset}.yaml"
 
     # Training
     model.train(
@@ -92,6 +93,7 @@ def main():
         close_mosaic=args.close_mosaic,
         workers=args.workers,
         name=folder_name,
+        plots=False,
     )
     args.save(ROOT / folder_name / 'script_args.json')
     # with open(ROOT / folder_name / 'script_args.json', 'w') as json_file:

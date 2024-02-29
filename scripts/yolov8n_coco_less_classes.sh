@@ -1,0 +1,3 @@
+nohup python custom_training_tao.py -e 150 -m n --devices 0 --dataset tao_coco_5_classes_w_imgs_wthout_ann --batch_size 16 -cl_ms 30 --workers 10 > nohup_yolov8n_5_cls.log &
+nohup python custom_training_tao.py -e 150 -m m --devices 1 --dataset tao_coco_10_classes_w_imgs_wthout_ann --batch_size 16 -cl_ms 30 --workers 10 > nohup_yolov8n_10_cls.log &
+nohup python custom_training_tao.py -e 150 -m m --devices 2 --dataset tao_coco_20_classes_w_imgs_wthout_ann --batch_size 16 -cl_ms 30 --workers 10 > nohup_yolov8n_20_cls.log &
