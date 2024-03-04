@@ -176,9 +176,10 @@ def main(args):
 
     # logger.warning('Changing following enviroment variables:')
     # os.environ['YOLO_VERBOSE'] = 'False'
-    # gpu_number = str(2)
-    # os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
-    # logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
+    gpu_number = str(args.device)
+    os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
+    logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
+    device = 'cuda:0'
 
     if args.ood_method == 'GradNorm':
         args.batch = 1
@@ -306,10 +307,10 @@ def main(args):
     if args.visualize_oods:
         
         # First fill the thresholds attribute of the OODMethod object
-        obtain_thresholds_for_ood_detection_method(ood_method, model, args.device, ind_dataloader, logger, args)
+        obtain_thresholds_for_ood_detection_method(ood_method, model, device, ind_dataloader, logger, args)
         
         # Save images with OoD detection (Green for In-Distribution, Red for Out-of-Distribution)
-        save_images_with_ood_detection(ood_method, model, args.device, ood_dataloader, logger)
+        save_images_with_ood_detection(ood_method, model, device, ood_dataloader, logger)
         
     elif args.compute_metrics:
 
@@ -324,7 +325,7 @@ def main(args):
 if __name__ == "__main__":
     parser = arg_parser()
     
-    parser.add_argument('-d', '--device', default='cuda', type=str, help='use cpu or cuda')
+    parser.add_argument('-d', '--device', default=0, type=int, help='-1 for cpu or a number for the index of the GPU to use')
     parser.add_argument('-b', '--batch_size', default=4, type=int, help='batch size to use')
     parser.add_argument('-n_w', '--num_workers', default=1, type=int, help='number of workers to use in dataloader')
     parser.add_argument('-v', '--visualize_oods', action='store_true', help='visualize the OoD detection')
