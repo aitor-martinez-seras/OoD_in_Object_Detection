@@ -93,9 +93,9 @@ def main():
         close_mosaic=args.close_mosaic,
         workers=args.workers,
         name=folder_name,
-        plots=False,
+        plots=True,
     )
-    args.save(ROOT / folder_name / 'script_args.json')
+    args.save(ROOT / 'runs_TAO' / folder_name / 'script_args.json')
     # with open(ROOT / folder_name / 'script_args.json', 'w') as json_file:
     #     json.dump(args_dict, json_file, indent=4)
 
