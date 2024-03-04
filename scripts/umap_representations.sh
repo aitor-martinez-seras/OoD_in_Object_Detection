@@ -1,0 +1,1 @@
+python create_umap_representation.py --model_folder runs_TAO/20240301_1816_tao_coco_10_classes_yolov8x_pretrained --number_of_known_classes 10 --one_umap_per_stride True --device 3
