@@ -869,6 +869,85 @@ class ActivationsExtractor(DistanceMethod):
         return all_internal_activations
     
 
+# Class for extracting convolutional activations from the model
+class FeaturemapExtractor(DistanceMethod):
+
+    # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
+    def __init__(self, agg_method, **kwargs):
+        name = 'FeaturemapExtractor'
+        per_class = True
+        per_stride = True
+        cluster_method = 'one'
+        cluster_optimization_metric = 'silhouette'
+        super().__init__(name, agg_method, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
+
+    def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
+        raise NotImplementedError("Not implemented yet")
+    
+    def activations_transformation(self, activations: np.array) -> np.array:
+        """
+        Transform the activations to the shape needed to compute the distance.
+        By default, it flattens the activations leaving the batch dimension as the first dimension.
+        """
+        raise NotImplementedError("Not implemented yet")
+        return np.mean(activations, axis=(2,3))  # Already reshapes to [N, features]
+    
+    def iterate_data_to_extract_ind_activations_and_create_its_annotations(self, data_loader, model, device, split: str):
+        """
+        Custom function to iterate over the data to extract the internal activations of the model along
+        with the annotations for the dataset. They will be in the same order as in the 
+        """
+        if self.per_class:
+            if self.per_stride:
+                all_internal_activations = [[[] for _ in range(3)] for _ in range(len(model.names))]
+                all_labels_for_internal_activations = [[[] for _ in range(3)] for _ in range(len(model.names))]
+            else:
+                all_internal_activations = [[] for _ in range(len(model.names))]
+
+        # TODO: Cargar anotaciones del json en funcion del parametro split y REFERENCIAR A ROOT PATH con parents y demas
+        tao_frames_root_path = Path('/home/tri110414/nfs_home/datasets/TAO/frames')
+        with open('annotations/train.json') as f:
+            data = json.load(f)
+
+        # Obtain the bbox format from the last transform of the dataset
+        if hasattr(data_loader.dataset.transforms.transforms[-1], "bbox_format"):
+            bbox_format = data_loader.dataset.transforms.transforms[-1].bbox_format
+        else:
+            bbox_format=data_loader.dataset.labels[0]['bbox_format']
+
+        # Start iterating over the data
+        number_of_batches = len(data_loader)
+        for idx_of_batch, data in enumerate(data_loader):
+            
+            if idx_of_batch % 50 == 0:
+                print(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")
+                
+            ### Prepare images and targets to feed the model ###
+            imgs, targets = self.prepare_data_for_model(data, device, bbox_initial_format=bbox_format)
+
+            ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
+            results = model.predict(imgs, save=False, verbose=False)
+
+            ### Match the predicted boxes to the ground truth boxes ###
+            self.match_predicted_boxes_to_targets(results, targets, self.iou_threshold_for_matching)
+
+            ### Extract the internal activations of the model depending on the OOD method ###
+            self.extract_internal_activations(results, all_internal_activations)
+
+            # TODO: Ir recolectando los targets para poder hacer el match con las predicciones.
+            #   Recolectar haciendo una lista de listas de listas similar, solo que en vez de un array
+            #   por posicion va a ser un dict por cada posicion con la anotacion correspondiente
+
+        ### Final formatting of the internal activations ###
+        self.format_internal_activations(all_internal_activations)
+
+        # TODO: Tras recolectar, hay que asignar las anotaciones a las predicciones y hacer el match pero
+        #   manteniendo el orden de los videos
+
+        return all_internal_activations
+
+    
+
 ### Other methods ###
 
 def configure_extra_output_of_the_model(model, ood_method: Type[OODMethod]):

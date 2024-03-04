@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import pickle
+from typing import Tuple
 
 import torch
 import numpy as np
@@ -13,6 +14,7 @@ from ultralytics.yolo.data.build import build_yolo_dataset, build_dataloader, bu
 from ultralytics.yolo.utils import DEFAULT_CFG
 from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.data import YOLODataset
+from ultralytics.yolo.data.build import InfiniteDataLoader
 
 def segmentation_to_bbox(segmentation_img: Image, seg_value: int):
     
@@ -135,7 +137,7 @@ def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, args, dat
 
 
 def create_TAO_dataset_and_dataloader(dataset_yaml_file_name_or_path, args, data_split: str,
-                                       stride: int = 32, fraction: float = 1.0,):
+                                       stride: int = 32, fraction: float = 1.0,) -> Tuple[YOLODataset, InfiniteDataLoader]:
 
     # TODO: En overrides se definirian ciertos parametros que se quieran tocar de la configuracion por defecto,
     # de tal forma que get_cfg() se encarga de coger esa configuracion por defecto y sobreescribirla con 
