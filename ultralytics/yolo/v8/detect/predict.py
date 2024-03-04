@@ -51,8 +51,6 @@ def extract_roi_aligned_features_from_correct_stride(ftmaps: List[Tensor], boxes
     boxes_with_img_idx = torch.cat((img_idx_for_every_bbox, boxes_cat), dim=1)  # Add the index of the img (or batch) to the boxes for indexing by image
     batch_size = len(boxes)
 
-    # 
-
     # Lista donde van las features de cada caja con su stride correcto, para cada imagen del batch
     # Es decir, una lista con tantos elementos como imagenes en el batch, 
     # y en cada en elemento hay otras 3 listas, una por cada stride
@@ -124,41 +122,39 @@ class DetectionPredictor(BasePredictor):
     def postprocess(self, preds, img, orig_imgs):
         """Postprocesses predictions and returns a list of Results objects."""
 
-        ## preds es tupla de 2 elementos:
-        ## 1ero, tensor de (1,84,5040).
-        ##  1 es el batch_size (puede ser mas), 84 son el box (4) + las clases (80). 5040 son las boxes (depende del tamaño de la imagen).
-        ## 2ndo, lista de 3 elementos. En cada elemento tenemos un tensor. Son los feature map segun Aitor
-        # output_extra = preds[1]
+        # Preds:
+        #   - Si viene sin output_extra: 
+        #       - preds[0] es un tensor de (N, 84, 8000) -> Las predicciones
+        #       - preds[1] es una lista con 3 tensores de (N, 144, H, W)  -> No se que son...
+        #   - Si viene con output_extra:
+        #       - preds[0] es el tensor sin output_extra
+        #       - preds[1] es el output_extra:
+        #           - Si es 'conv' O 'all_ftmaps': lista de 3 tensores de (N, C, H, W) -> Los feature maps
+        #           - Si es 'logits': tensor de  -> Los logits
+
         if hasattr(self.model.model, 'modo'):
+            
+            output_extra = preds[1]  # Los feature maps o logits
+            preds = preds[0][0]  # Las predicciones
+
             if self.model.model.modo == 'conv':
-                # Con CKA vamos a manejar los feature maps
                 # Para la prediccion se usan las 3 escalas de feature maps (8,16,32)
                 # y por tanto me he traido las 3 escalas, que vienen en la forma
-                # List[[N, CH, H, W]] donde cada posicion de la lista es una de las escalas
+                # List[[N, CH, H, W]] donde cada posicion de la lista es una de las escalas [8,16,32]
                 # N es el batch_size, CH es el numero de canales y H y W son el alto y ancho del feature map.
-                output_extra = preds[1]
-            else:
-                output_extra = preds[1][0]
-            
-            ## Cojo el [0] porque ahora mismo preds[1] es una lista de 2 elementos donde:
-            ## el primer elemento es la salida de la red neuronal
-            ## el segundo elemento hay 3 items, con lo que creemos que son los feature map.
-            preds = preds[0]
 
-            # Strides. We use this variable to mantain the info of which is the scale of each bounding box
-            #   in the final predictions. This is needed for using RoIAlign with the correct feature map
-            input_size = img.shape[2]
-            s8 = input_size // 8
-            s16 = input_size // 16
-            s32 = input_size // 32
-            device = self.device
-            strides = torch.cat(
-                (torch.zeros((s8*s8), device=device),  # 0
-                torch.ones((s16*s16), device=device),  # 1
-                torch.ones((s32*s32), device=device) * 2)  # 2
-            )
-
-            if self.model.model.modo == 'conv':
+                # Strides. We use this variable to mantain the info of which is the scale of each bounding box
+                #   in the final predictions. This is needed for using RoIAlign with the correct feature map
+                input_size = img.shape[2]
+                s8 = input_size // 8
+                s16 = input_size // 16
+                s32 = input_size // 32
+                device = self.device
+                strides = torch.cat(
+                    (torch.zeros((s8*s8), device=device),  # 0
+                    torch.ones((s16*s16), device=device),  # 1
+                    torch.ones((s32*s32), device=device) * 2)  # 2
+                )
 
                 preds, strides = ops.non_max_suppression(
                     preds,
@@ -200,6 +196,7 @@ class DetectionPredictor(BasePredictor):
                 output_extra = roi_aligned_ftmaps_per_image_and_stride  # Sobreescibimos el output_extra con el resultado del roi_align
 
             elif self.model.model.modo == 'logits':
+                output_extra = output_extra[0]  # Los logits
                 preds = ops.non_max_suppression(preds,
                                                 self.args.conf,
                                                 self.args.iou,
@@ -207,16 +204,34 @@ class DetectionPredictor(BasePredictor):
                                                 max_det=self.args.max_det,
                                                 classes=self.args.classes,
                                                 extra_item=output_extra)
-                output_extra = preds[1]
-                # print('++++++++++++ POSTPROCESS ++++++++++++++++')
-                # # print(output_extra)
-                # print(len(output_extra))
-                # for idx, o in enumerate(output_extra):
-                #     print(f'Extra item shape: {o.shape}')
-                #     print(f'Preds shape: {preds[0][idx].shape}')
-                # print('-----------------------------------------------------------------------')
 
-                preds = preds[0]
+            elif self.model.model.modo == 'all_ftmaps':
+                # Tenemos que hacer que para cada prediccion (dimension N) haya una lista de 3 tensores, uno por cada escala
+                output_extra = [list(batch) for batch in zip(*output_extra)]
+                # # El codigo equivalente al one-liner de arriba es:
+                # new_output_extra = [[[],[],[]] for _ in range(len(preds))]  # shape (N, 3) pero con listas
+                # for idx_batch in range(len(preds)):
+                #     for idx_lvl in range(len(output_extra)):
+                #         new_output_extra[idx_batch][idx_lvl] = output_extra[idx_lvl][idx_batch]
+                # output_extra = new_output_extra
+
+                preds = ops.non_max_suppression(preds,
+                                                self.args.conf,
+                                                self.args.iou,
+                                                agnostic=self.args.agnostic_nms,
+                                                max_det=self.args.max_det,
+                                                classes=self.args.classes)
+                
+            
+        # Normal execution
+        else:
+            preds = ops.non_max_suppression(preds[0],
+                                            self.args.conf,
+                                            self.args.iou,
+                                            agnostic=self.args.agnostic_nms,
+                                            max_det=self.args.max_det,
+                                            classes=self.args.classes)
+
         
         results = []
         for i, pred in enumerate(preds):
@@ -225,7 +240,7 @@ class DetectionPredictor(BasePredictor):
                 pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
             path = self.batch[0]
             img_path = path[i] if isinstance(path, list) else path
-            if self.model.model.modo in ['logits', 'conv']:
+            if self.model.model.modo in ['logits', 'conv', 'all_ftmaps']:
                 results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names, boxes=pred, extra_item=output_extra[i]))
             else:
                 results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names, boxes=pred))

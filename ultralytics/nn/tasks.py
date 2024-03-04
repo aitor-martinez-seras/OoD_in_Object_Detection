@@ -98,7 +98,7 @@ class BaseModel(nn.Module):
             y.append(x if m.i in self.save else None)  # save output
 
             if hasattr(self, 'modo'):
-                if self.modo == 'conv':
+                if self.modo in ['conv', 'all_ftmaps']:
                     if m.i in [15, 18, 21]:
                         output_extra.append(deepcopy(x))
 
