@@ -5,7 +5,7 @@ import numpy as np
 
 from ultralytics.nn.tasks import DetectionModel
 from ultralytics.yolo import v8
-from ultralytics.yolo.data import build_dataloader, build_yolo_dataset, build_tao_dataset
+from ultralytics.yolo.data import build_dataloader, build_yolo_dataset, build_tao_dataset, build_filtered_yolo_dataset
 from ultralytics.yolo.data.dataloaders.v5loader import create_dataloader
 from ultralytics.yolo.engine.trainer import BaseTrainer
 from ultralytics.yolo.utils import DEFAULT_CFG, LOGGER, RANK, colorstr
@@ -29,6 +29,8 @@ class DetectionTrainer(BaseTrainer):
         # Choose dataset type based on YAML file data
         if self.data.get('dataset_class') == 'TAODataset':
             return build_tao_dataset(self.args, img_path, batch, self.data, mode=mode, rect=mode == 'val', stride=gs)
+        elif self.data.get('dataset_class') == 'FilteredYOLODataset':
+            return build_filtered_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, rect=mode == 'val', stride=gs)
         else:
             return build_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, rect=mode == 'val', stride=gs)
 
