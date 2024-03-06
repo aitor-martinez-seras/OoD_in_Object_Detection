@@ -365,8 +365,9 @@ class BaseTrainer:
                 # Validation
                 self.ema.update_attr(self.model, include=['yaml', 'nc', 'args', 'names', 'stride', 'class_weights'])
                 final_epoch = (epoch + 1 == self.epochs) or self.stopper.possible_stop
+                val_this_epoch = (epoch + 1) % self.args.val_every == 0 or epoch == 0 # Enable validation every n epochs (always validate first epoch)
 
-                if self.args.val or final_epoch:
+                if (self.args.val and val_this_epoch) or final_epoch:  # Added validation every n epochs
                     self.metrics, self.fitness = self.validate()
                 self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
                 self.stop = self.stopper(epoch + 1, self.fitness)
