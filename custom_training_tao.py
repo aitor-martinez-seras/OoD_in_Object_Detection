@@ -18,35 +18,23 @@ class SimpleArgumentParser(Tap):
     model: Literal["n", "s", "m", "l", "x"]  # Which variant of the model YOLO to use
     devices: List[int]  # Device to use for training on GPU. Indicate more than one to use multiple GPUs. Use -1 for CPU.
     # Optional arguments
+    config: str = "config_for_tao_adam"
     dataset: str = "tao_coco"
+    lr: float = 0.001  # initial learning rate (i.e. SGD=1E-2, Adam=1E-3)
+    lrf: float = 0.01  # final learning rate (lr0 * lrf)
+    cos_lr: bool = False  # Use cosine learning rate
     batch_size: int = 16  # Batch size.
-    workers: int = 8  # Number of background threads used to load data.
+    val_every: int = 1  # Validate every n epochs
+    workers: int = 10  # Number of background threads used to load data.
     close_mosaic: int = 20  # Close mosaic augmentation
-    model_path: str = ''  # Path to the model you want to use as a starting point. Deactivates using sizes.
     from_scratch: bool = False # Train the model from scratch, not pretrained in COCO.
+    do_not_val_during_training: bool = False  # If passed, the model is NOT validated during training.
+    model_path: str = ''  # Path to the model you want to use as a starting point. Deactivates using sizes.
 
     def configure(self):
         self.add_argument("-e", "--epochs")
         self.add_argument("-m", "--model")
         self.add_argument("-cl_ms", "--close_mosaic")
-
-
-# def arg_parser():
-#     parser = argparse.ArgumentParser()
-#     # Required arguments
-#     parser.add_argument("-e", "--epochs", type=int, required=True, help="Number of epochs to train for.")
-#     parser.add_argument("--model", required=True, choices=["n", "s", "m", "l", "x"], help="Which variant to use")
-#     parser.add_argument("-d", "--devices", type=int, nargs="+", default="0",
-#                         help="Device to use for training on GPU. Indicate more than one to use multiple GPUs. Use -1 for CPU.")
-    
-#     # Optional arguments
-#     parser.add_argument("--dataset", type=str, default="tao_coco")
-#     parser.add_argument("--batch_size", type=int, default=16, help="Batch size.")
-#     parser.add_argument("--workers", type=int, default=8, help="Number of background threads used to load data.")
-#     parser.add_argument("-cl_ms", "--close_mosaic", type=int, default=20, help="Close mosaic augmentation")
-#     parser.add_argument("--model_path", type=str, help="Path to the model you want to use as a starting point. Deactivates using sizes.")
-#     parser.add_argument("--from_scratch", action="store_true", help="Train the model from scratch, not pretrained in COCO.")
-#     return parser
 
 
 def main():
@@ -61,6 +49,7 @@ def main():
 
     # Dataset selection
     yaml_file = f"{args.dataset}.yaml"
+    project_name = 'TAO' if 'tao' in args.dataset else 'COCO'
     # dataset_info = yaml_load(ROOT / 'ultralytics/yolo/cfg' / yaml_file)
     # number_of_classes = len(dataset_info['names'])
     
@@ -85,7 +74,11 @@ def main():
     # Training
     model.train(
         data=yaml_file,
-        cfg="config_for_tao_adam.yaml",  # https://docs.ultralytics.com/es/usage/cfg/
+        cfg=f"{args.config}.yaml",  # https://docs.ultralytics.com/es/usage/cfg/
+        project=f'runs_{project_name}',
+        lr0=args.lr,
+        lrf=args.lrf,
+        cos_lr=args.cos_lr,
         device=args.devices,
         epochs=args.epochs,
         batch=args.batch_size,
@@ -94,12 +87,12 @@ def main():
         workers=args.workers,
         name=folder_name,
         plots=True,
+        val=not args.do_not_val_during_training,
+        val_every=args.val_every,
     )
-    args.save(ROOT / 'runs_TAO' / folder_name / 'script_args.json')
-    # with open(ROOT / folder_name / 'script_args.json', 'w') as json_file:
-    #     json.dump(args_dict, json_file, indent=4)
 
-# path = model.export(format="onnx")  # export the model to ONNX format
+    # Save the arguments used to a file
+    args.save(ROOT / 'runs_TAO' / folder_name / 'script_args.json')
 
 
 if __name__ == "__main__":
