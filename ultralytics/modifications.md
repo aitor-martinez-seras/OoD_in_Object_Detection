@@ -6,3 +6,30 @@
 
 
 [DetectionPredictor](yolo/v8/detect/predict.py) (```ultralytics/yolo/v8/detect/predict.py```): inherits from ```BasePredictor``` and modifies the postprocessing step. There is where we can take the ```output_extra``` and handle as we want to include it in the ```Results``` object as we want.
+
+# Where to modify training
+
+[BaseTrainer](yolo/engine/trainer.py): in line 270, ```_do_train``` function has the loop over the batches and the validation logic.
+
+## For adding new arguments to training
+
+You have to modify [default.yaml](yolo/cfg/default.yaml) config, adding the new argument. Then when calling ```.train()``` in ```YOLO``` type models, you can add the argument or you can modify it in your custom ```.yaml``` config file
+
+# To add custom dataset classes properly
+
+1. Create a ```.yaml``` config file where the ```dataset_class``` attribute must be included, defining there some flag for the dataset class
+2. Create the dataset class inside the ```ultralytics/yolo/data``` folder, either in a separate file or in ```ultralytics/yolo/data/dataset.py```. Ensure to at least define the ```get_img_files```, ```update_labels_info```, ```get_labels``` and ```build_transforms``` if inheriting from ```BaseDataset```. An example of a custom class can be found in [tao.py](yolo/data/tao.py)
+3. Create the class inheriting from [BaseDataset](yolo/data/base.py) or from [YOLODataset](yolo/data/dataset.py)
+4. Create a function in ```ultralytics/yolo/data/build.py``` imitating ```build_yolo_dataset``` function. Import the dataset class created following ```YOLODataset``` convention.
+6. Update ```ultralytics/yolo/data/__init__.py``` with the new imports (dataset class and function to build it)
+7. Add in [DetectionTrainer](yolo/v8/detect/train.py) an if statement to catch the flag indicated in the first step and call the build function created. Example:
+
+    ```python
+    # Choose dataset type based on YAML file data
+    if self.data.get('dataset_class') == 'TAODataset':
+        return build_tao_dataset(self.args, img_path, batch, self.data, mode=mode, rect=mode == 'val', stride=gs)
+    elif self.data.get('dataset_class') == 'FilteredYOLODataset':
+        return build_filtered_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, rect=mode == 'val', stride=gs)
+    else:
+        return build_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, rect=mode == 'val', stride=gs)
+    ```
