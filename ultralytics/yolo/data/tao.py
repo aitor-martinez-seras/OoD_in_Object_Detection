@@ -165,7 +165,6 @@ class TAODataset(BaseDataset):
                     current_img_cls.append(ann['category_id'])
                     current_img_track_id.append(ann['track_id'])
 
-            # TODO: Make the option to load all images and add empty annotations to the ones with no annotations
             if len(current_img_cls) == 0:
 
                 if remove_images_with_no_annotations:

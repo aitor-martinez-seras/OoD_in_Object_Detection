@@ -276,63 +276,30 @@ class SemanticDataset(BaseDataset):
 
 class FilteredYOLODataset(YOLODataset):
 
-    def cache_labels(self, path=Path('./labels.cache')):
-        """Cache dataset labels, check images and read shapes.
-        Args:
-            path (Path): path where to save the cache file (default: Path('./labels.cache')).
-        Returns:
-            (dict): labels.
-        """
-        x = {'labels': []}
-        nm, nf, ne, nc, msgs = 0, 0, 0, 0, []  # number missing, found, empty, corrupt, messages
-        desc = f'{self.prefix}Scanning {path.parent / path.stem}...'
-        total = len(self.im_files)
-        nkpt, ndim = self.data.get('kpt_shape', (0, 0))
-        if self.use_keypoints and (nkpt <= 0 or ndim not in (2, 3)):
-            raise ValueError("'kpt_shape' in data.yaml missing or incorrect. Should be a list with [number of "
-                             "keypoints, number of dims (2 for x,y or 3 for x,y,visible)], i.e. 'kpt_shape: [17, 3]'")
-        with ThreadPool(NUM_THREADS) as pool:
-            results = pool.imap(func=verify_image_label,
-                                iterable=zip(self.im_files, self.label_files, repeat(self.prefix),
-                                             repeat(self.use_keypoints), repeat(len(self.data['names'])), repeat(nkpt),
-                                             repeat(ndim)))
-            pbar = tqdm(results, desc=desc, total=total, bar_format=TQDM_BAR_FORMAT)
-            for im_file, lb, shape, segments, keypoint, nm_f, nf_f, ne_f, nc_f, msg in pbar:
-                nm += nm_f
-                nf += nf_f
-                ne += ne_f
-                nc += nc_f
-                if im_file:
-                    # TODO: Aplicar filtro a las labels en funcion de la clase
-                    x['labels'].append(
-                        dict(
-                            im_file=im_file,
-                            shape=shape,
-                            cls=lb[:, 0:1],  # n, 1
-                            bboxes=lb[:, 1:],  # n, 4
-                            segments=segments,
-                            keypoints=keypoint,
-                            normalized=True,
-                            bbox_format='xywh'))
-                if msg:
-                    msgs.append(msg)
-                pbar.desc = f'{desc} {nf} images, {nm + ne} backgrounds, {nc} corrupt'
-            pbar.close()
+    def __init__(self, *args, data=None, use_segments=False, use_keypoints=False, **kwargs):
+        super().__init__(*args, data=data, use_segments=use_segments, use_keypoints=use_keypoints, **kwargs)
+        self.update_attributes_to_less_classes()
 
-        if msgs:
-            LOGGER.info('\n'.join(msgs))
-        if nf == 0:
-            LOGGER.warning(f'{self.prefix}WARNING ⚠️ No labels found in {path}. {HELP_URL}')
-        x['hash'] = get_hash(self.label_files + self.im_files)
-        x['results'] = nf, nm, ne, nc, len(self.im_files)
-        x['msgs'] = msgs  # warnings
-        x['version'] = self.cache_version  # cache version
-        if is_dir_writeable(path.parent):
-            if path.exists():
-                path.unlink()  # remove *.cache file if exists
-            np.save(str(path), x)  # save cache for next time
-            path.with_suffix('.cache.npy').rename(path)  # remove .npy suffix
-            LOGGER.info(f'{self.prefix}New cache created: {path}')
+    def update_attributes_to_less_classes(self):
+        # Filter labels
+        classes = list(self.data["names"].keys())
+        self.update_labels(include_class=classes)  # From BaseDataset
+        if self.data.get('remove_images_with_no_annotations') is True:
+            # Remove empty labels if indicated in the dataset YAML file
+            print(f'Removing images with no annotations')
+            self.remove_image_labels_with_no_annotations()
         else:
-            LOGGER.warning(f'{self.prefix}WARNING ⚠️ Cache directory {path.parent} is not writeable, cache not saved.')
-        return x
+            print('Maintaining images with no annotations (background images)')
+        
+        # Update image files related attributes
+        self.im_files = [lb['im_file'] for lb in self.labels]  # update im_files
+        self.ni = len(self.labels)
+        self.ims, self.im_hw0, self.im_hw = [None] * self.ni, [None] * self.ni, [None] * self.ni
+        self.npy_files = [Path(f).with_suffix('.npy') for f in self.im_files]
+        # Update Buffer thread for mosaic images
+        self.buffer = []  # buffer size = batch size
+        self.max_buffer_length = min((self.ni, self.batch_size * 8, 1000)) if self.augment else 0
+
+    def remove_image_labels_with_no_annotations(self):
+        """Remove images with no annotations."""
+        self.labels = [lb for lb in self.labels if len(lb['cls']) > 0]
