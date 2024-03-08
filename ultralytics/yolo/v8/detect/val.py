@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ultralytics.yolo.data import build_dataloader, build_yolo_dataset
+from ultralytics.yolo.data import build_dataloader, build_yolo_dataset, build_tao_dataset, build_filtered_yolo_dataset
 from ultralytics.yolo.data.dataloaders.v5loader import create_dataloader
 from ultralytics.yolo.engine.validator import BaseValidator
 from ultralytics.yolo.utils import DEFAULT_CFG, LOGGER, colorstr, ops
@@ -183,7 +183,12 @@ class DetectionValidator(BaseValidator):
             batch (int, optional): Size of batches, this is for `rect`. Defaults to None.
         """
         gs = max(int(de_parallel(self.model).stride if self.model else 0), 32)
-        return build_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, stride=gs)
+        if self.data.get('dataset_class') == 'TAODataset':
+            return build_tao_dataset(self.args, img_path, batch, self.data, mode=mode, stride=gs)
+        elif self.data.get('dataset_class') == 'FilteredYOLODataset':
+            return build_filtered_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, stride=gs)
+        else:
+            return build_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, stride=gs)
 
     def get_dataloader(self, dataset_path, batch_size):
         """TODO: manage splits differently."""

@@ -369,6 +369,7 @@ class BaseTrainer:
 
                 if (self.args.val and val_this_epoch) or final_epoch:  # Added validation every n epochs
                     self.metrics, self.fitness = self.validate()
+                # Validation metrics are saved even in the absence of validation
                 self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
                 self.stop = self.stopper(epoch + 1, self.fitness)
 
