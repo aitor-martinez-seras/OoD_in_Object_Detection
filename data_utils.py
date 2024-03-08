@@ -10,7 +10,7 @@ import torchvision.ops as t_ops
 from torch.utils.data import DataLoader
 
 from ultralytics.yolo.data.utils import check_det_dataset
-from ultralytics.yolo.data.build import build_yolo_dataset, build_dataloader, build_tao_dataset
+from ultralytics.yolo.data.build import build_yolo_dataset, build_dataloader, build_tao_dataset, build_filtered_yolo_dataset
 from ultralytics.yolo.utils import DEFAULT_CFG
 from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.data import YOLODataset
@@ -78,7 +78,7 @@ def create_dataloader(dataset, args):
 
 
 def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, args, data_split: str,
-                                       stride: int = 32, fraction: float = 1.0,):
+                                       stride: int = 32, fraction: float = 1.0, filtered_dataset: bool = False):
 
     # TODO: En overrides se definirian ciertos parametros que se quieran tocar de la configuracion por defecto,
     # de tal forma que get_cfg() se encarga de coger esa configuracion por defecto y sobreescribirla con 
@@ -94,16 +94,26 @@ def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, args, dat
     # TODO: Split train dataset into two subsets, one for modeling the in-distribution 
     #   and the other for defining the thresholds using 
     #   https://github.com/ultralytics/ultralytics/blob/437b4306d207f787503fa1a962d154700e870c64/ultralytics/data/utils.py#L586
-
-    dataset = build_yolo_dataset(
-        cfg=cfg,
-        img_path=imgs_path,  # Path to the folder containing the images
-        batch=args.batch_size,
-        data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
-        mode='test',  # This is for disabling data augmentation
-        rect=False,
-        stride=32,
-    )
+    if filtered_dataset:
+        dataset = build_filtered_yolo_dataset(
+            cfg=cfg,
+            img_path=imgs_path,  # Path to the folder containing the images
+            batch=args.batch_size,
+            data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
+            mode='test',  # This is for disabling data augmentation
+            rect=False,
+            stride=32,
+        )
+    else:
+        dataset = build_yolo_dataset(
+            cfg=cfg,
+            img_path=imgs_path,  # Path to the folder containing the images
+            batch=args.batch_size,
+            data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
+            mode='test',  # This is for disabling data augmentation
+            rect=False,
+            stride=32,
+        )
 
     # from ultralytics.yolo.utils import colorstr
     # dataset = YOLODataset(
