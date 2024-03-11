@@ -33,3 +33,7 @@ You have to modify [default.yaml](yolo/cfg/default.yaml) config, adding the new 
     else:
         return build_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, rect=mode == 'val', stride=gs)
     ```
+
+    ## OWOD 
+
+    For the addition of the OWOD benchmark and to not force the copying of all the COCO and Pascal VOC datasets to the OWOD folder, we modified the method ```get_img_files``` from [BaseDataset](yolo/data/build.py) to catch the parent path from the ```path``` variable inside the ```.yaml``` files of the datasets configuration instead of inferring it by taking the parent of the ```.txt``` file where the paths are being taking from (```train.txt``` for example).
