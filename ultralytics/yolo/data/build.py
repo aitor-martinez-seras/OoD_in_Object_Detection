@@ -99,7 +99,7 @@ def build_filtered_yolo_dataset(cfg, img_path, batch, data, mode='train', rect=F
         imgsz=cfg.imgsz,
         batch_size=batch,
         augment=mode == 'train',  # augmentation
-        hyp=cfg,  # TODO: probably add a get_hyps_from_cfg function
+        hyp=cfg,
         rect=cfg.rect or rect,  # rectangular batches
         cache=cfg.cache or None,
         single_cls=cfg.single_cls or False,

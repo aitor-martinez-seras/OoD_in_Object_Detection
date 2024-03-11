@@ -4,6 +4,9 @@
 task: detect  # YOLO task, i.e. detect, segment, classify, pose
 mode: train  # YOLO mode, i.e. train, val, predict, export, track, benchmark
 
+# OWOD settings --------------------------------------------------------------------------------------------------------
+owod_task:  # OWOD task, i.e. t1, t2,... by default not activated
+
 # Train settings -------------------------------------------------------------------------------------------------------
 model:  # path to model file, i.e. yolov8n.pt, yolov8n.yaml
 data:  # path to data file, i.e. coco128.yaml

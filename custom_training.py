@@ -32,6 +32,7 @@ class SimpleArgumentParser(Tap):
     do_not_val_during_training: bool = False  # If passed, the model is NOT validated during training.
     model_path: str = ''  # Relative path to the model you want to use as a starting point. Deactivates using sizes.
     val_only: bool = False  # If passed, the model is only validated and not trained.
+    owod_task: Literal["", "t1", "t2", "t3"] = ""  # OWOD task to train on. 
 
     def configure(self):
         self.add_argument("-e", "--epochs", required=False)
@@ -41,6 +42,7 @@ class SimpleArgumentParser(Tap):
     def process_args(self):
         if not self.epochs:
             assert self.val_only, "You must pass the number of epochs if you are not only validating."
+
         if self.model_path:
             print('Loading model from', self.model_path)
             print('Ignoring args --model --from_scratch')
@@ -50,11 +52,14 @@ class SimpleArgumentParser(Tap):
             if self.model == '':
                 raise ValueError("You must pass a model size.")
         
-
+        if 'owod' in self.dataset:
+            if self.owod_task == '':
+                raise ValueError("You must pass a OWOD task")
+        
 
 def main():
 
-    # Workaround for the SSL error
+    # Workaround for the SSL error when downloading weights or datasets
     import ssl
     ssl._create_default_https_context = ssl._create_stdlib_context
 
@@ -64,7 +69,14 @@ def main():
 
     # Dataset selection
     yaml_file = f"{args.dataset}.yaml"
-    project_name = 'TAO' if 'tao' in args.dataset else 'COCO'
+    if 'tao_coco' in args.dataset:
+        project_name = 'TAO'
+    elif 'owod' in args.dataset:
+        project_name = 'OWOD'
+    elif 'coco' in args.dataset:
+        project_name = 'COCO'
+    else:
+        raise ValueError("The dataset must be one of the following: tao_coco, owod, coco")
     # dataset_info = yaml_load(ROOT / 'ultralytics/yolo/cfg' / yaml_file)
     # number_of_classes = len(dataset_info['names'])
     
@@ -84,7 +96,10 @@ def main():
             string_for_folder = "pretrained"
 
     # Name of the folder to save the model, logs, etc.
-    folder_name = f'{NOW}_{args.dataset}_yolov8{args.model}_{string_for_folder}'
+    if project_name == 'OWOD':
+        folder_name = f'{NOW}_{args.dataset}_{args.owod_task}_yolov8{args.model}_{string_for_folder}'
+    else:
+        folder_name = f'{NOW}_{args.dataset}_yolov8{args.model}_{string_for_folder}'
 
     # TODO
     if args.freeze_backbone:
@@ -121,6 +136,7 @@ def main():
             data=yaml_file,
             cfg=f"{args.config}.yaml",  # https://docs.ultralytics.com/es/usage/cfg/
             project=f'runs_{project_name}',
+            name=folder_name,
             lr0=args.lr,
             lrf=args.lrf,
             cos_lr=args.cos_lr,
@@ -130,10 +146,10 @@ def main():
             mixup=0.0,
             close_mosaic=args.close_mosaic,
             workers=args.workers,
-            name=folder_name,
             plots=True,
             val=not args.do_not_val_during_training,
             val_every=args.val_every,
+            owod_task=args.owod_task,
         )
 
         # Save the arguments used to a file
