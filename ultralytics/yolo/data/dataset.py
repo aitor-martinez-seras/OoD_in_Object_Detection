@@ -280,6 +280,15 @@ class SemanticDataset(BaseDataset):
 
 
 class FilteredYOLODataset(YOLODataset):
+    """
+    Dataset class for loading object detection labels in YOLO format with reduced number of classes
+    with respect to the original dataset. This class must be defined in the corresponding YAML file 
+    of the dataset. The number of classes to be used must be defined in the 'names' attribute of the dataset.
+    In case of OWOD type datasets, the 'coco_to_owod_mapping' attribute must be defined in the dataset YAML file to 
+    map the COCO classes to the OWOD classes. Also, the tasks .txt files must be defined in the 'owod' folder of the
+    'datasets_utils' folder. Each .txt shows the images that are part of the task, being each line of the .txt the name
+    of the image file without the extension and without the path.
+    """
 
     def __init__(self, *args, data=None, use_segments=False, use_keypoints=False, **kwargs):
         super().__init__(*args, data=data, use_segments=use_segments, use_keypoints=use_keypoints, **kwargs)
