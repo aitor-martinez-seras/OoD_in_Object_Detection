@@ -9,6 +9,9 @@ timestamp=$(date +%Y%m%d-%H%M%S)
 nohup python custom_training.py -e 500 --lr 0.001 --lrf 0.1 --owod_task t1 --model s --devices 1 --dataset owod --batch_size 16 -cl_ms 5 --workers 15 --val_every 5 --from_scratch > logs/{$timestamp}_nohup_yolov8n_OWOD_t1_scratch.log 2>&1 &
 nohup python custom_training.py -e 300 --lr 0.005 --lrf 0.05 --owod_task t1 --model l --devices 2 --dataset owod --batch_size 16 -cl_ms 5 --workers 12 --val_every 5 --from_scratch > logs/{$timestamp}_nohup_yolov8l_OWOD_t1_scratch_lr0005.log 2>&1 &
 nohup python custom_training.py -e 300 --lr 0.001 --lrf 0.1 --owod_task t1 --model l --devices 3 --dataset owod --batch_size 16 -cl_ms 5 --workers 12 --val_every 5 --from_scratch > logs/{$timestamp}_nohup_yolov8l_OWOD_t1_scratch_lr0001.log 2>&1 &
+nohup python custom_training.py -e 300 --lr 0.0005 --lrf 0.1 --owod_task t1 --model l --devices 2 --dataset owod --batch_size 16 -cl_ms 5 --workers 12 --val_every 5 --from_scratch > logs/{$timestamp}_nohup_yolov8l_OWOD_t1_scratch_lr00005.log 2>&1 &
+nohup python custom_training.py -e 300 --cos_lr --lr 0.001 --lrf 0.1 --owod_task t1 --model l --devices 1 --dataset owod --batch_size 16 -cl_ms 5 --workers 12 --val_every 5 --from_scratch > logs/{$timestamp}_nohup_yolov8l_OWOD_t1_scratch_lr0001_cosineLR.log 2>&1 &
+
 
 
 ## Validation ##

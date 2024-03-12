@@ -1,7 +1,5 @@
 from pathlib import Path
 from datetime import datetime
-import argparse
-import json
 from typing import Literal, List
 
 from tap import Tap
@@ -64,7 +62,7 @@ def main():
     ssl._create_default_https_context = ssl._create_stdlib_context
 
     # Constants
-    ROOT = Path().cwd()  # Assumes this script is in the root of the project
+    ROOT = Path(__file__).parent  # Assumes this script is in the root of the project
     NOW = datetime.now().strftime("%Y%m%d_%H%M")
 
     # Dataset selection
