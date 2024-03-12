@@ -4,6 +4,9 @@ from pathlib import Path
 from datetime import datetime
 from typing import Type
 import argparse
+from typing import Literal, List, Tuple
+
+from tap import Tap
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,16 +15,20 @@ import torch
 import log
 from ultralytics import YOLO
 from ultralytics.yolo.data import build_dataloader
+from ultralytics.yolo.data import BaseDataset
+from ultralytics.yolo.data.build import InfiniteDataLoader
+
 
 from ood_utils import get_measures, configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, ODIN, \
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride
 
-from data_utils import read_json, write_json, create_YOLO_dataset_and_dataloader, build_dataloader, create_TAO_dataset_and_dataloader
+from data_utils import read_json, write_json, load_dataset_and_dataloader
 
 
 NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
-STORAGE_PATH = Path('storage')
-PRUEBAS_ROOT_PATH = Path('pruebas')
+ROOT = Path(__file__).parent  # Assumes this script is in the root of the project
+STORAGE_PATH = ROOT / 'storage'
+PRUEBAS_ROOT_PATH = ROOT / 'pruebas'
 
 IOU_THRESHOLD = 0.5
 CONF_THRESHOLD = 0.15
@@ -30,26 +37,55 @@ OOD_METHOD_CHOICES = ['MSP', 'ODIN', 'Energy', 'Mahalanobis', 'GradNorm','RankFe
                       'GAP_L2_cl_stride']
 
 
-def arg_parser():
-    parser = argparse.ArgumentParser()
+# parser.add_argument("--in_datadir", help="Path to the in-distribution data folder.")
+# parser.add_argument("--out_datadir", help="Path to the out-of-distribution data folder.")
+class SimpleArgumentParser(Tap):
+    
+    device: int  # Device to use for training on GPU. Indicate more than one to use multiple GPUs. Use -1 for CPU.
+    model: Literal["n", "s", "m", "l", "x"]  # Which variant of the model YOLO to use
+    model_path: str = ''  # Relative path to the model you want to use as a starting point. Deactivates using sizes.
+    workers: int = 2  # Number of background threads used to load data.
+    batch_size: int = 16  # Batch size.
+    logdir: str = 'logs'  # Where to log test info (small).
+    name: str = 'prueba'  # Name of this run. Used for monitoring and checkpointing
+    # Datasets
+    ind_dataset: str  # Dataset to use for training and validation
+    ind_split: Literal['train', 'val', 'test'] = 'train'  # Split to use in the in-distribution dataset
+    ood_dataset: str  # Dataset to use for OoD detection
+    ood_split: Literal['train', 'val', 'test'] = 'val'  # Split to use in the out-of-distribution dataset
+    owod_task_ind: Literal["", "t1", "t2", "t3"] = ""  # OWOD task to use in the in-distribution dataset
+    owod_task_ood: Literal["", "t1", "t2", "t3"] = ""  # OWOD task to use in the out-of-distribution dataset
+    # OOD related
+    ood_method: str
+    # ODIN and Energy
+    temperature: int = 1000
+    epsilon_odin: float = 0.0
+    visualize_oods: bool = False  # visualize the OoD detection
+    compute_metrics: bool = False  # compute the metrics
+    load_ind_activations: bool = False  # load in-distribution scores from disk
+    load_clusters: bool = False  # load clusters from disk
+    load_thresholds: bool = False  # load thresholds from disk
+    
+    def configure(self):
+        self.add_argument("-m", "--model", required=False)
+        self.add_argument('--ood_method', choices=OOD_METHOD_CHOICES, required=True, help='OOD detection method to use')
 
-    parser.add_argument("--workers", type=int, default=0,
-                        help="Number of background threads used to load data.")
+    def process_args(self):
 
-    parser.add_argument("--logdir", default='logs',
-                        help="Where to log test info (small).")
-    parser.add_argument("--batch-size", type=int, default=8,
-                        help="Batch size.")
-    parser.add_argument("--name", default='prueba',
-                        help="Name of this run. Used for monitoring and checkpointing.")
+        if self.model_path:
+            print('Loading model from', self.model_path)
+            print('Ignoring args --model --from_scratch')
+            self.from_scratch = False
+            self.model = ''
+        else:
+            if self.model == '':
+                raise ValueError("You must pass a model size.")
+        
+        if not self.visualize_oods and not self.compute_metrics:
+            raise ValueError("You must pass either visualize_oods or compute_metrics")
 
-    parser.add_argument("--model", default="YOLO", help="Which variant to use")
-    parser.add_argument("--model_path", type=str, help="Path to the model you want to test")
 
-    return parser
-
-
-def select_ood_detection_method(args) -> Type[OODMethod]:
+def select_ood_detection_method(args: SimpleArgumentParser) -> Type[OODMethod]:
     """
     Select the OOD method to use for the evaluation.
     """
@@ -67,8 +103,6 @@ def select_ood_detection_method(args) -> Type[OODMethod]:
         return GAPL2DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=CONF_THRESHOLD)
     else:
         raise NotImplementedError("Not implemented yet")
-
-
 
 
 def obtain_thresholds_for_ood_detection_method(ood_method: Type[OODMethod], model, device, in_loader, logger, args):
@@ -162,140 +196,55 @@ def run_eval(ood_method: OODMethod, model, device, in_loader, ood_loader, logger
     logger.flush()
 
 
-def main(args):
-    print('----------------------------')
-    print('****************************')
-    print('****************************')
-    print('****************************')
-    
+def main(args: SimpleArgumentParser):
+    print('---------------------------- OOD Detection ----------------------------')    
     # Setup logger
     logger = log.setup_logger(args)
 
     # TODO: This is for reproducibility 
     # torch.backends.cudnn.benchmark = True
 
-    # logger.warning('Changing following enviroment variables:')
-    # os.environ['YOLO_VERBOSE'] = 'False'
-    gpu_number = str(args.device)
-    os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
-    logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
-    device = 'cuda:0'
-
-    if args.ood_method == 'GradNorm':
-        args.batch = 1
-        logger.warning(f'Batch size changed to {args.batch} as using GradNorm')
-
-    # Load ID data and OOD data
-    # TODO: Aqui tengo que meter algo que compruebe que el dataset esta como YAML file
-    #if yaml_file_exists('coco.yaml'):
-    
-
-    ### OAK dataset ###
-    if False:
-        ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader(
-            'OAK_full.yaml',
-            args,
-            data_split='train',
-        )
-        if False:
-            ood_dataset, ood_dataloader = create_YOLO_dataset_and_dataloader(
-                'VisDrone.yaml', 
-                args=args,
-                data_split='val',
-            )
-        else:
-            # ood_dataset = SOS_BaseDataset(
-            #     imgs_path='/home/tri110414/nfs_home/datasets/street_obstacle_sequences/raw_data/',
-            #     ann_path='/home/tri110414/nfs_home/datasets/street_obstacle_sequences/val_annotations.json',
-            #     imgsz=640
-            # )
-
-            ood_dataset = OAKDataset(
-                imgs_path='/home/tri110414/nfs_home/datasets/OAK/val/Raw',
-                ann_path='/home/tri110414/nfs_home/datasets/OAK/val/val_annotations_coco.json',
-                imgsz=1152
-            )
-
-            ood_dataloader = build_dataloader(
-                ood_dataset,
-                batch=args.batch_size,
-                workers=args.num_workers,
-                shuffle=False,
-                rank=-1
-            )
-
-    ### TAO dataset ###
-    if True:
-        # ind_dataset = TAODataset(
-        #     imgs_path='/home/tri110414/nfs_home/datasets/TAO/frames/train',
-        #     ann_path='/home/tri110414/nfs_home/datasets/TAO/annotations/train.json',
-        #     imgsz=1152
-        # )
-
-        # ind_dataloader = build_dataloader(
-        #     ind_dataset,
-        #     batch=args.batch_size,
-        #     workers=args.num_workers,
-        #     shuffle=False,
-        #     rank=-1
-        # )
-
-        # # ood_dataset = TAODataset(
-        # #     imgs_path='/home/tri110414/nfs_home/datasets/TAO/frames/train',
-        # #     ann_path='/home/tri110414/nfs_home/datasets/TAO/annotations/train.json',
-        # #     imgsz=1152
-        # # )
-
-        # ood_dataloader = build_dataloader(
-        #     ind_dataset,  # TODO: Change this to the OOD dataset
-        #     batch=args.batch_size,
-        #     workers=args.num_workers,
-        #     shuffle=False,
-        #     rank=-1
-        # )
-
-        ind_dataset, ind_dataloader = create_TAO_dataset_and_dataloader(
-            'tao_coco.yaml',
-            args,
-            data_split='train',
-        )
-
-        ood_dataset, ood_dataloader = create_TAO_dataset_and_dataloader(
-            'tao_coco.yaml',
-            args,
-            data_split='train',
-        )
+    # Set device
+    if args.device == -1:
+        device = 'cpu'
     else:
-        # COCO
-        ind_dataset, ind_dataloader = create_YOLO_dataset_and_dataloader(
-            'coco.yaml',
-            args,
-            data_split='train',
-        )
+        gpu_number = str(args.device)
+        os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
+        logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
+        device = 'cuda:0'
 
-        ood_dataset, ood_dataloader = create_YOLO_dataset_and_dataloader(
-            'coco.yaml',
-            args,
-            data_split='val',
-        )
+    # In the case of GradNorm, the batch size must be 1 to enable the method
+    if args.ood_method == 'GradNorm':
+        args.batch_size = 1
+        logger.warning(f'Batch size changed to {args.batch_size} as using GradNorm')
 
-
-    # TODO: usar el argparser para elegir el modelo que queremos cargar
-    model_to_load = 'yolov8n.pt'
-
-    logger.info(f"Loading model {model_to_load} in {args.device}")
-
-    logger.info(f"IoU threshold set to {IOU_THRESHOLD}")
+    # Load datasets
+    ind_dataset, ind_dataloader = load_dataset_and_dataloader(
+        dataset_name=args.ind_dataset,
+        data_split=args.ind_split,
+        batch_size=args.batch_size,
+        workers=args.workers,
+        owod_task=args.owod_task_ind
+    )
+    ood_dataset, ood_dataloader = load_dataset_and_dataloader(
+        dataset_name=args.ood_dataset,
+        data_split=args.ood_split,
+        batch_size=args.batch_size,
+        workers=args.workers,
+        owod_task=args.owod_task_ood
+    )
 
     # Load YOLO model
-    # TODO: add different YOLO models
-    model = YOLO(model_to_load) 
-    # state_dict = torch.load(args.model_path)
-    # model.load_state_dict_custom(state_dict['model'])
+    if args.model_path:
+        model_weights_path = ROOT / args.model_path
+        logger.info(f"Loading model from {args.model_path} in {args.device}")
+        model = YOLO(model_weights_path, task='detect')        
+    else:
+        model_to_load = f'yolov8{args.model}.pt'
+        logger.info(f"Loading model {model_to_load} in {args.device}")
+        model = YOLO(model_to_load) 
 
-    # TODO: Unused till we implement GradNorm
-    # if args.ood_method != 'GradNorm':
-    #     model = torch.nn.DataParallel(model)
+    logger.info(f"IoU threshold set to {IOU_THRESHOLD}")
 
     # Load the OOD detection method
     ood_method = select_ood_detection_method(args)
@@ -323,43 +272,4 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = arg_parser()
-    
-    parser.add_argument('-d', '--device', default=0, type=int, help='-1 for cpu or a number for the index of the GPU to use')
-    parser.add_argument('-b', '--batch_size', default=4, type=int, help='batch size to use')
-    parser.add_argument('-n_w', '--num_workers', default=1, type=int, help='number of workers to use in dataloader')
-    parser.add_argument('-v', '--visualize_oods', action='store_true', help='visualize the OoD detection')
-    parser.add_argument('--load_ind_activations', action='store_true', help='load in-distribution scores from disk')
-    parser.add_argument('--load_clusters', action='store_true', help='load clusters from disk')
-    parser.add_argument('--load_thresholds', action='store_true', help='load thresholds from disk')
-    # parser.add_argument("--in_datadir", help="Path to the in-distribution data folder.")
-    # parser.add_argument("--out_datadir", help="Path to the out-of-distribution data folder.")
-    
-    parser.add_argument('--ood_method', choices=OOD_METHOD_CHOICES, required=True, help='OOD detection method to use')
-
-    # arguments for ODIN
-    parser.add_argument('--temperature_odin', default=1000, type=int,
-                        help='temperature scaling for odin')
-    parser.add_argument('--epsilon_odin', default=0.0, type=float,
-                        help='perturbation magnitude for odin')
-
-    # arguments for Energy and ODIN
-    parser.add_argument('--temperature', default=1, type=int,
-                        help='temperature scaling for energy')
-    """
-    # arguments for Mahalanobis
-    parser.add_argument('--mahalanobis_param_path', default='checkpoints/finetune/tune_mahalanobis',
-                        help='path to tuned mahalanobis parameters')
-
-    # arguments for GradNorm
-    parser.add_argument('--temperature_gradnorm', default=1, type=float,
-                        help='temperature scaling for GradNorm')
-    # arguments for React
-    parser.add_argument('--temperature_react', default=1, type=float,
-                        help='temperature scaling for React')
-    # arguments for RankFeat
-    parser.add_argument('--temperature_rankfeat', default=1, type=float,
-                        help='temperature scaling for RankFeat')
-    """
-    print('******************************************')
-    main(parser.parse_args())
+    main(SimpleArgumentParser().parse_args())

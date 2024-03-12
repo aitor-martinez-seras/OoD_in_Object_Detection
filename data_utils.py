@@ -13,7 +13,7 @@ from ultralytics.yolo.data.utils import check_det_dataset
 from ultralytics.yolo.data.build import build_yolo_dataset, build_dataloader, build_tao_dataset, build_filtered_yolo_dataset
 from ultralytics.yolo.utils import DEFAULT_CFG
 from ultralytics.yolo.cfg import get_cfg
-from ultralytics.yolo.data import YOLODataset
+from ultralytics.yolo.data import YOLODataset, BaseDataset
 from ultralytics.yolo.data.build import InfiniteDataLoader
 
 def segmentation_to_bbox(segmentation_img: Image, seg_value: int):
@@ -77,68 +77,61 @@ def create_dataloader(dataset, args):
     return dataloader
 
 
-def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, args, data_split: str,
-                                       stride: int = 32, fraction: float = 1.0, filtered_dataset: bool = False):
+def load_dataset_and_dataloader(dataset_name, data_split: str, batch_size: int,
+                                workers: int, owod_task='') -> Tuple[BaseDataset, InfiniteDataLoader]:
 
-    # TODO: En overrides se definirian ciertos parametros que se quieran tocar de la configuracion por defecto,
-    # de tal forma que get_cfg() se encarga de coger esa configuracion por defecto y sobreescribirla con 
-    # lo que nosotros hayamos definido en overrides. Lo mejor para definir estos overrides es sacarlos tanto de
-    # otro archivo de configuracion que nosotros cargemos como queramos (desde un YAML o de un script de python)
-    # como sacarlo del argparser
-    overrides = {}
-    cfg = get_cfg(DEFAULT_CFG, overrides=overrides)
-
-    data_dict = check_det_dataset(dataset_yaml_file_name_or_path)
+    # Get dataset imgs path
+    data_dict = check_det_dataset(dataset_name)
     imgs_path = data_dict[data_split]
+    type_of_YOLO_dataset = data_dict.get('dataset_class', 'YOLODataset')
 
     # TODO: Split train dataset into two subsets, one for modeling the in-distribution 
     #   and the other for defining the thresholds using 
     #   https://github.com/ultralytics/ultralytics/blob/437b4306d207f787503fa1a962d154700e870c64/ultralytics/data/utils.py#L586
-    if filtered_dataset:
-        dataset = build_filtered_yolo_dataset(
-            cfg=cfg,
-            img_path=imgs_path,  # Path to the folder containing the images
-            batch=args.batch_size,
-            data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
-            mode='test',  # This is for disabling data augmentation
-            rect=False,
-            stride=32,
-        )
-    else:
-        dataset = build_yolo_dataset(
-            cfg=cfg,
-            img_path=imgs_path,  # Path to the folder containing the images
-            batch=args.batch_size,
-            data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
-            mode='test',  # This is for disabling data augmentation
-            rect=False,
-            stride=32,
-        )
+    
+    # Load config
+    overrides = {}
+    if owod_task:
+        overrides["owod_task"] = owod_task
+    cfg = get_cfg(DEFAULT_CFG, overrides=overrides)
 
-    # from ultralytics.yolo.utils import colorstr
-    # dataset = YOLODataset(
-    #     img_path=imgs_path,
-    #     imgsz=cfg.imgsz,
-    #     batch_size=batch_size,
-    #     augment=False,  # We dont want to augment the data
-    #     hyp=cfg,  # TODO: probably add a get_hyps_from_cfg function
-    #     rect=cfg.rect,  # rectangular batches
-    #     cache=cfg.cache or None,
-    #     single_cls=cfg.single_cls or False,
-    #     stride=int(stride),
-    #     #pad=0.0 if mode == 'train' else 0.5,
-    #     pad=0.5,
-    #     prefix=colorstr(f'test: '),
-    #     use_segments=cfg.task == 'segment',
-    #     use_keypoints=cfg.task == 'pose',
-    #     classes=cfg.classes,
-    #     data=data_dict,
-    #     fraction=fraction)
+    # Select dataset
+    if 'tao' in dataset_name:
+        dataset = build_tao_dataset(
+            dataset = build_tao_dataset(
+            cfg=cfg,
+            img_path=imgs_path,  # Path to the folder containing the images
+            batch=batch_size,
+            data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
+            mode='test',  # This is for disabling data augmentation
+    )
+        )
+    elif 'coco' in dataset_name:
+        if type_of_YOLO_dataset == 'FilteredYOLODataset':
+            dataset = build_filtered_yolo_dataset(
+                cfg=cfg,
+                img_path=imgs_path,  # Path to the folder containing the images
+                batch=batch_size,
+                data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
+                mode='test',  # This is for disabling data augmentation
+            )
+        elif type_of_YOLO_dataset == 'YOLODataset':
+            dataset = build_yolo_dataset(
+                cfg=cfg,
+                img_path=imgs_path,  # Path to the folder containing the images
+                batch=batch_size,
+                data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
+                mode='test',  # This is for disabling data augmentation
+            )
+        else:
+            raise ValueError(f"Wrong dataset class {type_of_YOLO_dataset} in yaml file")
+    else:
+        raise ValueError(f"Wrong dataset name {dataset_name}")
 
     dataloader = build_dataloader(
         dataset=dataset,
-        batch=args.batch_size,
-        workers=args.workers,
+        batch=batch_size,
+        workers=workers,
         shuffle=False,
         rank=-1  # For distributed computing, leave -1 if no distributed computing is done
     )
@@ -146,8 +139,8 @@ def create_YOLO_dataset_and_dataloader(dataset_yaml_file_name_or_path, args, dat
     return dataset, dataloader
 
 
-def create_TAO_dataset_and_dataloader(dataset_yaml_file_name_or_path, args, data_split: str,
-                                       stride: int = 32, fraction: float = 1.0,) -> Tuple[YOLODataset, InfiniteDataLoader]:
+def create_TAO_dataset_and_dataloader(dataset_name, args, data_split: str, batch_size: int, workers: int,
+                                       stride: int = 32, fraction: float = 1.0,) -> Tuple[BaseDataset, InfiniteDataLoader]:
 
     # TODO: En overrides se definirian ciertos parametros que se quieran tocar de la configuracion por defecto,
     # de tal forma que get_cfg() se encarga de coger esa configuracion por defecto y sobreescribirla con 
@@ -157,7 +150,7 @@ def create_TAO_dataset_and_dataloader(dataset_yaml_file_name_or_path, args, data
     overrides = {}
     cfg = get_cfg(DEFAULT_CFG, overrides=overrides)
 
-    data_dict = check_det_dataset(dataset_yaml_file_name_or_path)
+    data_dict = check_det_dataset(dataset_name)
     imgs_path = data_dict[data_split]
 
     # TODO: Split train dataset into two subsets, one for modeling the in-distribution 
@@ -167,7 +160,7 @@ def create_TAO_dataset_and_dataloader(dataset_yaml_file_name_or_path, args, data
     dataset = build_tao_dataset(
         cfg=cfg,
         img_path=imgs_path,  # Path to the folder containing the images
-        batch=args.batch_size,
+        batch=batch_size,
         data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
         mode='test',  # This is for disabling data augmentation
         rect=False,
