@@ -124,6 +124,7 @@ class BaseDataset(Dataset):
     def update_labels(self, include_class: Optional[list]):
         """include_class, filter labels to include only these classes (optional)."""
         include_class_array = np.array(include_class).reshape(1, -1)
+        count_removed_boxes = 0
         for i in range(len(self.labels)):
             if include_class is not None:
                 cls = self.labels[i]['cls']
@@ -131,6 +132,7 @@ class BaseDataset(Dataset):
                 segments = self.labels[i]['segments']
                 keypoints = self.labels[i]['keypoints']
                 j = (cls == include_class_array).any(1)
+                count_removed_boxes += len(j) - j.sum()  # To count the number of removed instances
                 self.labels[i]['cls'] = cls[j]
                 self.labels[i]['bboxes'] = bboxes[j]
                 if segments:
@@ -139,6 +141,8 @@ class BaseDataset(Dataset):
                     self.labels[i]['keypoints'] = keypoints[j]
             if self.single_cls:
                 self.labels[i]['cls'][:, 0] = 0
+        if count_removed_boxes > 0:  # Print the number of removed instances only if there are any
+            print(f'Removed {count_removed_boxes} boxes from labels to include only the number of classes defined')
 
     def load_image(self, i):
         """Loads 1 image from dataset index 'i', returns (im, resized hw)."""
