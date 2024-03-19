@@ -6,7 +6,7 @@ venv
 venv-yolo
 prueba*
 pruebas/
-.vscode/
+.vscode/launch.json
 screenlog.0
 OAK/
 runs/
