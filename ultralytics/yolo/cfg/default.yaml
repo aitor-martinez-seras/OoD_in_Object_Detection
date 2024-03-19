@@ -6,6 +6,7 @@ mode: train  # YOLO mode, i.e. train, val, predict, export, track, benchmark
 
 # OWOD settings --------------------------------------------------------------------------------------------------------
 owod_task:  # OWOD task, i.e. t1, t2,... by default not activated
+number_of_classes: 0  # number of classes in the OWOD task. 0 means to use the number of classes in the dataset
 
 # Train settings -------------------------------------------------------------------------------------------------------
 model:  # path to model file, i.e. yolov8n.pt, yolov8n.yaml
