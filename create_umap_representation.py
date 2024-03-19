@@ -13,13 +13,14 @@ from torchvision.utils import draw_bounding_boxes
 from umap import UMAP
 from matplotlib import pyplot as plt
 import numpy as np
+from sklearn.decomposition import PCA
 
 from ultralytics import YOLO
 from ultralytics.yolo.utils.callbacks import tensorboard
 from ultralytics.yolo.utils import yaml_load
 from ultralytics.yolo.utils import DEFAULT_CFG_PATH
 
-from data_utils import read_json, write_json, create_YOLO_dataset_and_dataloader, build_dataloader, create_TAO_dataset_and_dataloader
+from data_utils import read_json, write_json, load_dataset_and_dataloader, create_TAO_dataset_and_dataloader
 from ood_utils import ActivationsExtractor, configure_extra_output_of_the_model, OODMethod
 
 # Constants
@@ -33,7 +34,12 @@ class SimpleArgumentParser(Tap):
     device: int  # Device to use for training on GPU. Indicate more than one to use multiple GPUs. Use -1 for CPU.
     number_of_known_classes: int  # Number of known classes
     one_umap_per_stride: bool  # If True, one UMAP per stride. If False, all strides in one UMAP
+    mode: Literal['umap', 'pca_umap', 'pca']  # Mode to use for the UMAP representation
     # Optional arguments
+    n_neighbors: int = 20  # Number of neighbors to use for UMAP
+    metric: Literal["euclidean", "manhattan", "cosine"] = "cosine"  # Metric to use for UMAP
+    min_dist: float = 0.01  # Minimum distance to use for UMAP
+    target_weight: float = 0.5  # Target weight to use for UMAP
     grid_search_umap: bool = False  # If True, grid search for UMAP parameters
     dataset: str = "tao_coco"
     split: Literal["train", "val", "test"] = "val"  # Which split of the dataset to use
@@ -49,7 +55,475 @@ class SimpleArgumentParser(Tap):
         #self.add_argument("--grid_search_umap", action="store_true")
 
 
-### GAP RoI Align ###
+def create_and_plot_one_stride(known_activations_one_stride, known_labels_one_stride, unknown_activations_one_stride, unknown_labels_one_stride,
+                               CLASSES, known_classes, unknown_classes, 
+                               n_neighbors, metric, min_dist, target_weight, save_folder,
+                               mode, stride):
+        params = {
+            'n_neighbors': n_neighbors,
+            'metric': metric,
+            'min_dist': min_dist,
+            'target_weight': target_weight
+        }
+        print(f" -- Params: {params} --")
+        # Create a new UMAP instance with the current set of parameters
+        print(f"Fitting representations...")
+        if mode == 'umap':
+            my_umap = UMAP(n_components=2, n_neighbors=n_neighbors, metric=metric, min_dist=min_dist, target_weight=target_weight)
+            embedding = my_umap.fit_transform(known_activations_one_stride, y=known_labels_one_stride)
+        elif mode == 'pca_umap':
+            pca = PCA(n_components=50)
+            my_umap = UMAP(n_components=2, n_neighbors=n_neighbors, metric=metric, min_dist=min_dist, target_weight=target_weight)
+            filtered_known_activations_pca = pca.fit_transform(known_activations_one_stride)
+            embedding = my_umap.fit_transform(filtered_known_activations_pca, y=known_labels_one_stride)
+        elif mode == 'pca':
+            pca = PCA(n_components=2)
+            embedding = pca.fit_transform(known_activations_one_stride)
+        print(f"Representations fitted!")
+
+        # Transform the unknown classes data
+        print(f"Transforming UMAP unknown representations...")
+        if mode == 'umap':
+            embedding_unknown = my_umap.transform(unknown_activations_one_stride)
+        elif mode == 'pca_umap':
+            unknown_activations_pca = pca.transform(unknown_activations_one_stride)
+            embedding_unknown = my_umap.transform(unknown_activations_pca)
+        elif mode == 'pca':
+            embedding_unknown = pca.transform(unknown_activations_one_stride)
+        print(f"Unknown representations transformed!")
+
+        print(f"Saving KNOWN representation...")
+        fig = plt.figure(figsize=(14, 10))
+        ax = fig.add_subplot(1, 1, 1)#, projection='3d')
+        cmap = plt.cm.tab20(np.arange(40).astype(int))
+        # Represent the known classes
+        color_idx = 0  # For both known and unknown classes, to distinguish them
+        for idx_cls, cl in enumerate(known_classes):
+            plotEmbeddings = np.array([embedding[i,:] for i in range(len(embedding)) if known_labels_one_stride[i]==cl])
+            if len(plotEmbeddings)!=0:
+                ax.scatter(*plotEmbeddings.T, color=cmap[color_idx],label=CLASSES[cl],alpha=0.7)
+                color_idx = color_idx + 1
+        
+        plt.legend()
+        # Save fig with parameters in the name
+        fig.savefig(save_folder / f"{mode}_s{stride}_{params}_known.png")
+
+        # Represent the unknown classes
+        print(f"Saving UNKNOWN representation...")
+        for idx_cls, cl in enumerate(unknown_classes):
+            if idx_cls >= 15:
+                break
+            plotEmbeddings_unk = np.array([embedding_unknown[i,:] for i in range(len(embedding_unknown)) if unknown_labels_one_stride[i]==cl])
+            if len(plotEmbeddings_unk) > 50:
+                ax.scatter(*plotEmbeddings_unk.T, color=cmap[color_idx], label=CLASSES[cl], alpha=0.7, marker='s')
+                color_idx = color_idx + 1
+        
+        plt.legend()
+        # Save fig with parameters in the name
+        fig.savefig(save_folder / f"{mode}_s{stride}_{params}_unknown.png")
+        plt.close()
+        print(f"Representations saved for mode {mode} with params: {params}!")
+
+
+def main():
+
+    # Constants
+    ROOT = Path().cwd()  # Assumes this script is in the root of the project
+    FIGS_PATH = ROOT / 'figures'
+    NOW = datetime.now().strftime("%Y%m%d_%H%M")
+    # Output sizes for all yolo models for strides 8, 16 and 32 respectively
+    OUTPUT_SIZES = {
+        'n': ((10, 10), (10, 5), (5, 5)),
+        's': ((20, 20), (10, 10), (5, 5)),
+        'm': ((40, 40), (20, 20), (10, 10)),
+        'l': ((80, 80), (40, 40), (20, 20)),
+        'x': ((160, 160), (80, 80), (40, 40)),
+    }
+    o_s = 7
+    OUTPUT_SIZES = [(o_s, o_s), (o_s, o_s), (o_s, o_s)]
+    
+    # Load model
+    print('Loading model...')
+
+    ######## IMPORTANT NOTE: ###########
+    # To work with CUDA and predictions, we must define the CUDA_VISIBLE_DEVICES environment variable
+    # as Ultralytics automatically does it internally and therefore then creates a big mess of GPUs
+    device = f"cuda:{args.device}" if args.device != -1 else "cpu"
+    if device != "cpu":
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.device)
+        device = 'cuda:0'
+
+    # Load model and set the mode
+    model_folder_path = ROOT / args.model_folder
+    model = YOLO(model=model_folder_path / 'weights' / 'best.pt')
+    # Modify internal attributes of the model to obtain the desired outputs in the extra_item
+    model.model.modo = 'all_ftmaps'
+    print('Model loaded!')
+    
+    # Dataset selection
+    yaml_file = f"{args.dataset}.yaml"
+    # if 'tao' in args.dataset:
+    #     dataset, dataloader = create_TAO_dataset_and_dataloader(
+    #             yaml_file,
+    #             args=args,
+    #             data_split=args.split,
+    #             batch_size=args.batch_size,
+    #             workers=args.workers,
+    #     )
+    # elif 'coco' in args.dataset:
+    dataset, dataloader = load_dataset_and_dataloader(
+            dataset_name=args.dataset,
+            data_split=args.split,
+            batch_size=args.batch_size,
+            workers=args.workers,
+            owod_task=''
+        )
+    # else:
+    #     raise ValueError(f"Dataset {args.dataset} not supported")
+    CLASSES = dataset.data["names"]
+
+    # Define the folder path
+    folder_for_model_in_figs = FIGS_PATH / f'{model_folder_path.name}'
+    folder_for_model_in_figs.mkdir(exist_ok=True)
+    folder_to_save_figs = folder_for_model_in_figs / f'{args.dataset}_{args.split}_{args.number_of_known_classes}_classes'
+    folder_to_save_figs.mkdir(exist_ok=True)
+
+    # Process data
+    print('Extracting activations...')
+
+    # List of features per stride
+    all_feature_maps_per_stride = [[] for _ in range(3)]
+    all_cls_labels = []
+
+    # Start iterating over the data
+    number_of_batches = len(dataloader)
+    for idx_of_batch, data in enumerate(dataloader):
+        
+        if idx_of_batch % 50 == 0:
+            print(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")
+            
+        ### Prepare images and targets to feed the model ###
+        imgs = data['img'].to(device)
+        targets = OODMethod.create_targets_dict(data)
+
+        ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
+        results = model.predict(imgs, save=False, verbose=False, device=device)
+
+        ### Extract the RoI Aligned features for each target ###
+        # Create a list with 3 levels and each level with a tensor of shape [N, C, H, W]
+        ftmaps_per_level = []
+        for idx_lvl in range(3):
+            one_level_ftmaps = []
+            for i_bt in range(len(results)):
+                one_level_ftmaps.append(results[i_bt].extra_item[idx_lvl].to('cpu'))
+            ftmaps_per_level.append(torch.stack(one_level_ftmaps))
+            
+        for idx_lvl in range(3):
+            if args.one_umap_per_stride:
+                output_size = OUTPUT_SIZES[2]
+            else:
+                output_size = OUTPUT_SIZES[idx_lvl]
+            
+            # For each stride or lvl, different RoIAlign parameters
+            _bboxes = [b.to(torch.float32) for b in targets["bboxes"]]
+            roi_aligned_ftmaps_one_stride = roi_align(
+                input=ftmaps_per_level[idx_lvl],
+                boxes=_bboxes,
+                output_size=output_size,  # Output sizes for same size of features in YOLOv8n: s8(10,10), s16(10,5), s32(5,5)
+                spatial_scale=ftmaps_per_level[idx_lvl].shape[2]/imgs[0].shape[2]
+            )
+
+            # roi_aligned_ftmaps_one_stride = gap_roi_align(
+            #     input=ftmaps_per_level[idx_lvl],
+            #     boxes=_bboxes,
+            #     output_size=output_size,  # Output sizes for same size of features in YOLOv8n: s8(10,10), s16(10,5), s32(5,5)
+            #     spatial_scale=ftmaps_per_level[idx_lvl].shape[2]/imgs[0].shape[2]
+            # )
+
+            all_feature_maps_per_stride[idx_lvl].append(roi_aligned_ftmaps_one_stride)
+        # Keep track of the labels
+        all_cls_labels.append(torch.hstack(targets['cls']))
+
+        # Represent some images to check if the data is correct
+        if idx_of_batch in [0, 150, 805]:
+            for idx_img in range(5,8):
+                img = imgs[idx_img].cpu()
+                # Bounding boxes
+                img = draw_bounding_boxes(
+                    image=img,
+                    boxes=targets['bboxes'][idx_img].cpu(),
+                    labels=[CLASSES[int(lbl)] for lbl in targets['cls'][idx_img].cpu().numpy()],
+                )
+                plt.imshow(img.permute(1, 2, 0).numpy())
+                plt.savefig(folder_to_save_figs / f'example_imgs_batch_{idx_of_batch}_img_{idx_img}.png')
+                plt.close()
+
+    # To tensors
+    for i in range(len(all_feature_maps_per_stride)):
+        all_feature_maps_per_stride[i] = torch.cat(all_feature_maps_per_stride[i], dim=0)
+    all_cls_labels = torch.hstack(all_cls_labels)
+    print('Activations extracted!')
+
+    ### Create the UMAP representation ###
+    print('*** Creating UMAP representation ***')
+
+    # Define the known and unknown classes
+    known_classes = np.arange(args.number_of_known_classes)
+    unknown_classes = np.array([c for c in range(len(CLASSES)) if c not in known_classes])
+    # Convert known and unknown class indices to tensors for efficient comparison
+    known_classes_tensor = torch.tensor(known_classes, dtype=torch.long)
+    unknown_classes_tensor = torch.tensor([c for c in range(len(CLASSES)) if c not in known_classes], dtype=torch.long)
+    # Positions of known and unknown classes can be calculated more efficiently
+    positions_of_known_classes = torch.isin(all_cls_labels, known_classes_tensor)
+    positions_of_unknown_classes = torch.isin(all_cls_labels, unknown_classes_tensor)
+    print(f"Number of classes: {len(CLASSES)}")
+    print(f"Known classes: {[CLASSES[cl] for cl in known_classes]}\n")
+    print(f"Unknown classes: {[CLASSES[cl] for cl in unknown_classes]}\n")
+    
+    """
+    # Filter the classes. Flaten the activations and convert them into arrays to use UMAP
+    filtered_known_activations_per_stride = [one_stride[positions_of_known_classes].flatten(start_dim=1).numpy() for one_stride in all_feature_maps_per_stride]
+    filtered_known_labels = all_cls_labels[positions_of_known_classes].numpy()
+    filtered_unknown_activations_per_stride = [one_stride[positions_of_unknown_classes].flatten(start_dim=1).numpy() for one_stride in all_feature_maps_per_stride]
+    filtered_unknown_labels = all_cls_labels[positions_of_unknown_classes].numpy()
+    """
+
+    print('*** Creating UMAP representation ***')  # https://umap-learn.readthedocs.io/en/latest/parameters.html 
+    if args.one_umap_per_stride:
+
+        filtered_known_activations_per_stride = []
+        filtered_unknown_activations_per_stride = []
+        for one_stride_activations in all_feature_maps_per_stride:
+            # Flatten the activations for UMAP. This step can be combined with filtering to avoid redundant operations
+            flattened_activations = one_stride_activations.flatten(start_dim=1)
+            
+            # Filter and convert to numpy in one step
+            filtered_known_activations = flattened_activations[positions_of_known_classes].numpy()
+            filtered_unknown_activations = flattened_activations[positions_of_unknown_classes].numpy()
+            
+            filtered_known_activations_per_stride.append(filtered_known_activations)
+            filtered_unknown_activations_per_stride.append(filtered_unknown_activations)
+
+        # Since labels for known and unknown classes don't change across strides, you can filter them once outside the loop
+        filtered_known_labels = all_cls_labels[positions_of_known_classes].numpy()
+        filtered_unknown_labels = all_cls_labels[positions_of_unknown_classes].numpy()
+
+        # Further filter the unknown classes to extract only the 15 with the most samples
+        # This is to avoid having too many samples of unknown classes, which could make the UMAP representation less clear
+
+
+        # For all strides
+        for idx_stride in range(3):
+            print(f'- Stride {(idx_stride+1)*8} -')
+            
+            # Grid search
+            if args.grid_search_umap:
+                
+                grid_search_folder = folder_for_model_in_figs / f'grid_search_umap_{model_folder_path.name}'
+                grid_search_folder.mkdir(exist_ok=True)
+                grid_search_folder_for_dataset = grid_search_folder / f'{args.dataset}'
+                grid_search_folder_for_dataset.mkdir(exist_ok=True)
+                grid_search_folder_one_stride = grid_search_folder_for_dataset / f'stride_{(idx_stride+1)*8}'
+                grid_search_folder_one_stride.mkdir(exist_ok=True)
+
+                from itertools import product
+                umap_args_to_test = {
+                    # "n_neighbors": [5, 20, 100],
+                    # "min_dist": [0.01, 0.1, 0.5],
+                    # "target_weight": [0.2, 0.5, 0.8],
+                    # "metric": ["euclidean", "cosine"]
+                    "n_neighbors": [20],
+                    "min_dist": [0.01, 0.1],
+                    "target_weight": [0.2, 0.5, 0.8],
+                    "metric": ["manhattan", "euclidean", "cosine"]
+                }
+                # Generate all combinations of parameters
+                param_combinations = list(product(*umap_args_to_test.values()))
+                for combination in param_combinations:
+                    # Map the parameter combination to the corresponding keyword arguments
+                    params = dict(zip(umap_args_to_test.keys(), combination))
+
+                    create_and_plot_one_stride(
+                        known_activations_one_stride=filtered_known_activations_per_stride[idx_stride],
+                        known_labels_one_stride=filtered_known_labels,
+                        unknown_activations_one_stride=filtered_unknown_activations_per_stride[idx_stride],
+                        unknown_labels_one_stride=filtered_unknown_labels,
+                        CLASSES=CLASSES,
+                        known_classes=known_classes,
+                        unknown_classes=unknown_classes,
+                        n_neighbors=params['n_neighbors'],
+                        metric=params['metric'],
+                        min_dist=params['min_dist'],
+                        target_weight=params['target_weight'],
+                        save_folder=grid_search_folder_one_stride,
+                        mode=args.mode,
+                        stride=(idx_stride+1)*8
+                    )
+
+                        
+                    # print(f" -- Params: {params} --")
+                    # # Create a new UMAP instance with the current set of parameters
+                    # my_umap = UMAP(n_components=2, **params)
+                    # embedding = my_umap.fit_transform(filtered_known_activations_per_stride[idx_stride], y=filtered_known_labels)
+                    # print(f"UMAP representation fitted!")
+
+                    # # Transform the unknown classes data
+                    # print(f"Transforming UMAP unknown representations...")
+                    # embedding_unknown = my_umap.transform(filtered_unknown_activations_per_stride[idx_stride])
+                    # print(f"UMAP unknown representations transformed!")
+
+                    # print(f"Saving UMAP representation...")
+                    # fig = plt.figure(figsize=(14, 10))
+                    # ax = fig.add_subplot(1, 1, 1)#, projection='3d')
+                    
+                    # cmap = plt.cm.tab20(np.arange(40).astype(int))
+                    # # Represent the known classes
+                    # color_idx = 0  # For both known and unknown classes, to distinguish them
+                    # for idx_cls, cl in enumerate(known_classes):
+                    #     plotEmbeddings = np.array([embedding[i,:] for i in range(len(embedding)) if filtered_known_labels[i]==cl])
+                    #     if len(plotEmbeddings)!=0:
+                    #         ax.scatter(*plotEmbeddings.T, color=cmap[color_idx],label=CLASSES[cl],alpha=0.7)
+                    #         color_idx = color_idx + 1
+                    
+                    # plt.legend()
+                    # # Save fig with parameters in the name
+                    # fig.savefig(grid_search_folder_one_stride / f"umap_params_{params}_known.png")
+
+                    # # Represent the unknown classes
+                    # for idx_cls, cl in enumerate(unknown_classes):
+                    #     if idx_cls >= 15:
+                    #         break
+                    #     plotEmbeddings_unk = np.array([embedding_unknown[i,:] for i in range(len(embedding_unknown)) if filtered_unknown_labels[i]==cl])
+                    #     if len(plotEmbeddings_unk) > 50:
+                    #         ax.scatter(*plotEmbeddings_unk.T, color=cmap[color_idx], label=CLASSES[cl], alpha=0.7, marker='s')
+                    #         color_idx = color_idx + 1
+                    
+                    # plt.legend()
+                    # # Save fig with parameters in the name
+                    # fig.savefig(grid_search_folder_one_stride / f"umap_params_{params}_unknown.png")
+                    # plt.close()
+                    # print(f"UMAP saved for params: {params}!")
+                
+            # Normal execution, just one UMAP
+            else:
+
+                create_and_plot_one_stride(
+                        known_activations_one_stride=filtered_known_activations_per_stride[idx_stride],
+                        known_labels_one_stride=filtered_known_labels,
+                        unknown_activations_one_stride=filtered_unknown_activations_per_stride[idx_stride],
+                        unknown_labels_one_stride=filtered_unknown_labels,
+                        CLASSES=CLASSES,
+                        known_classes=known_classes,
+                        unknown_classes=unknown_classes,
+                        n_neighbors=args.n_neighbors,
+                        metric=args.metric,
+                        min_dist=args.min_dist,
+                        target_weight=args.target_weight,
+                        save_folder=folder_to_save_figs,
+                        mode=args.mode,
+                        stride=(idx_stride+1)*8
+                    )
+
+                # print(f"Fitting UMAP representation...")
+                # # First reduce the input to 50 dimensions with PCA
+                # from sklearn.decomposition import PCA
+                # pca = PCA(n_components=50)
+                # filtered_known_activations_pca = pca.fit_transform(filtered_known_activations_per_stride[idx_stride])
+
+                # # Create the UMAP object and fit the known classes data
+                # my_umap = UMAP(n_components=2, n_neighbors=20, metric='cosine', min_dist=0.01, target_weight=1)
+                # embedding = my_umap.fit_transform(filtered_known_activations_pca, y=filtered_known_labels)
+                # #embedding = my_umap.fit_transform(filtered_known_activations_per_stride[idx_stride], y=filtered_known_labels)
+                # print(f"UMAP representation fitted!")
+
+                # # Transform the unknown classes data
+                # print(f"Transforming UMAP unknown representations...")
+                # embedding_unknown = my_umap.transform(pca.transform(filtered_unknown_activations_per_stride[idx_stride]))
+                # #embedding_unknown = my_umap.transform(filtered_unknown_activations_per_stride[idx_stride])
+                # print(f"UMAP unknown representations transformed!")
+
+                # print(f"Saving UMAP representation...")
+                # fig = plt.figure(figsize=(14, 10))
+                # ax = fig.add_subplot(1, 1, 1)#, projection='3d')
+                
+                # cmap = plt.cm.tab20(np.arange(20).astype(int))
+                # # Represent the known classes
+                # color_idx = 0  # For both known and unknown classes, to distinguish them
+                # for idx_cls, cl in enumerate(known_classes):
+                #     plotEmbeddings = np.array([embedding[i,:] for i in range(len(embedding)) if filtered_known_labels[i]==cl])
+                #     if len(plotEmbeddings)!=0:
+                #         ax.scatter(*plotEmbeddings.T, color=cmap[color_idx],label=CLASSES[cl],alpha=0.7)
+                #         color_idx = color_idx + 1
+
+                # plt.legend()
+                # fig.savefig(folder_to_save_figs /f"umap_known_stride_{(idx_stride+1)*8}.png")
+
+                # # Represent the unknown classes
+                # for idx_cls, cl in enumerate(unknown_classes):
+                #     if idx_cls >= 15:
+                #         break
+                #     plotEmbeddings_unk = np.array([embedding_unknown[i,:] for i in range(len(embedding_unknown)) if filtered_unknown_labels[i]==cl])
+                #     if len(plotEmbeddings_unk) > 50:
+                #         ax.scatter(*plotEmbeddings_unk.T, color=cmap[color_idx], label=CLASSES[cl], alpha=0.7, marker='s')
+                #         color_idx = color_idx + 1
+                #     # ax.scatter(*plotEmbeddings_unk.T, color=cmap[color_idx], label=CLASSES[cl], alpha=0.7, marker='s')
+                #     # color_idx = color_idx + 1
+                #     # if len(plotEmbeddings_unk) > 200:
+                #         # ax.scatter(*plotEmbeddings_unk.T, color=cmap[color_idx], label=CLASSES[cl], alpha=0.7, marker='s')
+                #         # color_idx = color_idx + 1
+                
+                # plt.legend()
+                # fig.savefig(folder_to_save_figs / f"umap_unknown_stride_{(idx_stride+1)*8}.png")
+                # plt.close()
+                # print(f"UMAP representation saved!")
+
+
+    else:  # All strides in one UMAP, with different markers each stride
+        # Therefore, we have to make a big array with all the activations of all strides
+        # We also have to have a big array with the labels of all strides, by repeating the array of labels 3 times
+        raise NotImplementedError("Not implemented yet")
+
+
+if __name__ == "__main__":
+    args = SimpleArgumentParser().parse_args()
+    print(args)
+    main()
+
+
+###############################
+    # # FOR FIRST STRIDE
+
+    # # Create the UMAP object and fit the known classes data
+    # my_umap = UMAP(n_components=2,n_neighbors=20, metric='cosine',min_dist=0.01,target_weight=0.8)
+    # embedding = my_umap.fit_transform(filtered_known_activations_per_stride[0], y=filtered_known_labels)
+
+    # # Transform the unknown classes data
+    # embedding_unknown = my_umap.transform(filtered_unknown_activations_per_stride[0])
+
+    # fig = plt.figure(figsize=(14, 10))
+    # ax = fig.add_subplot(1, 1, 1)#, projection='3d')
+    
+    # cmap = plt.cm.tab20(np.arange(40).astype(int))
+    # # Represent the known classes
+    # color_idx = 0
+    # for idx_cls, cl in enumerate(known_classes):
+    #     plotEmbeddings = np.array([embedding[i,:] for i in range(len(embedding)) if filtered_known_labels[i]==cl])
+    #     if len(plotEmbeddings)!=0:
+    #         ax.scatter(*plotEmbeddings.T, color=cmap[color_idx],label=CLASSES[cl],alpha=0.7)
+    #         color_idx = color_idx + 1
+
+    # # Represent the unknown classes
+    # for idx_cls, cl in enumerate(unknown_classes):
+    #     plotEmbeddings_unk = np.array([embedding_unknown[i,:] for i in range(len(embedding_unknown)) if filtered_unknown_labels[i]==cl])
+    #     if len(plotEmbeddings_unk) > 200:
+    #         ax.scatter(*plotEmbeddings_unk.T, color=cmap[color_idx], label=CLASSES[cl],alpha=0.7, marker='s')
+    #         color_idx = color_idx + 1
+    
+    # plt.legend()
+    # fig.savefig(f"umap.png")
+    # plt.close()
+
+    ### GAP RoI Align ###
 def _bilinear_interpolate(
     input,  # [N, C, H, W]
     roi_batch_ind,  # [K]
@@ -259,382 +733,3 @@ def gap_roi_align(input, boxes, output_size, spatial_scale=1.0, sampling_ratio=-
     if not isinstance(rois, torch.Tensor):
         rois = convert_boxes_to_roi_format(rois)
     return _roi_align_global_avg_pooling(input, rois, spatial_scale, output_size[0], output_size[1], sampling_ratio, aligned)
-
-
-def main():
-
-    # Constants
-    ROOT = Path().cwd()  # Assumes this script is in the root of the project
-    FIGS_PATH = ROOT / 'figures'
-    NOW = datetime.now().strftime("%Y%m%d_%H%M")
-    # Output sizes for all yolo models for strides 8, 16 and 32 respectively
-    OUTPUT_SIZES = {
-        'n': ((10, 10), (10, 5), (5, 5)),
-        's': ((20, 20), (10, 10), (5, 5)),
-        'm': ((40, 40), (20, 20), (10, 10)),
-        'l': ((80, 80), (40, 40), (20, 20)),
-        'x': ((160, 160), (80, 80), (40, 40)),
-    }
-    o_s = 7
-    OUTPUT_SIZES = [(o_s, o_s), (o_s, o_s), (o_s, o_s)]
-    
-    # Load model
-    print('Loading model...')
-
-    ######## IMPORTANT NOTE: ###########
-    # To work with CUDA and predictions, we must define the CUDA_VISIBLE_DEVICES environment variable
-    # as Ultralytics automatically does it internally and therefore then creates a big mess of GPUs
-    device = f"cuda:{args.device}" if args.device != -1 else "cpu"
-    if device != "cpu":
-        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.device)
-        device = 'cuda:0'
-
-    # Load model and set the mode
-    model_folder_path = ROOT / args.model_folder
-    model = YOLO(model=model_folder_path / 'weights' / 'best.pt')
-    # Modify internal attributes of the model to obtain the desired outputs in the extra_item
-    model.model.modo = 'all_ftmaps'
-    print('Model loaded!')
-    
-    # Dataset selection
-    yaml_file = f"{args.dataset}.yaml"
-    if 'tao' in args.dataset:
-        dataset, dataloader = create_TAO_dataset_and_dataloader(
-                yaml_file,
-                args,
-                data_split=args.split,
-        )
-    elif 'coco' in args.dataset:
-        if 'classes' in args.dataset:
-            dataset, dataloader = create_YOLO_dataset_and_dataloader(
-                yaml_file,
-                args,
-                data_split=args.split,
-                filtered_dataset=True,
-            )
-        else:   
-            dataset, dataloader = create_YOLO_dataset_and_dataloader(
-                yaml_file,
-                args,
-                data_split=args.split,
-                filtered_dataset=False,
-            )
-    else:
-        raise ValueError(f"Dataset {args.dataset} not supported")
-    CLASSES = dataset.data["names"]
-
-    # Define the folder path
-    folder_for_model_in_figs = FIGS_PATH / f'{model_folder_path.name}'
-    folder_for_model_in_figs.mkdir(exist_ok=True)
-    folder_to_save_figs = folder_for_model_in_figs / f'{args.dataset}_{args.split}_{args.number_of_known_classes}_classes'
-    folder_to_save_figs.mkdir(exist_ok=True)
-
-    # Process data
-    print('Extracting activations...')
-
-    # List of features per stride
-    all_feature_maps_per_stride = [[] for _ in range(3)]
-    all_cls_labels = []
-
-    # Obtain the bbox format from the last transform of the dataset
-    if hasattr(dataloader.dataset.transforms.transforms[-1], "bbox_format"):
-        bbox_format = dataloader.dataset.transforms.transforms[-1].bbox_format
-    else:
-        bbox_format=dataloader.dataset.labels[0]['bbox_format']
-
-    # Start iterating over the data
-    number_of_batches = len(dataloader)
-    for idx_of_batch, data in enumerate(dataloader):
-        
-        if idx_of_batch % 50 == 0:
-            print(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")
-            
-        ### Prepare images and targets to feed the model ###
-        imgs = data['img'].to(device)
-        targets = OODMethod.create_targets_dict(data, bbox_format)
-
-        ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
-        results = model.predict(imgs, save=False, verbose=False, device=device)
-
-        ### Extract the RoI Aligned features for each target ###
-        # Create a list with 3 levels and each level with a tensor of shape [N, C, H, W]
-        ftmaps_per_level = []
-        for idx_lvl in range(3):
-            one_level_ftmaps = []
-            for i_bt in range(len(results)):
-                one_level_ftmaps.append(results[i_bt].extra_item[idx_lvl].to('cpu'))
-            ftmaps_per_level.append(torch.stack(one_level_ftmaps))
-            
-        for idx_lvl in range(3):
-            if args.one_umap_per_stride:
-                output_size = OUTPUT_SIZES[2]
-            else:
-                output_size = OUTPUT_SIZES[idx_lvl]
-            
-            # For each stride or lvl, different RoIAlign parameters
-            _bboxes = [b.to(torch.float32) for b in targets["bboxes"]]
-            roi_aligned_ftmaps_one_stride = roi_align(
-                input=ftmaps_per_level[idx_lvl],
-                boxes=_bboxes,
-                output_size=output_size,  # Output sizes for same size of features in YOLOv8n: s8(10,10), s16(10,5), s32(5,5)
-                spatial_scale=ftmaps_per_level[idx_lvl].shape[2]/imgs[0].shape[2]
-            )
-
-            # roi_aligned_ftmaps_one_stride = gap_roi_align(
-            #     input=ftmaps_per_level[idx_lvl],
-            #     boxes=_bboxes,
-            #     output_size=output_size,  # Output sizes for same size of features in YOLOv8n: s8(10,10), s16(10,5), s32(5,5)
-            #     spatial_scale=ftmaps_per_level[idx_lvl].shape[2]/imgs[0].shape[2]
-            # )
-
-            all_feature_maps_per_stride[idx_lvl].append(roi_aligned_ftmaps_one_stride)
-        # Keep track of the labels
-        all_cls_labels.append(torch.hstack(targets['cls']))
-
-        # Represent some images to check if the data is correct
-        if idx_of_batch in [0, 150, 805]:
-            for idx_img in range(5,8):
-                img = imgs[idx_img].cpu()
-                # Bounding boxes
-                img = draw_bounding_boxes(
-                    image=img,
-                    boxes=targets['bboxes'][idx_img].cpu(),
-                    labels=[CLASSES[int(lbl)] for lbl in targets['cls'][idx_img].cpu().numpy()],
-                )
-                plt.imshow(img.permute(1, 2, 0).numpy())
-                plt.savefig(folder_to_save_figs / f'example_imgs_batch_{idx_of_batch}_img_{idx_img}.png')
-                plt.close()
-
-    # To tensors
-    for i in range(len(all_feature_maps_per_stride)):
-        all_feature_maps_per_stride[i] = torch.cat(all_feature_maps_per_stride[i], dim=0)
-    all_cls_labels = torch.hstack(all_cls_labels)
-    print('Activations extracted!')
-
-    ### Create the UMAP representation ###
-    print('*** Creating UMAP representation ***')
-
-    # Define the known and unknown classes
-    known_classes = np.arange(args.number_of_known_classes)
-    unknown_classes = np.array([c for c in range(len(CLASSES)) if c not in known_classes])
-    # Convert known and unknown class indices to tensors for efficient comparison
-    known_classes_tensor = torch.tensor(known_classes, dtype=torch.long)
-    unknown_classes_tensor = torch.tensor([c for c in range(len(CLASSES)) if c not in known_classes], dtype=torch.long)
-    # Positions of known and unknown classes can be calculated more efficiently
-    positions_of_known_classes = torch.isin(all_cls_labels, known_classes_tensor)
-    positions_of_unknown_classes = torch.isin(all_cls_labels, unknown_classes_tensor)
-    print(f"Number of classes: {len(CLASSES)}")
-    print(f"Known classes: {[CLASSES[cl] for cl in known_classes]}\n")
-    print(f"Unknown classes: {[CLASSES[cl] for cl in unknown_classes]}\n")
-    
-    """
-    # Filter the classes. Flaten the activations and convert them into arrays to use UMAP
-    filtered_known_activations_per_stride = [one_stride[positions_of_known_classes].flatten(start_dim=1).numpy() for one_stride in all_feature_maps_per_stride]
-    filtered_known_labels = all_cls_labels[positions_of_known_classes].numpy()
-    filtered_unknown_activations_per_stride = [one_stride[positions_of_unknown_classes].flatten(start_dim=1).numpy() for one_stride in all_feature_maps_per_stride]
-    filtered_unknown_labels = all_cls_labels[positions_of_unknown_classes].numpy()
-    """
-
-    print('*** Creating UMAP representation ***')  # https://umap-learn.readthedocs.io/en/latest/parameters.html 
-    if args.one_umap_per_stride:
-
-        filtered_known_activations_per_stride = []
-        filtered_unknown_activations_per_stride = []
-        for one_stride_activations in all_feature_maps_per_stride:
-            # Flatten the activations for UMAP. This step can be combined with filtering to avoid redundant operations
-            flattened_activations = one_stride_activations.flatten(start_dim=1)
-            
-            # Filter and convert to numpy in one step
-            filtered_known_activations = flattened_activations[positions_of_known_classes].numpy()
-            filtered_unknown_activations = flattened_activations[positions_of_unknown_classes].numpy()
-            
-            filtered_known_activations_per_stride.append(filtered_known_activations)
-            filtered_unknown_activations_per_stride.append(filtered_unknown_activations)
-
-        # Since labels for known and unknown classes don't change across strides, you can filter them once outside the loop
-        filtered_known_labels = all_cls_labels[positions_of_known_classes].numpy()
-        filtered_unknown_labels = all_cls_labels[positions_of_unknown_classes].numpy()
-
-        # Further filter the unknown classes to extract only the 15 with the most samples
-        # This is to avoid having too many samples of unknown classes, which could make the UMAP representation less clear
-
-
-        # For all strides
-        for idx_stride in range(3):
-            print(f'- Stride {(idx_stride+1)*8} -')
-            
-            # Grid search
-            if args.grid_search_umap:
-                
-                grid_search_folder = folder_for_model_in_figs / f'grid_search_umap_{model_folder_path.name}'
-                grid_search_folder.mkdir(exist_ok=True)
-                grid_search_folder_for_dataset = grid_search_folder / f'{args.dataset}'
-                grid_search_folder_for_dataset.mkdir(exist_ok=True)
-                grid_search_folder_one_stride = grid_search_folder_for_dataset / f'stride_{(idx_stride+1)*8}'
-                grid_search_folder_one_stride.mkdir(exist_ok=True)
-
-                from itertools import product
-                umap_args_to_test = {
-                    # "n_neighbors": [5, 20, 100],
-                    # "min_dist": [0.01, 0.1, 0.5],
-                    # "target_weight": [0.2, 0.5, 0.8],
-                    # "metric": ["euclidean", "cosine"]
-                    "n_neighbors": [20],
-                    "min_dist": [0.01, 0.1],
-                    "target_weight": [0.2, 0.5, 0.8],
-                    "metric": ["manhattan", "euclidean", "cosine"]
-                }
-                # Generate all combinations of parameters
-                param_combinations = list(product(*umap_args_to_test.values()))
-                for combination in param_combinations:
-                    # Map the parameter combination to the corresponding keyword arguments
-                    params = dict(zip(umap_args_to_test.keys(), combination))
-                    print(f" -- Params: {params} --")
-                    
-                    # Create a new UMAP instance with the current set of parameters
-                    my_umap = UMAP(n_components=2, **params)
-                    embedding = my_umap.fit_transform(filtered_known_activations_per_stride[idx_stride], y=filtered_known_labels)
-                    print(f"UMAP representation fitted!")
-
-                    # Transform the unknown classes data
-                    print(f"Transforming UMAP unknown representations...")
-                    embedding_unknown = my_umap.transform(filtered_unknown_activations_per_stride[idx_stride])
-                    print(f"UMAP unknown representations transformed!")
-
-                    print(f"Saving UMAP representation...")
-                    fig = plt.figure(figsize=(14, 10))
-                    ax = fig.add_subplot(1, 1, 1)#, projection='3d')
-                    
-                    cmap = plt.cm.tab20(np.arange(40).astype(int))
-                    # Represent the known classes
-                    color_idx = 0  # For both known and unknown classes, to distinguish them
-                    for idx_cls, cl in enumerate(known_classes):
-                        plotEmbeddings = np.array([embedding[i,:] for i in range(len(embedding)) if filtered_known_labels[i]==cl])
-                        if len(plotEmbeddings)!=0:
-                            ax.scatter(*plotEmbeddings.T, color=cmap[color_idx],label=CLASSES[cl],alpha=0.7)
-                            color_idx = color_idx + 1
-                    
-                    plt.legend()
-                    # Save fig with parameters in the name
-                    fig.savefig(grid_search_folder_one_stride / f"umap_params_{params}_known.png")
-
-                    # Represent the unknown classes
-                    for idx_cls, cl in enumerate(unknown_classes):
-                        if idx_cls >= 15:
-                            break
-                        plotEmbeddings_unk = np.array([embedding_unknown[i,:] for i in range(len(embedding_unknown)) if filtered_unknown_labels[i]==cl])
-                        if len(plotEmbeddings_unk) > 50:
-                            ax.scatter(*plotEmbeddings_unk.T, color=cmap[color_idx], label=CLASSES[cl], alpha=0.7, marker='s')
-                            color_idx = color_idx + 1
-                    
-                    plt.legend()
-                    # Save fig with parameters in the name
-                    fig.savefig(grid_search_folder_one_stride / f"umap_params_{params}_unknown.png")
-                    plt.close()
-                    print(f"UMAP saved for params: {params}!")
-                
-            # Normal execution, just one UMAP
-            else:
-                print(f"Fitting UMAP representation...")
-                # Create the UMAP object and fit the known classes data
-                my_umap = UMAP(n_components=2, n_neighbors=20, metric='cosine', min_dist=0.01, target_weight=1)
-                embedding = my_umap.fit_transform(filtered_known_activations_per_stride[idx_stride], y=filtered_known_labels)
-                print(f"UMAP representation fitted!")
-
-                # Transform the unknown classes data
-                print(f"Transforming UMAP unknown representations...")
-                embedding_unknown = my_umap.transform(filtered_unknown_activations_per_stride[idx_stride])
-                print(f"UMAP unknown representations transformed!")
-
-                print(f"Saving UMAP representation...")
-                fig = plt.figure(figsize=(14, 10))
-                ax = fig.add_subplot(1, 1, 1)#, projection='3d')
-                
-                cmap = plt.cm.tab20(np.arange(20).astype(int))
-                # Represent the known classes
-                color_idx = 0  # For both known and unknown classes, to distinguish them
-                for idx_cls, cl in enumerate(known_classes):
-                    plotEmbeddings = np.array([embedding[i,:] for i in range(len(embedding)) if filtered_known_labels[i]==cl])
-                    if len(plotEmbeddings)!=0:
-                        ax.scatter(*plotEmbeddings.T, color=cmap[color_idx],label=CLASSES[cl],alpha=0.7)
-                        color_idx = color_idx + 1
-
-                plt.legend()
-                fig.savefig(folder_to_save_figs /f"umap_known_stride_{(idx_stride+1)*8}.png")
-
-                # Represent the unknown classes
-                for idx_cls, cl in enumerate(unknown_classes):
-                    if idx_cls >= 15:
-                        break
-                    plotEmbeddings_unk = np.array([embedding_unknown[i,:] for i in range(len(embedding_unknown)) if filtered_unknown_labels[i]==cl])
-                    if len(plotEmbeddings_unk) > 50:
-                        ax.scatter(*plotEmbeddings_unk.T, color=cmap[color_idx], label=CLASSES[cl], alpha=0.7, marker='s')
-                        color_idx = color_idx + 1
-                    # ax.scatter(*plotEmbeddings_unk.T, color=cmap[color_idx], label=CLASSES[cl], alpha=0.7, marker='s')
-                    # color_idx = color_idx + 1
-                    # if len(plotEmbeddings_unk) > 200:
-                        # ax.scatter(*plotEmbeddings_unk.T, color=cmap[color_idx], label=CLASSES[cl], alpha=0.7, marker='s')
-                        # color_idx = color_idx + 1
-                
-                plt.legend()
-                fig.savefig(folder_to_save_figs / f"umap_unknown_stride_{(idx_stride+1)*8}.png")
-                plt.close()
-                print(f"UMAP representation saved!")
-
-
-    else:  # All strides in one UMAP, with different markers each stride
-        # Therefore, we have to make a big array with all the activations of all strides
-        # We also have to have a big array with the labels of all strides, by repeating the array of labels 3 times
-        my_umap = UMAP(n_components=2, n_neighbors=20, metric='cosine', min_dist=0.01, target_weight=0.8)
-        embedding = my_umap.fit_transform(filtered_known_activations_per_stride[0], y=filtered_known_labels)
-        raise NotImplementedError("Not implemented yet")
-    
-    # fig = plt.figure(figsize=(14, 10))
-    # ax = fig.add_subplot(1, 1, 1)#, projection='3d')
-    
-    # cmap = plt.cm.tab20(np.arange(len(filterClassesNum)).astype(int))
-    # indexC = 0
-    # for c in filterClassesNum:
-    #     plotEmbeddings = np.array([embedding[i,:] for i in range(len(embedding)) if filteredLabels[i]==c])
-    #     if len(plotEmbeddings)!=0:
-    #         ax.scatter(*plotEmbeddings.T, c=cmap[indexC],label=CLASSES[c],alpha=0.7)
-    #     indexC = indexC + 1
-
-
-if __name__ == "__main__":
-    args = SimpleArgumentParser().parse_args()
-    print(args)
-    main()
-
-
-    # # FOR FIRST STRIDE
-
-    # # Create the UMAP object and fit the known classes data
-    # my_umap = UMAP(n_components=2,n_neighbors=20, metric='cosine',min_dist=0.01,target_weight=0.8)
-    # embedding = my_umap.fit_transform(filtered_known_activations_per_stride[0], y=filtered_known_labels)
-
-    # # Transform the unknown classes data
-    # embedding_unknown = my_umap.transform(filtered_unknown_activations_per_stride[0])
-
-    # fig = plt.figure(figsize=(14, 10))
-    # ax = fig.add_subplot(1, 1, 1)#, projection='3d')
-    
-    # cmap = plt.cm.tab20(np.arange(40).astype(int))
-    # # Represent the known classes
-    # color_idx = 0
-    # for idx_cls, cl in enumerate(known_classes):
-    #     plotEmbeddings = np.array([embedding[i,:] for i in range(len(embedding)) if filtered_known_labels[i]==cl])
-    #     if len(plotEmbeddings)!=0:
-    #         ax.scatter(*plotEmbeddings.T, color=cmap[color_idx],label=CLASSES[cl],alpha=0.7)
-    #         color_idx = color_idx + 1
-
-    # # Represent the unknown classes
-    # for idx_cls, cl in enumerate(unknown_classes):
-    #     plotEmbeddings_unk = np.array([embedding_unknown[i,:] for i in range(len(embedding_unknown)) if filtered_unknown_labels[i]==cl])
-    #     if len(plotEmbeddings_unk) > 200:
-    #         ax.scatter(*plotEmbeddings_unk.T, color=cmap[color_idx], label=CLASSES[cl],alpha=0.7, marker='s')
-    #         color_idx = color_idx + 1
-    
-    # plt.legend()
-    # fig.savefig(f"umap.png")
-    # plt.close()
