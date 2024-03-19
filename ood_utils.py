@@ -1,9 +1,10 @@
-from typing import List, Tuple, Callable, Type
+from typing import List, Tuple, Callable, Type, Union
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from pathlib import Path
+from logging import Logger
+import json 
 
-import argparse
 import numpy as np
 # import sklearn.metrics as sk
 from sklearn.metrics import pairwise_distances
@@ -11,11 +12,12 @@ import torch
 import torchvision.ops as t_ops
 from scipy.optimize import linear_sum_assignment
 
+from ultralytics import YOLO
 from ultralytics.yolo.engine.results import Results
 from visualization_utils import plot_results
 
 
-@dataclass(slots=True)
+#@dataclass(slots=True)
 class OODMethod(ABC):
     """
     Base class for all the OOD methods. It contains the basic structure of the methods and the abstract methods that
@@ -25,7 +27,7 @@ class OODMethod(ABC):
         distance_method: bool -> True if the method uses a distance to measure the OOD, False if it uses a similarity
         per_class: bool -> True if the method computes a threshold for each class, False if it computes a single threshold
         per_stride: bool -> True if the method computes a threshold for each stride, False if it computes a single threshold
-        thresholds: List[float] or List[List[float]] -> The thresholds for each class and stride
+        thresholds: Union[List[float], List[List[float]]] -> The thresholds for each class and stride
         iou_threshold_for_matching: float -> The threshold to use when matching the predicted boxes to the ground truth boxes
         min_conf_threshold: float -> Define the minimum threshold to output a box when predicting
         which_internal_activations: str -> Where to extract internal activations from. It can be 'logits' or 'ftmaps'
@@ -34,7 +36,7 @@ class OODMethod(ABC):
     distance_method: bool
     per_class: bool
     per_stride: bool
-    thresholds: List[float] or List[List[float]]
+    thresholds: Union[List[float], List[List[float]]]
     # The threshold to use when matching the predicted boxes to the ground truth boxes.
     #   All boxes with an IoU lower than this threshold will be considered bad predictions
     iou_threshold_for_matching: float
@@ -54,12 +56,8 @@ class OODMethod(ABC):
         self.thresholds = None
         self.which_internal_activations = which_internal_activations
 
-    # @abstractmethod
-    # def compute_scores():
-    #     pass
-
     @abstractmethod
-    def extract_internal_activations(self, results: Results, all_activations: List[float] or List[List[np.array]]):
+    def extract_internal_activations(self, results: Results, all_activations: Union[List[float], List[List[np.array]]]):
         """
         Function to be overriden by each method to extract the internal activations of the model. In the logits
         methods, it will be the logits, and in the ftmaps methods, it will be the ftmaps.
@@ -68,7 +66,7 @@ class OODMethod(ABC):
         pass
 
     @abstractmethod
-    def format_internal_activations(self, all_activations: List[float] or List[List[np.array]]):
+    def format_internal_activations(self, all_activations: Union[List[float], List[List[np.array]]]):
         """
         Function to be overriden by each method to format the internal activations of the model.
         The extracted activations will be stored in the list all_activations
@@ -76,9 +74,15 @@ class OODMethod(ABC):
         pass
 
     @abstractmethod
-    def compute_ood_decision_on_results(self, results: Results, logger) -> List[int]:
+    def compute_ood_decision_on_results(self, results: Results, logger) -> List[List[int]]:
         """
-        Function to be overriden by each method to compute the OOD decision for each image
+        Function to be overriden by each method type to compute the OOD decision for each image.
+        Parameters:
+            results: Results -> The results of the model predictions
+            logger: Logger -> The logger to print warnings or info
+        Returns:
+            ood_decision: List[int] -> A list of lists, where the first list is for each image and the second list is for each bbox. 
+                The value is 1 if the bbox is In-Distribution, 0 if it is Out-of-Distribution
         """
         pass
 
@@ -100,7 +104,7 @@ class OODMethod(ABC):
             logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")
     
     @staticmethod
-    def create_targets_dict(data: dict, bbox_initial_format: str) -> dict:
+    def create_targets_dict(data: dict) -> dict:
         """
         Funcion que crea un diccionario con los targets de cada imagen del batch con el siguiente formato:
             targets = {
@@ -168,10 +172,6 @@ class OODMethod(ABC):
                 if results[img_idx].assignment_score_matrix[i, assigment] > iou_threshold:
                     results[img_idx].valid_preds.append(i)
 
-    # TODO: Todavia me queda por decidir si esto es solo para cuando quiero extraer info interna para 
-    #   modelar las In-Distribution o si tambien lo quiero para las Out-of-Distribution.
-    # Va a poder ocurrir que esta funcion sea completamente remodelada por el metodo OOD ya que se requiera que compute gradientes o cualquier
-    # otra eventualidad. Lo importante es que de aqui salga la info necesaria para generar los thresholds
     def iterate_data_to_extract_ind_activations(self, data_loader, model, device, logger):
         """
         Function to iterate over the data and extract the internal activations of the model for each image.
@@ -196,7 +196,7 @@ class OODMethod(ABC):
             self.log_every_n_batches(50, logger, idx_of_batch, number_of_batches)
                 
             ### Prepare images and targets to feed the model ###
-            imgs, targets = self.prepare_data_for_model(data, device, bbox_initial_format=bbox_format)
+            imgs, targets = self.prepare_data_for_model(data, device)
 
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
             results = model.predict(imgs, save=False, verbose=False)
@@ -212,22 +212,32 @@ class OODMethod(ABC):
 
         return all_internal_activations
 
-    def prepare_data_for_model(self, data, device, bbox_initial_format) -> Tuple[torch.Tensor, dict]:
+    def prepare_data_for_model(self, data, device) -> Tuple[torch.Tensor, dict]:
         """
         Funcion que prepara los datos para poder meterlos en el modelo.
         """
         if isinstance(data, dict):
             imgs = data['img'].to(device)
-            targets = self.create_targets_dict(data, bbox_initial_format)
+            targets = self.create_targets_dict(data)
         else:
             imgs, targets = data
         return imgs, targets
 
     def iterate_data_to_plot_with_ood_labels(self, model, dataloader, device, logger, folder_path: Path, now: str):
+        
+        # # Obtain the bbox format from the last transform of the dataset
+        # if hasattr(dataloader.dataset.transforms.transforms[-1], "bbox_format"):
+        #     bbox_format = dataloader.dataset.transforms.transforms[-1].bbox_format
+        # else:
+        #     bbox_format=dataloader.dataset.labels[0]['bbox_format']
 
         logger.warning(f"Using a confidence threshold of {self.min_conf_threshold} for tests")
+        count_of_images = 0
+        number_of_images_saved = 0
         for idx_of_batch, data in enumerate(dataloader):
-            
+            count_of_images += len(data['im_file'])
+            if count_of_images < 8000:
+                continue
             ### Preparar imagenes y targets ###
             imgs, targets = self.prepare_data_for_model(data, device)
             
@@ -247,13 +257,38 @@ class OODMethod(ABC):
                 image_format='pdf',
                 ood_decision=ood_decision,
                 ood_method_name=self.name,
+                targets=targets
             )
-            
+            number_of_images_saved += len(data['im_file'])
             # TODO: De momento no queremos plotear todo, solo unos pocos batches
-            if idx_of_batch > 10:
+            if number_of_images_saved > 200:
                 quit()
+            # if idx_of_batch > 10:
+            #     quit()
+                
+    def iterate_data_to_compute_metrics(self, model, dataloader, device, logger, folder_path: Path, now: str):
+
+        logger.warning(f"Using a confidence threshold of {self.min_conf_threshold} for tests")
+        count_of_images = 0
+        number_of_images_processed = 0
+        all_preds = []
+        all_targets = []
+        for idx_of_batch, data in enumerate(dataloader):
+
+            ### Preparar imagenes y targets ###
+            imgs, targets = self.prepare_data_for_model(data, device)
+            
+            ### Procesar imagenes en el modelo para obtener logits y las cajas ###
+            results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold)
+
+            ### Comprobar si las cajas predichas son OoD ###
+            ood_decision = self.compute_ood_decision_on_results(results, logger)
+
+            ### Calcular las metricas de las cajas predichas ###
+        
+            number_of_images_processed += len(data['im_file'])
     
-    def generate_thresholds(self, ind_scores: list, tpr: float, logger) -> List[float] or List[List[float]]:
+    def generate_thresholds(self, ind_scores: list, tpr: float, logger) -> Union[List[float], List[List[float]]]:
         """
         Generate the thresholds for each class using the in-distribution scores.
         If per_class=True, in_scores must be a list of lists,
@@ -317,10 +352,7 @@ class LogitsMethod(OODMethod):
         which_internal_activations = 'logits'
         super().__init__(name, distance_method, per_class, per_stride, iou_threshold_for_matching, min_conf_threshold, which_internal_activations)
 
-    def compute_ood_decision_on_results(self, results: Results, logger) -> List[int]:
-        """
-        Function to be overriden by each method to compute the OOD decision for each image
-        """
+    def compute_ood_decision_on_results(self, results: Results, logger) -> List[List[int]]:
         ood_decision = []  
         for idx_img, res in enumerate(results):
             ood_decision.append([])  # Every image has a list of decisions for each bbox
@@ -347,7 +379,7 @@ class LogitsMethod(OODMethod):
                 logits_one_bbox = res.extra_item[valid_idx_one_bbox][4:].cpu()
                 all_activations[cls_idx_one_bbox].append(self.compute_score_one_bbox(logits_one_bbox, cls_idx_one_bbox))
 
-    def format_internal_activations(self, all_activations: List[float] or List[List[np.array]]):
+    def format_internal_activations(self, all_activations: Union[List[float], List[List[np.array]]]):
         """
         Format the internal activations of the model. In this case, the activations are already well formatted.
         """
@@ -419,7 +451,7 @@ class DistanceMethod(OODMethod):
     cluster_optimization_metric: str
     available_cluster_methods: List[str]
     available_cluster_optimization_metrics: List[str]
-    clusters: List[np.array] or List[List[np.array]]
+    clusters: Union[List[np.array], List[List[np.array]]]
 
     # name: str, distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float, min_conf_threshold: float
     def __init__(self, name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str, **kwargs):
@@ -534,7 +566,7 @@ class DistanceMethod(OODMethod):
                     all_activations[idx_cls][idx_stride] = np.empty(0)
    
 
-    def compute_scores_from_activations(self, activations: List[np.array] or List[List[np.array]], logger):
+    def compute_scores_from_activations(self, activations: Union[List[np.array], List[List[np.array]]], logger: Logger):
         """
         Compute the scores for each class using the in-distribution activations (usually feature maps). They come in form of a list of ndarrays when
             per_class True and per_stride are False, where each position of the list refers to one class and the array is a tensor of shape [N, C, H, W]. 
@@ -598,17 +630,14 @@ class DistanceMethod(OODMethod):
                 raise ValueError("The clusters must have at least one sample")
         return scores
 
-    def compute_ood_decision_on_results(self, results: Results, logger) -> List[int]:
-        """
-        Function to be overriden by each method to compute the OOD decision for each image
-        """
+    def compute_ood_decision_on_results(self, results: Results, logger) -> List[List[int]]:
         ood_decision = []  
         for idx_img, res in enumerate(results):
-            ood_decision.append([])  # Every image has a list of decisions for each bbox
+            ood_decision.append([])  # Every image has a decisions for each bbox
             for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(res.extra_item):
 
-                if len(bbox_idx_in_one_stride) > 0:  # Check if there are any predictions in this stride
-                    
+                if len(bbox_idx_in_one_stride) > 0:  # Only enter if there are any predictions in this stride
+                    # Each ftmap is from a bbox prediction
                     for idx, ftmap in enumerate(ftmaps):
                         bbox_idx = idx
                         cls_idx = int(res.boxes.cls[bbox_idx].cpu())
@@ -616,7 +645,8 @@ class DistanceMethod(OODMethod):
                         # ftmap = ftmap.cpu().flatten().unsqueeze(0).numpy()
                         # [None, :] is to do the same as unsqueeze(0) but with numpy
                         if len(self.clusters[cls_idx][stride_idx]) == 0:
-                            logger.warning(f'WARNING: Class {cls_idx:03}, Stride {stride_idx} -> No cluster created')
+                            logger.warning(f'Image {idx_img}, bbox {bbox_idx} is viewed as an OOD.' \
+                                            'It cannot be compared as there is no cluster for class {cls_idx} and stride {stride_idx')
                             distance = 1000
                         else:
                             distance = self.compute_distance(
@@ -647,7 +677,7 @@ class DistanceMethod(OODMethod):
 
         return ood_decision
 
-    def generate_clusters(self, ind_tensors: List[np.array] or List[List[np.array]], logger) -> List[np.array] or List[List[np.array]]:
+    def generate_clusters(self, ind_tensors: Union[List[np.array], List[List[np.array]]], logger: Logger) -> Union[List[np.array], List[List[np.array]]]:
         """
         Generate the clusters for each class using the in-distribution tensors (usually feature maps).
         If per_stride, ind_tensors must be a list of lists, where each position is
@@ -845,7 +875,7 @@ class ActivationsExtractor(DistanceMethod):
                 print(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")
                 
             ### Prepare images and targets to feed the model ###
-            imgs, targets = self.prepare_data_for_model(data, device, bbox_initial_format=bbox_format)
+            imgs, targets = self.prepare_data_for_model(data, device)
 
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
             results = model.predict(imgs, save=False, verbose=False)
@@ -923,7 +953,7 @@ class FeaturemapExtractor(DistanceMethod):
                 print(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch} of {number_of_batches}")
                 
             ### Prepare images and targets to feed the model ###
-            imgs, targets = self.prepare_data_for_model(data, device, bbox_initial_format=bbox_format)
+            imgs, targets = self.prepare_data_for_model(data, device)
 
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
             results = model.predict(imgs, save=False, verbose=False)
@@ -950,7 +980,7 @@ class FeaturemapExtractor(DistanceMethod):
 
 ### Other methods ###
 
-def configure_extra_output_of_the_model(model, ood_method: Type[OODMethod]):
+def configure_extra_output_of_the_model(model: YOLO, ood_method: Type[OODMethod]):
         
         # TODO: Tenemos que definir que un atributo de los ood methods define de donde sacar
         #   el extra_item. De momento nos limitamos a usar el modo "logits" y "ftmaps"

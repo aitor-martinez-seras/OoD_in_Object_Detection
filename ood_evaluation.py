@@ -1,0 +1,281 @@
+import time
+import os
+from pathlib import Path
+from datetime import datetime
+from typing import Type, Union, Literal, List, Tuple
+from logging import Logger
+
+from tap import Tap
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+
+import log
+from ultralytics import YOLO
+from ultralytics.yolo.data import build_dataloader
+from ultralytics.yolo.data import BaseDataset
+from ultralytics.yolo.data.build import InfiniteDataLoader
+
+
+from ood_utils import get_measures, configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, ODIN, \
+    L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride
+
+from data_utils import read_json, write_json, load_dataset_and_dataloader
+
+
+NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
+ROOT = Path(__file__).parent  # Assumes this script is in the root of the project
+STORAGE_PATH = ROOT / 'storage'
+PRUEBAS_ROOT_PATH = ROOT / 'pruebas'
+
+IOU_THRESHOLD = 0.5
+
+OOD_METHOD_CHOICES = ['MSP', 'ODIN', 'Energy', 'Mahalanobis', 'GradNorm','RankFeat','React', 'L1_cl_stride', 'L2_cl_stride', \
+                      'GAP_L2_cl_stride']
+
+
+# parser.add_argument("--in_datadir", help="Path to the in-distribution data folder.")
+# parser.add_argument("--out_datadir", help="Path to the out-of-distribution data folder.")
+class SimpleArgumentParser(Tap):
+    
+    device: int  # Device to use for training on GPU. Indicate more than one to use multiple GPUs. Use -1 for CPU.
+    model: Literal["n", "s", "m", "l", "x"]  # Which variant of the model YOLO to use
+    model_path: str = ''  # Relative path to the model you want to use as a starting point. Deactivates using sizes.
+    workers: int = 2  # Number of background threads used to load data.
+    batch_size: int = 16  # Batch size.
+    
+    logdir: str = 'logs'  # Where to log test info (small).
+    name: str = 'prueba'  # Name of this run. Used for monitoring and checkpointing
+    # Hyperparameters
+    conf_thr: float = 0.15  # Confidence threshold for the detections
+    tpr_thr: float = 0.95  # TPR threshold for the OoD detection
+    # Datasets
+    ind_dataset: str  # Dataset to use for training and validation
+    ind_split: Literal['train', 'val', 'test'] = 'train'  # Split to use in the in-distribution dataset
+    ood_dataset: str  # Dataset to use for OoD detection
+    ood_split: Literal['train', 'val', 'test'] = 'val'  # Split to use in the out-of-distribution dataset
+    owod_task_ind: Literal["", "t1", "t2", "t3", "t4", "all_task_test"] = ""  # OWOD task to use in the in-distribution dataset
+    owod_task_ood: Literal["", "t1", "t2", "t3", "t4", "all_task_test"] = ""  # OWOD task to use in the out-of-distribution dataset
+    # OOD related
+    ood_method: str
+    # ODIN and Energy
+    temperature: int = 1000
+    epsilon_odin: float = 0.0
+    visualize_oods: bool = False  # visualize the OoD detection
+    compute_metrics: bool = False  # compute the metrics
+    load_ind_activations: bool = False  # load in-distribution scores from disk
+    load_clusters: bool = False  # load clusters from disk
+    load_thresholds: bool = False  # load thresholds from disk
+    
+    def configure(self):
+        self.add_argument("-m", "--model", required=False)
+        self.add_argument('--ood_method', choices=OOD_METHOD_CHOICES, required=True, help='OOD detection method to use')
+
+    def process_args(self):
+
+        if self.model_path:
+            print('Loading model from', self.model_path)
+            print('Ignoring args --model --from_scratch')
+            self.from_scratch = False
+            self.model = ''
+        else:
+            if self.model == '':
+                raise ValueError("You must pass a model size.")
+        
+        if not self.visualize_oods and not self.compute_metrics:
+            raise ValueError("You must pass either visualize_oods or compute_metrics")
+
+
+def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMethod, DistanceMethod]:
+    """
+    Select the OOD method to use for the evaluation.
+    """
+    if args.ood_method == 'MSP':
+        return MSP(per_class=True, per_stride=False, iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+    elif args.ood_method == 'ODIN':
+        return ODIN()
+    elif args.ood_method == 'Energy':
+        return Energy(temper=args.temperature, per_class=True, per_stride=False, iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+    elif args.ood_method == 'L1_cl_stride':
+        return L1DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+    elif args.ood_method == 'L2_cl_stride':
+        return L2DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+    elif args.ood_method == 'GAP_L2_cl_stride':
+        return GAPL2DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+    else:
+        raise NotImplementedError("Not implemented yet")
+
+
+def obtain_thresholds_for_ood_detection_method(ood_method: Union[LogitsMethod, DistanceMethod], model: YOLO, device, in_loader, logger: Logger, args: SimpleArgumentParser):
+    """
+    Function that loads or generates the thresholds for the OOD evaluation. The thresholds are
+        stored in the OODMethod object.
+    """
+    logger.info("Obtaining thresholds...")
+    logger.flush()
+
+    thresholds_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_thresholds.json'
+    activations_path = STORAGE_PATH / f'{ood_method.which_internal_activations}_{model.ckpt["train_args"]["name"]}_activations.pt'
+    clusters_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_clusters.pt'
+
+    ### Load the thresholds ###
+    if args.load_thresholds:
+        # Load thresholds from disk
+        ood_method.thresholds = read_json(thresholds_path)
+        logger.info(f"Thresholds succesfully loaded from {thresholds_path}")
+        # For a distance method also the clusters are needed
+        if ood_method.distance_method:
+            # Load in_distribution clusters from disk
+            ood_method.clusters = torch.load(clusters_path)
+            logger.info(f"As we have a distance method, clusters have been also loaded from {clusters_path}")
+
+    ### Compute thresholds ###
+    else:
+        
+        ### 1. Obtain activations ###
+        # Load activations for the thresholds
+        if args.load_ind_activations:
+            # Load in_distribution activations from disk
+            logger.info("Loading in-distribution activations...")
+            ind_activations = torch.load(activations_path)
+            logger.info(f"In-distribution activations succesfully loaded from {activations_path}")
+
+        # Generate in_distribution activations to generate thresholds
+        else:
+            logger.info("Processing in-distribution data...")
+            ind_activations = ood_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
+            logger.info("In-distribution data processed")
+            logger.info("Saving in-distribution activations...")
+            # Save activations
+            torch.save(ind_activations, STORAGE_PATH / f'{ood_method.which_internal_activations}_{model.ckpt["train_args"]["name"]}_activations.pt', pickle_protocol=5)
+            logger.info(f"In-distribution activations succesfully saved in {activations_path}")
+
+        ### 2. Obtain scores ###
+        # Distance methods need to have clusters representing the In-Distribution data
+        if ood_method.distance_method:
+            
+            ### 2.1. Distance methods need to obtain clusters for scores ###
+            # Load the clusters
+            if args.load_clusters:
+                # Load in_distribution clusters from disk
+                ood_method.clusters = torch.load(clusters_path)
+
+            # Generate the clusters using the In-Distribution activations
+            else:
+                # Generate in_distribution clusters to generate thresholds for OOD method
+                logger.info("Generating clusters...")
+                ood_method.clusters = ood_method.generate_clusters(ind_activations, logger)
+                logger.info("Saving clusters...")
+                torch.save(ood_method.clusters, clusters_path, pickle_protocol=5)
+
+            # Generate the scores that are necessary to create the thresholds by using the clusters and the activations
+            logger.info("Generating in-distribution scores...")
+            ind_scores = ood_method.compute_scores_from_activations(ind_activations, logger)
+
+        else:  # For the rest of the methods activations are the scores themselves
+            ind_scores = ind_activations 
+
+        ### 3. Obtain thresholds ###
+        # Finally generate and save the thresholds
+        logger.info("Generating thresholds...")
+        ood_method.thresholds = ood_method.generate_thresholds(ind_scores, tpr=args.tpr_thr, logger=logger)
+        logger.info("Saving thresholds...")
+        write_json(ood_method.thresholds, thresholds_path)
+
+
+def save_images_with_ood_detection(ood_method: OODMethod, model: YOLO, device, ood_loader, logger: Logger):
+
+    assert ood_method.thresholds is not None, "Thresholds must be generated or loaded before predicting with OoD detection"
+
+    logger.info("Predicting with OOD detection...")
+    
+    ood_method.iterate_data_to_plot_with_ood_labels(model, ood_loader, device, logger, PRUEBAS_ROOT_PATH, NOW)
+
+
+def run_eval(ood_method: OODMethod, model: YOLO, device: str, in_loader, ood_loader, logger: Logger, args: SimpleArgumentParser):
+    logger.info("Running test to compute metrics...")
+    logger.flush()
+    assert ood_method.thresholds is not None, "Thresholds must be generated or loaded before predicting with OoD detection"
+
+    ood_method.iterate_data_to_compute_metrics(model, device, in_loader, ood_loader, logger, args)
+
+
+def main(args: SimpleArgumentParser):
+    print('---------------------------- OOD Detection ----------------------------')    
+    # Setup logger
+    logger = log.setup_logger(args)
+
+    # TODO: This is for reproducibility 
+    # torch.backends.cudnn.benchmark = True
+
+    # Set device
+    if args.device == -1:
+        device = 'cpu'
+    else:
+        gpu_number = str(args.device)
+        os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
+        logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
+        device = 'cuda:0'
+
+    # In the case of GradNorm, the batch size must be 1 to enable the method
+    if args.ood_method == 'GradNorm':
+        args.batch_size = 1
+        logger.warning(f'Batch size changed to {args.batch_size} as using GradNorm')
+
+    # Load datasets
+    ind_dataset, ind_dataloader = load_dataset_and_dataloader(
+        dataset_name=args.ind_dataset,
+        data_split=args.ind_split,
+        batch_size=args.batch_size,
+        workers=args.workers,
+        owod_task=args.owod_task_ind
+    )
+    ood_dataset, ood_dataloader = load_dataset_and_dataloader(
+        dataset_name=args.ood_dataset,
+        data_split=args.ood_split,
+        batch_size=args.batch_size,
+        workers=args.workers,
+        owod_task=args.owod_task_ood
+    )
+
+    # Load YOLO model
+    if args.model_path:
+        model_weights_path = ROOT / args.model_path
+        logger.info(f"Loading model from {args.model_path} in {args.device}")
+        model = YOLO(model_weights_path, task='detect')        
+    else:
+        model_to_load = f'yolov8{args.model}.pt'
+        logger.info(f"Loading model {model_to_load} in {args.device}")
+        model = YOLO(model_to_load) 
+
+    logger.info(f"IoU threshold set to {IOU_THRESHOLD}")
+
+    # Load the OOD detection method
+    ood_method = select_ood_detection_method(args)
+
+    # Modify internal attributes of the model to obtain the desired outputs in the extra_item
+    configure_extra_output_of_the_model(model, ood_method)            
+
+    start_time = time.time()
+    
+    ### OOD evaluation ###
+
+    # First fill the thresholds attribute of the OODMethod object
+    obtain_thresholds_for_ood_detection_method(ood_method, model, device, ind_dataloader, logger, args)
+
+    if args.visualize_oods:    
+        # Save images with OoD detection (Green for In-Distribution, Red for Out-of-Distribution, Violet the Ground Truth)
+        save_images_with_ood_detection(ood_method, model, device, ood_dataloader, logger)
+        
+    elif args.compute_metrics:
+        # Run the evaluation to compute the metrics
+        run_eval(model, args.device, ind_dataloader, ood_dataloader, logger, args)
+
+    end_time = time.time()
+
+    logger.info("Total running time: {}".format(end_time - start_time))
+
+
+if __name__ == "__main__":
+    main(SimpleArgumentParser().parse_args())
