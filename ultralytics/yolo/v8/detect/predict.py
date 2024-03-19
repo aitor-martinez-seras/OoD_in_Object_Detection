@@ -78,7 +78,7 @@ def extract_roi_aligned_features_from_correct_stride(ftmaps: List[Tensor], boxes
         roi_aligned_ftmaps_one_stride = roi_align(
             input=ftmaps[idx_stride],
             boxes=boxes_with_img_idx[which_idx_for_current_stride],
-            output_size= (10, 10),
+            output_size=(10, 10),
             spatial_scale=ftmaps[idx_stride].shape[2]/img_shape[2]
         )
  
@@ -204,6 +204,8 @@ class DetectionPredictor(BasePredictor):
                                                 max_det=self.args.max_det,
                                                 classes=self.args.classes,
                                                 extra_item=output_extra)
+                output_extra = preds[1]
+                preds = preds[0]
 
             elif self.model.model.modo == 'all_ftmaps':
                 # Tenemos que hacer que para cada prediccion (dimension N) haya una lista de 3 tensores, uno por cada escala
