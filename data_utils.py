@@ -16,10 +16,9 @@ from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.data import YOLODataset, BaseDataset
 from ultralytics.yolo.data.build import InfiniteDataLoader
 
-def segmentation_to_bbox(segmentation_img: Image, seg_value: int):
-    
-    segmentation = np.where(np.array(segmentation_img) == seg_value)
 
+def segmentation_to_bbox(segmentation_img: Image, seg_value: int):
+    segmentation = np.where(np.array(segmentation_img) == seg_value)
     # Bounding Box
     bbox = 0, 0, 0, 0
     if len(segmentation) != 0 and len(segmentation[1]) != 0 and len(segmentation[0]) != 0:
@@ -77,11 +76,11 @@ def create_dataloader(dataset, args):
     return dataloader
 
 
-def load_dataset_and_dataloader(dataset_name, data_split: str, batch_size: int,
+def load_dataset_and_dataloader(dataset_name: str, data_split: str, batch_size: int,
                                 workers: int, owod_task='') -> Tuple[BaseDataset, InfiniteDataLoader]:
 
     # Get dataset imgs path
-    data_dict = check_det_dataset(dataset_name)
+    data_dict = check_det_dataset(dataset_name + '.yaml')
     imgs_path = data_dict[data_split]
     type_of_YOLO_dataset = data_dict.get('dataset_class', 'YOLODataset')
 
@@ -98,15 +97,14 @@ def load_dataset_and_dataloader(dataset_name, data_split: str, batch_size: int,
     # Select dataset
     if 'tao' in dataset_name:
         dataset = build_tao_dataset(
-            dataset = build_tao_dataset(
             cfg=cfg,
             img_path=imgs_path,  # Path to the folder containing the images
             batch=batch_size,
             data=data_dict,  # El data dictionary que se puede sacar de data = check_det_dataset(self.args.data)
             mode='test',  # This is for disabling data augmentation
-    )
         )
-    elif 'coco' in dataset_name:
+        
+    elif 'coco' in dataset_name or 'owod':
         if type_of_YOLO_dataset == 'FilteredYOLODataset':
             dataset = build_filtered_yolo_dataset(
                 cfg=cfg,

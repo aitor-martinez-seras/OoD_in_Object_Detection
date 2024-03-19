@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Union
 import os
 import glob
+import re
 
 import cv2
 import numpy as np
@@ -108,9 +109,9 @@ class YOLODataset(BaseDataset):
         try:
             import gc
             gc.disable()  # reduce pickle load time https://github.com/ultralytics/ultralytics/pull/1585
-            print(f'Loading labels from {cache_path}')
+            print(f'{self.prefix}Loading labels from {cache_path}')
             cache, exists = np.load(str(cache_path), allow_pickle=True).item(), True  # load dict
-            print(f'Loaded!')
+            print(f'{self.prefix}Loaded!')
             gc.enable()
             assert cache['version'] == self.cache_version  # matches current version
             assert cache['hash'] == get_hash(self.label_files + self.im_files)  # identical hash
@@ -292,20 +293,27 @@ class FilteredYOLODataset(YOLODataset):
 
     def __init__(self, *args, data=None, use_segments=False, use_keypoints=False, **kwargs):
         super().__init__(*args, data=data, use_segments=use_segments, use_keypoints=use_keypoints, **kwargs)
-        self.upate_labels_to_use_less_classes()
-        self.update_attributes_to_new_labels()
+        print(f' -- Filtering dataset --')
+        # 1: Check if we are in OWOD style datasets and define the number of classes in consequence
         self.owod_task = kwargs['hyp'].get('owod_task', None)
+        self.number_of_classes = self.select_number_of_classes_owod(self.owod_task)
+        self.number_of_classes = len(self.data["names"]) if self.number_of_classes == 0 else self.number_of_classes
+        # 2: Update the labels
+        self.upate_labels_to_use_less_classes()
+        # 3: Update the attributes related with the labels (im_files, ni, npy_files, ...)
+        self.update_attributes_to_new_labels()
+        # 4: Limit images to the ones that are part of the OWOD task (again checks if labels are correctly updated)
         if self.owod_task:
             self.limit_images_by_owod_tasks(self.owod_task)
         assert len(self.labels) == len(self.im_files), 'Number of labels and images must be equal'
-        print(f'Filtered dataset with:')
+        print(f'Succesfully filtered dataset. New dataset:')
         print(f'  * {len(self.labels)} images')
-        print(f'  * {len(self.data["names"])} classes')
+        print(f'  * {self.number_of_classes} classes')
+        print(f'  * {sum(len(lb["cls"]) for lb in self.labels)} boxes')
         if self.owod_task:
             print(f'  * OWOD task: {self.owod_task}')
+        print(f' -------------')
         
-
-
     ### Reimplementation of get_img_files in BaseDataset in ultralytics/yolo/data/base.py  ###
     # The only difference is that we are using the 'path' variable inside the .yaml file
     # of the dataset to define the root path for the images
@@ -341,13 +349,13 @@ class FilteredYOLODataset(YOLODataset):
         return im_files
 
     def upate_labels_to_use_less_classes(self):
-        # Check if we are in OWOD style datasets
+        # 1: Map COCO classes to OWOD classes if we are in OWOD
         if self.data.get('coco_to_owod_mapping'):
             # If present, means we are in OWOD using Pascal class order
             # Therefore we need to update all class labels to the new mapping
             print(f'Updating labels to match the OWOD class order')
             self.map_coco_to_owod()
-        # Filter labels
+        # 2: Filter labels to include only the ones present in the YAML file in "names"
         classes = list(self.data["names"].keys())
         self.update_labels(include_class=classes)  # From BaseDataset
         if self.data.get('remove_images_with_no_annotations') is True:
@@ -374,6 +382,7 @@ class FilteredYOLODataset(YOLODataset):
     def map_coco_to_owod(self):
         """Map COCO classes to OWOD classes."""
         mapping = self.data.get('coco_to_owod_mapping')
+        coco_pattern = re.compile(r'^\d{12}\.jpg$')
         type_of_array = self.labels[0]['cls'].dtype
         for label in self.labels:
             #label['cls'] = np.array([[mapping[c[0]]] for c in label['cls']], dtype=type_of_array)
@@ -383,21 +392,39 @@ class FilteredYOLODataset(YOLODataset):
                 label['cls'] = np.empty((0, 1), dtype=type_of_array)
             else:
                 # Proceed with mapping for non-empty arrays
-                label['cls'] = np.array([[mapping[c[0]]] for c in label['cls']], dtype=type_of_array)
+                # and only if they are COCO images, as VOC labels are already in the correct order
+                if coco_pattern.match(label["im_file"][-16:]):  # COCO images are always 12 digits long + .jpg
+                    label['cls'] = np.array([[mapping[c[0]]] for c in label['cls']], dtype=type_of_array)
+    
+    def select_number_of_classes_owod(self, selected_owod_task: str) -> int:
+        """Select the number of classes depending on the OWOD tasks."""
+        if selected_owod_task == 't1':
+            number_of_classes = 20
+        elif selected_owod_task == 't2':
+            number_of_classes = 40
+        elif selected_owod_task == 't3':
+            number_of_classes = 60
+        elif selected_owod_task == 't4':
+            number_of_classes = 80
+        elif selected_owod_task == 'all_task_test':
+            number_of_classes = 80
+        else:
+            number_of_classes = 0
+        return number_of_classes
 
     def limit_images_by_owod_tasks(self, selected_owod_task: str):
         """Limit images to the ones that are part of the OWOD task."""
+        # 1: Take the images that are part of the task
         img_files_to_include = self.retrieve_task_file_names(selected_owod_task)
         # Use python sets to improve lookup efficiency and use string operations rather than Path for the name
         set_of_included_imgs = set(img_files_to_include)
         self.labels = [lb for lb in self.labels if lb['im_file'].split('/')[-1].split('.')[0] in set_of_included_imgs]
-        # Update attributes
+        # 2: Check if any label that should not be in the dataset is still present
+        classes = list(self.data["names"].keys())
+        classes = classes[:self.number_of_classes]  # Filter classes to the task
+        self.update_labels(include_class=classes)
+        # 3: Update attributes
         self.update_attributes_to_new_labels()
-
-    def read_img_files_from_txt(self, file_path: Union[str, Path]):
-        """Read image files from a txt file."""
-        with open(file_path, 'r') as f:
-            return [line.rstrip() for line in f]
         
     def retrieve_task_file_names(self, selected_owod_task: str) -> list[str]:
         """Retrieve the file names for the selected OWOD task."""
@@ -422,9 +449,39 @@ class FilteredYOLODataset(YOLODataset):
                 img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't2_val.txt')
             else:
                 raise ValueError(f'Invalid mode {mode}')
+        # Task 3
+        elif selected_owod_task == 't3':
+            if mode == 'train':
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't3_train.txt')
+            elif mode == 'val':
+                raise NotImplementedError('Validation set for task 3 is not available')
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't3_val.txt')
+            else:
+                raise ValueError(f'Invalid mode {mode}')
+        # Task 4
+        elif selected_owod_task == 't4':
+            if mode == 'train':
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't4_train.txt')
+            elif mode == 'val':
+                raise NotImplementedError('Validation set for task 4 is not available')
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't4_val.txt')
+            else:
+                raise ValueError(f'Invalid mode {mode}')
+        # All task test
+        elif selected_owod_task == 'all_task_test':
+            if mode == 'val':
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 'all_task_test.txt')
+            else:
+                raise ValueError(f'Invalid mode {mode} for task all_task_test')    
+        
         else:
             raise ValueError(f'Invalid OWOD task selected: {selected_owod_task}')
         return img_files_to_include
+
+    def read_img_files_from_txt(self, file_path: Union[str, Path]):
+        """Read image files from a txt file."""
+        with open(file_path, 'r') as f:
+            return [line.rstrip() for line in f]
 
     def _infer_mode(self) -> str:
         img_files_paths_filename = Path(self.img_path).name
@@ -436,3 +493,50 @@ class FilteredYOLODataset(YOLODataset):
             return 'test'
         else:
             raise ValueError(f'Invalid mode for the file {img_files_paths_filename}')
+
+
+    """ INFO ABOUT THE TASKS and SPLITS
+     -- Task all_task_test --
+    Contained in Val split
+
+    -- Task all_task_val --
+    Contained in Train split
+
+    -- Task t1_known_test --
+    Contained in Val split
+
+    -- Task t1_train --
+    Contained in Train split
+
+    -- Task t1_train_with_unk --
+    Contained in Train split
+
+    -- Task t2_ft --
+    Contained in Train split
+
+    -- Task t2_train --
+    Contained in Train split
+
+    -- Task t2_train_with_unk --
+    Contained in Train split
+
+    -- Task t3_ft --
+    Contained in Train split
+
+    -- Task t3_train --
+    Contained in Train split
+
+    -- Task t3_train_with_unk --
+    Contained in Train split
+
+    -- Task t4_ft --
+    Contained in Train split
+
+    -- Task t4_train --
+    Contained in Train split
+
+    -- Task wr1 --
+    Intersection with Train split: 4951/9903
+    Intersection with Val split: 4952/9903
+    Intersection with Test split: 0/9903
+    """

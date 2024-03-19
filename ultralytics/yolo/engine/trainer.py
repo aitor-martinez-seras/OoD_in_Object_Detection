@@ -142,6 +142,12 @@ class BaseTrainer:
         self.csv = self.save_dir / 'results.csv'
         self.plot_idx = [0, 1, 2]
 
+        # Enable dynamically selecting the number of classes
+        number_of_classes = overrides.get('number_of_classes', 0)
+        if number_of_classes:
+            self.data['nc'] = number_of_classes
+            #self.data['names'] = [f'class_{i}' for i in range(number_of_classes)]
+
         # Callbacks
         self.callbacks = _callbacks or callbacks.get_default_callbacks()
         if RANK in (-1, 0):
