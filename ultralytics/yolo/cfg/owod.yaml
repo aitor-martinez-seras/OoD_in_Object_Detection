@@ -18,7 +18,7 @@ test: OWOD/test.txt  # 20288 of 40670 images, submit to https://competitions.cod
 # Define the dataset class if needed, else by default is YOLODataset
 dataset_class: FilteredYOLODataset
 # Define the options wanted for the load of the dataset
-remove_images_with_no_annotations: True  # remove images with no annotations
+remove_images_with_no_annotations: False  # remove images with no annotations
 
 # Classes
 names:
