@@ -2,7 +2,7 @@ import os
 import logging
 import logging.config
 
-def setup_logger(args):
+def setup_logger(args) -> logging.Logger:
     """Creates and returns a fancy logger."""
     # return logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
     # Why is setting up proper logging so !@?#! ugly?
