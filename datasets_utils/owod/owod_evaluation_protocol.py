@@ -14,9 +14,13 @@ import os
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
-import matplotlib.pyplot as plt
+from typing import List, Dict
+from logging import Logger
 from collections import OrderedDict, defaultdict
 from functools import lru_cache
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import torch
 from torch.distributions.weibull import Weibull
 from torch.distributions.transforms import AffineTransform
@@ -31,127 +35,127 @@ import json
 np.set_printoptions(threshold=sys.maxsize)
 
 
-f = open('./datasets/t1/annotations/test.json', 'r')
-ground_truth = json.load(f)
-f.close()
+# f = open('./datasets/t1/annotations/test.json', 'r')
+# ground_truth = json.load(f)
+# f.close()
 
-mapping ={}
-for each in ground_truth['images']:
-    mapping[each['id']]=each['file_name'].split('.')[0]
-    
-    
-class PascalVOCDetectionEvaluator(DatasetEvaluator):
-    """
-    Evaluate Pascal VOC style AP for Pascal VOC dataset.
-    It contains a synchronization, therefore has to be called from all ranks.
+# mapping ={}
+# for each in ground_truth['images']:
+#     mapping[each['id']]=each['file_name'].split('.')[0]
 
-    Note that the concept of AP can be implemented in different ways and may not
-    produce identical results. This class mimics the implementation of the official
-    Pascal VOC Matlab API, and should produce similar but not identical results to the
-    official API.
-    """
+OWOD_FOLDER_PATH = Path(__file__).parent
+UNKNOWN_CLASS_INDEX = 80
 
-    def __init__(self, dataset_name, cfg=None):
-        """
-        Args:
-            dataset_name (str): name of the dataset, e.g., "voc_2007_test"
-        """
-        self._dataset_name = dataset_name
-        meta = MetadataCatalog.get(dataset_name)
-        self._anno_file_template = os.path.join('./datasets', "Annotations", "{}.xml")
-        self._image_set_path = os.path.join('./split', "all_task_test.txt")
-        self._class_names = meta.thing_classes
-        self._is_2007 = False
-        # self._is_2007 = meta.year == 2007
-        self._cpu_device = torch.device("cpu")
-        self._logger = logging.getLogger(__name__)
-        if cfg is not None:
-            self.prev_intro_cls = cfg.TEST.PREV_INTRODUCED_CLS
-            self.curr_intro_cls = cfg.TEST.CUR_INTRODUCED_CLS
-            self.total_num_class = cfg.MODEL.RandBox.NUM_CLASSES
-            self.unknown_class_index = self.total_num_class - 1
-            self.num_seen_classes = self.prev_intro_cls + self.curr_intro_cls
-            self.known_classes = self._class_names[:self.num_seen_classes]
+# class PascalVOCDetectionEvaluator(DatasetEvaluator):
+#     """
+#     Evaluate Pascal VOC style AP for Pascal VOC dataset.
+#     It contains a synchronization, therefore has to be called from all ranks.
 
+#     Note that the concept of AP can be implemented in different ways and may not
+#     produce identical results. This class mimics the implementation of the official
+#     Pascal VOC Matlab API, and should produce similar but not identical results to the
+#     official API.
+#     """
 
+#     def __init__(self, dataset_name, cfg=None):
+#         """
+#         Args:
+#             dataset_name (str): name of the dataset, e.g., "voc_2007_test"
+#         """
+#         self._dataset_name = dataset_name
+#         meta = MetadataCatalog.get(dataset_name)
+#         self._anno_file_template = os.path.join('./datasets', "Annotations", "{}.xml")
+#         self._image_set_path = os.path.join('./split', "all_task_test.txt")
+#         self._class_names = meta.thing_classes
+#         self._is_2007 = False
+#         # self._is_2007 = meta.year == 2007
+#         self._cpu_device = torch.device("cpu")
+#         logger = logging.getLogger(__name__)
+#         if cfg is not None:
+#             self.prev_intro_cls = cfg.TEST.PREV_INTRODUCED_CLS
+#             self.curr_intro_cls = cfg.TEST.CUR_INTRODUCED_CLS
+#             self.total_num_class = cfg.MODEL.RandBox.NUM_CLASSES
+#             self.unknown_class_index = self.total_num_class - 1
+#             self.num_seen_classes = self.prev_intro_cls + self.curr_intro_cls
+#             self.known_classes = self._class_names[:self.num_seen_classes]
 
-
-
-    def reset(self):
-        self._predictions = defaultdict(list)  # class name -> list of prediction strings
+#     def reset(self):
+#         self._predictions = defaultdict(list)  # class name -> list of prediction strings
 
 
 
-    def process(self, inputs, outputs):
-        for input, output in zip(inputs, outputs):
-            image_id = input["image_id"]
-            instances = output["instances"].to(self._cpu_device)
-            boxes = instances.pred_boxes.tensor.numpy()
-            scores = instances.scores.tolist()
-            classes = instances.pred_classes.tolist()
-            threshold = 0.15
-            for box, score, cls in zip(boxes, scores, classes):
-                if score < threshold:
-                    continue
-                if cls == -100:
-                    continue
-                xmin, ymin, xmax, ymax = box
-                # The inverse of data loading logic in `datasets/pascal_voc.py`
-                xmin += 1
-                ymin += 1
-                self._predictions[cls].append(
-                    f"{image_id} {score:.3f} {xmin:.1f} {ymin:.1f} {xmax:.1f} {ymax:.1f}"
-                )
+#     def process(self, inputs, outputs):
+#         for input, output in zip(inputs, outputs):
+#             image_id = input["image_id"]
+#             instances = output["instances"].to(self._cpu_device)
+#             boxes = instances.pred_boxes.tensor.numpy()
+#             scores = instances.scores.tolist()
+#             classes = instances.pred_classes.tolist()
+#             threshold = 0.15
+#             for box, score, cls in zip(boxes, scores, classes):
+#                 if score < threshold:
+#                     continue
+#                 if cls == -100:
+#                     continue
+#                 xmin, ymin, xmax, ymax = box
+#                 # The inverse of data loading logic in `datasets/pascal_voc.py`
+#                 xmin += 1
+#                 ymin += 1
+#                 self._predictions[cls].append(
+#                     f"{image_id} {score:.3f} {xmin:.1f} {ymin:.1f} {xmax:.1f} {ymax:.1f}"
+#                 )
 
-    def compute_avg_precision_at_many_recall_level_for_unk(self, precisions, recalls):
-        precs = {}
-        for r in range(1, 10):
-            r = r/10
-            p = self.compute_avg_precision_at_a_recall_level_for_unk(precisions, recalls, recall_level=r)
-            precs[r] = p
-        return precs
+def compute_avg_precision_at_many_recall_level_for_unk(precisions, recalls):
+    precs = {}
+    for r in range(1, 10):
+        r = r/10
+        p = compute_avg_precision_at_a_recall_level_for_unk(precisions, recalls, recall_level=r)
+        precs[r] = p
+    return precs
 
-    def compute_avg_precision_at_a_recall_level_for_unk(self, precisions, recalls, recall_level=0.5):
-        precs = {}
-        for iou, recall in recalls.items():
-            prec = []
-            for cls_id, rec in enumerate(recall):
-                if cls_id == self.unknown_class_index and len(rec)>0:
-                    p = precisions[iou][cls_id][min(range(len(rec)), key=lambda i: abs(rec[i] - recall_level))]
-                    prec.append(p)
-            if len(prec) > 0:
-                precs[iou] = np.mean(prec)
-            else:
-                precs[iou] = 0
-        return precs
+def compute_avg_precision_at_a_recall_level_for_unk(precisions, recalls, recall_level=0.5):
+    precs = {}
+    for iou, recall in recalls.items():
+        prec = []
+        for cls_id, rec in enumerate(recall):
+            if cls_id == UNKNOWN_CLASS_INDEX and len(rec)>0:
+                p = precisions[iou][cls_id][min(range(len(rec)), key=lambda i: abs(rec[i] - recall_level))]
+                prec.append(p)
+        if len(prec) > 0:
+            precs[iou] = np.mean(prec)
+        else:
+            precs[iou] = 0
+    return precs
 
-    def compute_WI_at_many_recall_level(self, recalls, tp_plus_fp_cs, fp_os):
-        wi_at_recall = {}
-        for r in range(1, 10):
-            r = r/10
-            wi = self.compute_WI_at_a_recall_level(recalls, tp_plus_fp_cs, fp_os, recall_level=r)
-            wi_at_recall[r] = wi
-        return wi_at_recall
+def compute_WI_at_many_recall_level(recalls, tp_plus_fp_cs, fp_os, known_classes):
+    wi_at_recall = {}
+    for r in range(1, 10):
+        r = r/10
+        wi = compute_WI_at_a_recall_level(recalls, tp_plus_fp_cs, fp_os, recall_level=r, known_classes=known_classes)
+        wi_at_recall[r] = wi
+    return wi_at_recall
 
-    def compute_WI_at_a_recall_level(self, recalls, tp_plus_fp_cs, fp_os, recall_level=0.5):
-        wi_at_iou = {}
-        for iou, recall in recalls.items():
-            tp_plus_fps = []
-            fps = []
-            for cls_id, rec in enumerate(recall):
-                if cls_id in range(self.num_seen_classes) and len(rec) > 0:
-                    index = min(range(len(rec)), key=lambda i: abs(rec[i] - recall_level))
-                    tp_plus_fp = tp_plus_fp_cs[iou][cls_id][index]
-                    tp_plus_fps.append(tp_plus_fp)
-                    fp = fp_os[iou][cls_id][index]
-                    fps.append(fp)
-            if len(tp_plus_fps) > 0:
-                wi_at_iou[iou] = np.mean(fps) / np.mean(tp_plus_fps)
-            else:
-                wi_at_iou[iou] = 0
-        return wi_at_iou
+def compute_WI_at_a_recall_level(recalls, tp_plus_fp_cs, fp_os, recall_level=0.5, known_classes=None):
+    wi_at_iou = {}
+    num_seen_classes = len(known_classes)
+    for iou, recall in recalls.items():
+        tp_plus_fps = []
+        fps = []
+        for cls_id, rec in enumerate(recall):
+            if cls_id in range(num_seen_classes) and len(rec) > 0:
+                index = min(range(len(rec)), key=lambda i: abs(rec[i] - recall_level))
+                tp_plus_fp = tp_plus_fp_cs[iou][cls_id][index]
+                tp_plus_fps.append(tp_plus_fp)
+                fp = fp_os[iou][cls_id][index]
+                fps.append(fp)
+        if len(tp_plus_fps) > 0:
+            wi_at_iou[iou] = np.mean(fps) / np.mean(tp_plus_fps)
+        else:
+            wi_at_iou[iou] = 0
+    return wi_at_iou
 
-def evaluate(predictions):
+
+def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_names: List[str], known_classes: List[int], logger: Logger):
     """
     Returns:
         dict: has a key "segm", whose value is a dict of "AP", "AP50", and "AP75".
@@ -172,25 +176,36 @@ def evaluate(predictions):
         fp_os = defaultdict(list)
 
         # For each class, compute some metrics
-        for cls_id, cls_name in enumerate(self._class_names):
+        for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
             # Get the predictions with this class as predicted class
-            lines = predictions.get(cls_id, [""])
-            self._logger.info(cls_name + " has " + str(len(lines)) + " predictions.")
+            one_class_preds = {
+                "image_names": [],
+                "confs": [],
+                "bboxes": [],
+            }
+            if cls_name == 'unknown':
+                cls_id = UNKNOWN_CLASS_INDEX
+            for one_img_preds in all_predictions:
+                current_cls_preds_mask = one_img_preds['cls'] == cls_id
+                one_class_preds["image_names"].extend([one_img_preds['img_name'] for _ in range(current_cls_preds_mask.sum())])
+                one_class_preds["confs"].extend(one_img_preds['conf'][current_cls_preds_mask].tolist())
+                one_class_preds["bboxes"].extend(one_img_preds['bboxes'][current_cls_preds_mask].tolist())
+            one_class_preds["confs"] = np.array(one_class_preds["confs"], dtype=np.float32)
+            one_class_preds["bboxes"] = np.array(one_class_preds["bboxes"], dtype=np.float32)
 
-            # ?? Write predictions in a txt
-            with open(res_file_template.format(cls_name), "w") as f:
-                f.write("\n".join(lines))
 
             # for thresh in range(50, 100, 5):
             thresh = 50  # IoU threshold
             rec, prec, ap, unk_det_as_known, num_unk, tp_plus_fp_closed_set, fp_open_set = voc_eval(
-                res_file_template,
-                self._anno_file_template,  # Este es el xml de las anotaciones, el original
-                self._image_set_path,  # Se suele coger all_task_test.txt
-                cls_name,
+                current_class_predictions=one_class_preds,
+                all_targets=all_targets,
+                imagesetfile=(OWOD_FOLDER_PATH / "tasks/all_task_test.txt").as_posix(),  # Se suele coger all_task_test.txt
+                classname=cls_name,
                 ovthresh=thresh / 100.0,
                 use_07_metric=False,
-                known_classes=self.known_classes
+                known_classes=known_classes,
+                class_names=class_names,
+                logger=logger
             )
             aps[thresh].append(ap * 100)
             unk_det_as_knowns[thresh].append(unk_det_as_known)
@@ -205,81 +220,76 @@ def evaluate(predictions):
             except:
                 recs[thresh].append(0)
                 precs[thresh].append(0)
+            logger.info(f"Class: {cls_name}, AP: {ap * 100:.2f}, Recall: {rec[-1] * 100:.2f}, Precision: {prec[-1] * 100:.2f}")
 
     # WI is calculated for all_test?? Or only for WI split?
-    wi = self.compute_WI_at_many_recall_level(all_recs, tp_plus_fp_cs, fp_os)
-    self._logger.info('Wilderness Impact: ' + str(wi))
-    print('Wilderness Impact: ' + str(wi))
+    wi = compute_WI_at_many_recall_level(all_recs, tp_plus_fp_cs, fp_os, known_classes=known_classes)
+    logger.info('Wilderness Impact: ' + str(wi))
 
-    avg_precision_unk = self.compute_avg_precision_at_many_recall_level_for_unk(all_precs, all_recs)
-    self._logger.info('avg_precision: ' + str(avg_precision_unk))
-    print('avg_precision: ' + str(avg_precision_unk))
+    avg_precision_unk = compute_avg_precision_at_many_recall_level_for_unk(all_precs, all_recs)
+    logger.info('avg_precision: ' + str(avg_precision_unk))
     ret = OrderedDict()
     mAP = {iou: np.mean(x) for iou, x in aps.items()}
     ret["bbox"] = {"AP": np.mean(list(mAP.values())), "AP50": mAP[50]}
 
     total_num_unk_det_as_known = {iou: np.sum(x) for iou, x in unk_det_as_knowns.items()}
     total_num_unk = num_unks[50][0]
-    self._logger.info('Absolute OSE (total_num_unk_det_as_known): ' + str(total_num_unk_det_as_known))
-    self._logger.info('total_num_unk ' + str(total_num_unk))
-    print('Absolute OSE (total_num_unk_det_as_known): ' + str(total_num_unk_det_as_known))
-    print('total_num_unk ' + str(total_num_unk))
+    logger.info('Absolute OSE (total_num_unk_det_as_known): ' + str(total_num_unk_det_as_known))
+    logger.info('total_num_unk ' + str(total_num_unk))
     # Extra logging of class-wise APs
     avg_precs = list(np.mean([x for _, x in aps.items()], axis=0))
-    self._logger.info(self._class_names)
-    # self._logger.info("AP__: " + str(['%.1f' % x for x in avg_precs]))
-    self._logger.info("AP50: " + str(['%.1f' % x for x in aps[50]]))
-    self._logger.info("Precisions50: " + str(['%.1f' % x for x in precs[50]]))
-    self._logger.info("Recall50: " + str(['%.1f' % x for x in recs[50]]))
-    # self._logger.info("AP75: " + str(['%.1f' % x for x in aps[75]]))
-    print("AP50: " + str(['%.1f' % x for x in aps[50]]))
-    print("Precisions50: " + str(['%.1f' % x for x in precs[50]]))
-    print("Recall50: " + str(['%.1f' % x for x in recs[50]]))
+    logger.info(class_names)
+    # logger.info("AP__: " + str(['%.1f' % x for x in avg_precs]))
+    logger.info("AP50: " + str(['%.1f' % x for x in aps[50]]))
+    logger.info("Precisions50: " + str(['%.1f' % x for x in precs[50]]))
+    logger.info("Recall50: " + str(['%.1f' % x for x in recs[50]]))
+    # logger.info("AP75: " + str(['%.1f' % x for x in aps[75]]))
+    # TODO: Voy a tener que llevar un trackeo de las classes introducidas previamente y las actuales
     if self.prev_intro_cls > 0:
-        # self._logger.info("\nPrev class AP__: " + str(np.mean(avg_precs[:self.prev_intro_cls])))
-        self._logger.info("Prev class AP50: " + str(np.mean(aps[50][:self.prev_intro_cls])))
-        self._logger.info("Prev class Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls])))
-        self._logger.info("Prev class Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls])))
+        # logger.info("\nPrev class AP__: " + str(np.mean(avg_precs[:self.prev_intro_cls])))
+        logger.info("Prev class AP50: " + str(np.mean(aps[50][:self.prev_intro_cls])))
+        logger.info("Prev class Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls])))
+        logger.info("Prev class Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls])))
         print("Prev class AP50: " + str(np.mean(aps[50][:self.prev_intro_cls])))
         print("Prev class Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls])))
         print("Prev class Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls])))
 
-        # self._logger.info("Prev class AP75: " + str(np.mean(aps[75][:self.prev_intro_cls])))
+        # logger.info("Prev class AP75: " + str(np.mean(aps[75][:self.prev_intro_cls])))
 
-    # self._logger.info("\nCurrent class AP__: " + str(np.mean(avg_precs[self.prev_intro_cls:self.curr_intro_cls])))
-    self._logger.info("Current class AP50: " + str(np.mean(aps[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-    self._logger.info("Current class Precisions50: " + str(np.mean(precs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-    self._logger.info("Current class Recall50: " + str(np.mean(recs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
+    # logger.info("\nCurrent class AP__: " + str(np.mean(avg_precs[self.prev_intro_cls:self.curr_intro_cls])))
+    logger.info("Current class AP50: " + str(np.mean(aps[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
+    logger.info("Current class Precisions50: " + str(np.mean(precs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
+    logger.info("Current class Recall50: " + str(np.mean(recs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
     print("Current class AP50: " + str(np.mean(aps[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
     print("Current class Precisions50: " + str(np.mean(precs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
     print("Current class Recall50: " + str(np.mean(recs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-    # self._logger.info("Current class AP75: " + str(np.mean(aps[75][self.prev_intro_cls:self.curr_intro_cls])))
+    # logger.info("Current class AP75: " + str(np.mean(aps[75][self.prev_intro_cls:self.curr_intro_cls])))
 
-    # self._logger.info("\nKnown AP__: " + str(np.mean(avg_precs[:self.prev_intro_cls + self.curr_intro_cls])))
-    self._logger.info("Known AP50: " + str(np.mean(aps[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    self._logger.info("Known Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    self._logger.info("Known Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls + self.curr_intro_cls])))
+    # logger.info("\nKnown AP__: " + str(np.mean(avg_precs[:self.prev_intro_cls + self.curr_intro_cls])))
+    logger.info("Known AP50: " + str(np.mean(aps[50][:self.prev_intro_cls + self.curr_intro_cls])))
+    logger.info("Known Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls + self.curr_intro_cls])))
+    logger.info("Known Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls + self.curr_intro_cls])))
     print("Known AP50: " + str(np.mean(aps[50][:self.prev_intro_cls + self.curr_intro_cls])))
     print("Known Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls + self.curr_intro_cls])))
     print("Known Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    # self._logger.info("Known AP75: " + str(np.mean(aps[75][:self.prev_intro_cls + self.curr_intro_cls])))
+    # logger.info("Known AP75: " + str(np.mean(aps[75][:self.prev_intro_cls + self.curr_intro_cls])))
 
-    # self._logger.info("\nUnknown AP__: " + str(avg_precs[-1]))
-    self._logger.info("Unknown AP50: " + str(aps[50][-1]))
-    self._logger.info("Unknown Precisions50: " + str(precs[50][-1]))
-    self._logger.info("Unknown Recall50: " + str(recs[50][-1]))
+    # logger.info("\nUnknown AP__: " + str(avg_precs[-1]))
+    logger.info("Unknown AP50: " + str(aps[50][-1]))
+    logger.info("Unknown Precisions50: " + str(precs[50][-1]))
+    logger.info("Unknown Recall50: " + str(recs[50][-1]))
     print("Unknown AP50: " + str(aps[50][-1]))
     print("Unknown Precisions50: " + str(precs[50][-1]))
     print("Unknown Recall50: " + str(recs[50][-1]))
-    # self._logger.info("Unknown AP75: " + str(aps[75][-1]))
+    # logger.info("Unknown AP75: " + str(aps[75][-1]))
 
-    # self._logger.info("R__: " + str(['%.1f' % x for x in list(np.mean([x for _, x in recs.items()], axis=0))]))
-    # self._logger.info("R50: " + str(['%.1f' % x for x in recs[50]]))
-    # self._logger.info("R75: " + str(['%.1f' % x for x in recs[75]]))
+    # logger.info("R__: " + str(['%.1f' % x for x in list(np.mean([x for _, x in recs.items()], axis=0))]))
+    # logger.info("R50: " + str(['%.1f' % x for x in recs[50]]))
+    # logger.info("R75: " + str(['%.1f' % x for x in recs[75]]))
     #
-    # self._logger.info("P__: " + str(['%.1f' % x for x in list(np.mean([x for _, x in precs.items()], axis=0))]))
-    # self._logger.info("P50: " + str(['%.1f' % x for x in precs[50]]))
-    # self._logger.info("P75: " + str(['%.1f' % x for x in precs[75]]))
+    # logger.info("P__: " + str(['%.1f' % x for x in list(np.mean([x for _, x in precs.items()], axis=0))]))
+    # logger.info("P50: " + str(['%.1f' % x for x in precs[50]]))
+    # logger.info("P75: " + str(['%.1f' % x for x in precs[75]]))
 
     return ret
 
@@ -372,10 +382,11 @@ def voc_ap(rec, prec, use_07_metric=False):
     return ap
 
 
-def voc_eval(detpath, annopath, imagesetfile, classname, ovthresh=0.5, use_07_metric=False, known_classes=None):
+def voc_eval(current_class_predictions: Dict[str, List], all_targets: List[Dict], imagesetfile, classname, ovthresh=0.5, use_07_metric=False,
+             known_classes: List[int] = None, class_names: List[str] = None, logger: Logger = None):
     """rec, prec, ap = voc_eval(detpath,
                                 annopath,
-                                imagesetfile,
+                                imagesetfile,  # 'all_tasks_test.txt'
                                 classname,
                                 [ovthresh],
                                 [use_07_metric])
@@ -391,60 +402,106 @@ def voc_eval(detpath, annopath, imagesetfile, classname, ovthresh=0.5, use_07_me
     [ovthresh]: Overlap threshold (default = 0.5)
     [use_07_metric]: Whether to use VOC07's 11 point AP computation
         (default False)
+    known_classes: List of known classes idx
+    class_names: List of class names
+    logger: Logger object
     """
     # assumes detections are in detpath.format(classname)
     # assumes annotations are in annopath.format(imagename)
     # assumes imagesetfile is a text file with each line an image name
 
+    # Classname to idx
+    class_mapping = {class_name: idx for idx, class_name in enumerate(class_names)}
+    class_idx = class_mapping[classname]  # Tengo que llevar hasta aqui el mapping de las clases
+
+    # MANTENGO
     # first load gt
-    # read list of images
-    with PathManager.open(imagesetfile, "r") as f:
+    # read list of images (all_tasks_test.txt)
+    with open(imagesetfile, "r") as f:
         lines = f.readlines()
     imagenames = [x.strip() for x in lines]
 
-    imagenames_filtered = []
+    # ELIMINO
+    # load annots. Nosotros directamente las tenemos ya en memoria y lo que hacemos es asegurar que toda imagen tiene un target
+    # recs = {}
+    # for imagename in imagenames:
+    #     rec = parse_rec(annopath.format(imagename), tuple(known_classes))
+    #     if rec is not None:  # Es None para los XML a los que no se puede acceder por lo que sea. Asumimos que siempre podemos acceder a todos.
+    #         recs[imagename] = rec
+    #         imagenames_filtered.append(imagename)
+    # imagenames = imagenames_filtered
+    
+    # NOTE: recs es un diccionario con las anotaciones de cada imagen.
+    #   Las keys son los filenames y dentro de cada key el value es una list con cada anotacion. 
+    #   A su vez, cada anotacion es un diccionario con las keys:
+    #       - name: nombre de la clase
+    #       - difficult: si es dificil o no
+    #       - bbox: [xmin, ymin, xmax, ymax]
 
-    # load annots (all_tasks_test.txt)
-    recs = {}
-    for imagename in imagenames:
-        rec = parse_rec(annopath.format(imagename), tuple(known_classes))
-        if rec is not None:  # Es None para las imagenes que no tienen anotaciones
-            recs[imagename] = rec
-            imagenames_filtered.append(imagename)
+    # Assert every imagename of the set is present in the targets
+    imagenames_set = set(imagenames)
+    target_imagenames_set = set([x['img_name'] for x in all_targets])
+    assert imagenames_set == target_imagenames_set, 'Some images are missing in the targets'
 
-    imagenames = imagenames_filtered
-
+    ### Coger el GT de la clase actual para TODAS las imagenes y formatear al estilo de ellos ###
+    # ELIMINO y CAMBIO
     # extract gt objects for this class
+    # class_recs = {}
+    # npos = 0
+    # for imagename in imagenames:
+    #     R = [obj for obj in recs[imagename] if obj["name"] == classname]  # De cada imagen, cogemos los objetos de la clase classname
+    #     bbox = np.array([x["bbox"] for x in R])
+    #     difficult = np.array([x["difficult"] for x in R]).astype(np.bool)
+    #     # difficult = np.array([False for x in R]).astype(np.bool)  # treat all "difficult" as GT
+    #     det = [False] * len(R)
+    #     npos = npos + sum(~difficult)
+    #     class_recs[imagename] = {"bbox": bbox, "difficult": difficult, "det": det}
     class_recs = {}
     npos = 0
-    for imagename in imagenames:
-        R = [obj for obj in recs[imagename] if obj["name"] == classname]
-        bbox = np.array([x["bbox"] for x in R])
-        difficult = np.array([x["difficult"] for x in R]).astype(np.bool)
-        # difficult = np.array([False for x in R]).astype(np.bool)  # treat all "difficult" as GT
+    for target in all_targets:
+        #if target['img_name'] in imagenames:
+        imagename = target['img_name']
+        current_class_gt_mask = target['cls'] == class_idx
+        R = target["cls"][current_class_gt_mask]
+        bbox = target["bboxes"][current_class_gt_mask].numpy()
+        difficult = np.array([False for x in R]).astype(bool)  # All are non difficult
         det = [False] * len(R)
-        npos = npos + sum(~difficult)
+        npos = npos + sum(~difficult)  # Number of non-difficult GTs, always same as len(R)
         class_recs[imagename] = {"bbox": bbox, "difficult": difficult, "det": det}
-        
 
+    ### Coger las predicciones solo de la clase predicha (muchas imagenes se quedaran fuera) y formatear al estilo de ellos ###
+    # ELIMINO y CAMBIO
     # read dets
-    detfile = detpath.format(classname)
-
-    with open(detfile, "r") as f:
-        lines = f.readlines()
-
-    splitlines = [x.strip().split(" ") for x in lines]
-    image_ids = [x[0] for x in splitlines]
-    confidence = np.array([float(x[1]) for x in splitlines])
-    BB = np.array([[float(z) for z in x[2:]] for x in splitlines]).reshape(-1, 4)
+    # detfile = detpath.format(classname)
+    # with open(detfile, "r") as f:
+    #     lines = f.readlines()
+    # splitlines = [x.strip().split(" ") for x in lines]
+    # image_ids = [x[0] for x in splitlines]
+    # confidence = np.array([float(x[1]) for x in splitlines])
+    # BB = np.array([[float(z) for z in x[2:]] for x in splitlines]).reshape(-1, 4)
+    
+    # TODO: De aqui tiene que salir una variable con los img names de las predicciones,
+    #   otra con las confidences y otra con las bboxes, todas en el mismo orden y misma longitud. 
+    #   la longitud es el numero de predicciones (cajas) de la clase actual
+    image_names = current_class_predictions.get("image_names")
+    confidence = current_class_predictions.get("confs")
+    BB = current_class_predictions.get('bboxes')
 
     # sort by confidence
+    # sorted_ind = np.argsort(-confidence)
+    # BB = BB[sorted_ind, :]
+    # image_ids = [image_ids[x] for x in sorted_ind]
+
     sorted_ind = np.argsort(-confidence)
     BB = BB[sorted_ind, :]
-    image_ids = [image_ids[x] for x in sorted_ind]
+    if len(sorted_ind) == 0:
+        raise ValueError('No predictions for class ' + classname)
+        return [0], [0], 0, 0, 0, 0, 0
+    image_names = [image_names[x] for x in sorted_ind]  # CAMBIO
 
     # go down dets and mark TPs and FPs
-    nd = len(image_ids)
+    #nd = len(image_ids)
+    nd = len(image_names)  # CAMBIO
     tp = np.zeros(nd)
     fp = np.zeros(nd)
 
@@ -455,7 +512,9 @@ def voc_eval(detpath, annopath, imagesetfile, classname, ovthresh=0.5, use_07_me
     # Assign a 1 to tp if it overlaps with a GT not already detected and it is not difficult
     # Assign a 1 to fp if it does not overlap with any GT or it overlaps with a GT already detected
     for d in range(nd):
-        R = class_recs[str(mapping[int(image_ids[d])])]
+        # Yo en vez de coger el file id y transformarlo a name cojo directamente el name
+        #R = class_recs[str(mapping[int(image_ids[d])])]  # CAMBIO . El mapping lo que hace es mapear el id de la imagen a su nombre para asi acceder a su GT
+        R = class_recs[image_names[d]]
         bb = BB[d, :].astype(float)
         ovmax = -np.inf
         BBGT = R["bbox"].astype(float)
@@ -515,17 +574,31 @@ def voc_eval(detpath, annopath, imagesetfile, classname, ovthresh=0.5, use_07_me
     Absolute OSE = # of unknown objects classified as known objects of class 'classname'
     WI = FP_openset / (TP_closed_set + FP_closed_set)
     '''
-    logger = logging.getLogger(__name__)
+    #logger = logging.getLogger(__name__)
 
+    # ELIMINO y CAMBIO
     # Finding GT of unknown objects
+    # unknown_class_recs = {}
+    # n_unk = 0
+    # for imagename in imagenames:
+    #     R = [obj for obj in recs[imagename] if obj["name"] == 'unknown']
+    #     bbox = np.array([x["bbox"] for x in R])
+    #     difficult = np.array([x["difficult"] for x in R]).astype(np.bool)
+    #     det = [False] * len(R)
+    #     n_unk = n_unk + sum(~difficult)
+    #     unknown_class_recs[imagename] = {"bbox": bbox, "difficult": difficult, "det": det}
+    # TODO: Aqui tengo que asegurarme de haber designado como unknown aquellas classes que no son conocidas
     unknown_class_recs = {}
     n_unk = 0
-    for imagename in imagenames:
-        R = [obj for obj in recs[imagename] if obj["name"] == 'unknown']
-        bbox = np.array([x["bbox"] for x in R])
-        difficult = np.array([x["difficult"] for x in R]).astype(np.bool)
+    for target in all_targets:
+        #if target['img_name'] in imagenames:
+        imagename = target['img_name']
+        current_class_gt_mask = target['cls'] == 80  # 80 es el indice de unknown
+        R = target["cls"][current_class_gt_mask]
+        bbox = target["bboxes"][current_class_gt_mask].numpy()
+        difficult = np.array([False for x in R]).astype(bool)  # All are non difficult
         det = [False] * len(R)
-        n_unk = n_unk + sum(~difficult)
+        n_unk = n_unk + sum(~difficult)  # Number of non-difficult GTs, always same as len(R)
         unknown_class_recs[imagename] = {"bbox": bbox, "difficult": difficult, "det": det}
 
     if classname == 'unknown':
@@ -535,7 +608,8 @@ def voc_eval(detpath, annopath, imagesetfile, classname, ovthresh=0.5, use_07_me
     # If so, it is an unknown object that was classified as known.
     is_unk = np.zeros(nd)
     for d in range(nd):
-        R = unknown_class_recs[str(mapping[int(image_ids[d])])]
+        #R = unknown_class_recs[str(mapping[int(image_ids[d])])]  # CAMBIO
+        R = unknown_class_recs[image_names[d]]
         bb = BB[d, :].astype(float)
         ovmax = -np.inf
         BBGT = R["bbox"].astype(float)
