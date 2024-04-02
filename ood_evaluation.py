@@ -107,7 +107,8 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
         raise NotImplementedError("Not implemented yet")
 
 
-def obtain_thresholds_for_ood_detection_method(ood_method: Union[LogitsMethod, DistanceMethod], model: YOLO, device, in_loader, logger: Logger, args: SimpleArgumentParser):
+def obtain_thresholds_for_ood_detection_method(ood_method: Union[LogitsMethod, DistanceMethod], model: YOLO, device: str, 
+                                               in_loader: InfiniteDataLoader, logger: Logger, args: SimpleArgumentParser):
     """
     Function that loads or generates the thresholds for the OOD evaluation. The thresholds are
         stored in the OODMethod object.
@@ -184,7 +185,7 @@ def obtain_thresholds_for_ood_detection_method(ood_method: Union[LogitsMethod, D
         write_json(ood_method.thresholds, thresholds_path)
 
 
-def save_images_with_ood_detection(ood_method: OODMethod, model: YOLO, device, ood_loader, logger: Logger):
+def save_images_with_ood_detection(ood_method: OODMethod, model: YOLO, device: str, ood_loader: InfiniteDataLoader, logger: Logger):
 
     assert ood_method.thresholds is not None, "Thresholds must be generated or loaded before predicting with OoD detection"
 
@@ -193,12 +194,12 @@ def save_images_with_ood_detection(ood_method: OODMethod, model: YOLO, device, o
     ood_method.iterate_data_to_plot_with_ood_labels(model, ood_loader, device, logger, PRUEBAS_ROOT_PATH, NOW)
 
 
-def run_eval(ood_method: OODMethod, model: YOLO, device: str, in_loader, ood_loader, logger: Logger, args: SimpleArgumentParser):
+def run_eval(ood_method: OODMethod, model: YOLO, device: str, ood_loader: InfiniteDataLoader, known_classes:List[int], logger: Logger):
     logger.info("Running test to compute metrics...")
     logger.flush()
     assert ood_method.thresholds is not None, "Thresholds must be generated or loaded before predicting with OoD detection"
 
-    ood_method.iterate_data_to_compute_metrics(model, device, in_loader, ood_loader, logger, args)
+    ood_method.iterate_data_to_compute_metrics(model, device, ood_loader, logger, known_classes)
 
 
 def main(args: SimpleArgumentParser):
@@ -260,7 +261,8 @@ def main(args: SimpleArgumentParser):
     start_time = time.time()
     
     ### OOD evaluation ###
-
+    # TODO: Si metemos otro dataset habra que hacer esto de forma mas general
+    known_classes = [x for x in range(ind_dataset.number_of_classes)]
     # First fill the thresholds attribute of the OODMethod object
     obtain_thresholds_for_ood_detection_method(ood_method, model, device, ind_dataloader, logger, args)
 
@@ -270,7 +272,7 @@ def main(args: SimpleArgumentParser):
         
     elif args.compute_metrics:
         # Run the evaluation to compute the metrics
-        run_eval(model, args.device, ind_dataloader, ood_dataloader, logger, args)
+        run_eval(ood_method, model, device, ood_dataloader, known_classes, logger)
 
     end_time = time.time()
 
