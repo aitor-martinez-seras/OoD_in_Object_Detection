@@ -36,4 +36,6 @@ You have to modify [default.yaml](yolo/cfg/default.yaml) config, adding the new 
 
     ## OWOD 
 
-    For the addition of the OWOD benchmark and to not force the copying of all the COCO and Pascal VOC datasets to the OWOD folder, we modified the method ```get_img_files``` from [BaseDataset](yolo/data/build.py) to catch the parent path from the ```path``` variable inside the ```.yaml``` files of the datasets configuration instead of inferring it by taking the parent of the ```.txt``` file where the paths are being taking from (```train.txt``` for example).
+    For the addition of the OWOD benchmark:
+    - To not force the copying of all the COCO and Pascal VOC datasets to the OWOD folder, we modified the method ```get_img_files``` from [BaseDataset](yolo/data/build.py) to catch the parent path from the ```path``` variable inside the ```.yaml``` files of the datasets configuration instead of inferring it by taking the parent of the ```.txt``` file where the paths are being taking from (```train.txt``` for example).
+    - To enable the usage of the different tasks, we add a parameter to the default configuration ([default.yaml](yolo/cfg/default.yaml)), called `owod_task`, that can be then set in the configuration passed to the dataset and dataloader creator or the train method. Then this parameter is used in the dataset class to load the correct paths and labels for the task.
