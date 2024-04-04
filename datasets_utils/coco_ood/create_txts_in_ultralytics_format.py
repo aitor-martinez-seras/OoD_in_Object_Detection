@@ -14,6 +14,26 @@ def main():
     coco_ood_root_path = Path(os.path.abspath(__file__)).parent
     datasets_root_path = coco_ood_root_path.parent.parent.parent / "datasets"
     coco_dataset_root_path = datasets_root_path / "coco"
+    voc_images_path = datasets_root_path / 'VOC/images/'
+
+    voc_train2007_images_path = voc_images_path / 'train2007'
+    voc_train2012_images_path = voc_images_path / 'train2012'
+    voc_val2007_images_path = voc_images_path / 'val2007'
+    voc_val2012_images_path = voc_images_path / 'val2012'
+    voc_test2007_images_path = voc_images_path / 'test2007'
+    voc_test2012_images_path = voc_images_path / 'test2012'
+
+
+    # VOC
+    train_voc_path = coco_ood_root_path / 'voc0712_train_all.json'
+    train_pretest_path = coco_ood_root_path / 'voc0712_train_completely_annotation200.json'
+    val_voc_path = coco_ood_root_path / 'val_coco_format.json'
+    with open(train_voc_path, 'r') as f:
+        train_voc_ann = json.load(f)
+    with open(train_pretest_path, 'r') as f:
+        train_pretest_ann = json.load(f)
+    with open(val_voc_path, 'r') as f:
+        val_voc_ann = json.load(f)
 
     # COCO OOD
     print('Creating txt for OOD images...')
@@ -35,8 +55,8 @@ def main():
     coco_mixed_ood_ann_path = coco_ood_root_path / 'instances_val2017_mixed_OOD.json'
     with open(coco_mixed_ind_ann_path, 'r') as f:
         coco_mixed_ind_ann = json.load(f)
-    # with open(coco_mixed_ood_ann_path, 'r') as f:
-    #     coco_mixed_ood_ann = json.load(f)
+    with open(coco_mixed_ood_ann_path, 'r') as f:
+        coco_mixed_ood_ann = json.load(f)
     with open(coco_mixed_txt_path, 'w') as f:
         for image in coco_mixed_ind_ann['images']:
             f.write(f"./images/val2017/{image['file_name']}\n")

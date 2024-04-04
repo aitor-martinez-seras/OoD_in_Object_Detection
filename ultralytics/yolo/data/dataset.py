@@ -3,7 +3,7 @@
 from itertools import repeat
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
-from typing import Union
+from typing import Union, List, Dict
 import os
 import glob
 import re
@@ -294,18 +294,64 @@ class FilteredYOLODataset(YOLODataset):
     def __init__(self, *args, data=None, use_segments=False, use_keypoints=False, **kwargs):
         super().__init__(*args, data=data, use_segments=use_segments, use_keypoints=use_keypoints, **kwargs)
         print(f' -- Filtering dataset --')
-        # 1: Check if we are in OWOD style datasets and define the number of classes in consequence
+        # 1. Check if we are in OWOD style datasets or COCO OOD/Mixed datasets
         self.owod_task = kwargs['hyp'].get('owod_task', None)
-        self.number_of_classes = self.select_number_of_classes_owod(self.owod_task)
-        self.number_of_classes = len(self.data["names"]) if self.number_of_classes == 0 else self.number_of_classes
-        # 2: Update the labels
-        self.upate_labels_to_use_less_classes()
-        # 3: Update the attributes related with the labels (im_files, ni, npy_files, ...)
-        self.update_attributes_to_new_labels()
-        # 4: Limit images to the ones that are part of the OWOD task (again checks if labels are correctly updated)
-        if self.owod_task:
-            self.limit_images_by_owod_tasks(self.owod_task)
-        assert len(self.labels) == len(self.im_files), 'Number of labels and images must be equal'
+        self.ood_or_mixed = self.data.get("ood_or_mixed", None)
+
+        if self.ood_or_mixed:
+            # Case COCO OOD or Mixed
+            import json
+            assert kwargs["hyp"].get("split") == 'val', 'COCO OOD and Mixed datasets are only available for the validation split'
+            #assert self.owod_task is None, 'OWOD task is not available for COCO OOD and Mixed datasets'
+            self.number_of_classes = 20  # Only 20 classes in COCO OOD or Mixed
+            print(f"Using COCO {self.ood_or_mixed} dataset")
+
+            # 2. Load the annotations from the json files
+            if self.ood_or_mixed == 'ood':
+                annotations_json_path = self.data["json_files"][0]
+                with open(annotations_json_path, 'r') as f:
+                    annotations = json.load(f)
+            elif self.ood_or_mixed == 'mixed':
+                annotations_ind_json_path = self.data["json_files"][0]
+                annotations_ood_json_path = self.data["json_files"][1]
+                # TODO: Aqui me las tengo que arreglar para convertir esto en un solo dict o algo asi
+                with open(annotations_ind_json_path, 'r') as f:
+                    annotations_ind = json.load(f)
+                with open(annotations_ood_json_path, 'r') as f:
+                    annotations_ood = json.load(f)
+                # Merge the annotations
+                annotations = annotations_ind
+                for ann in annotations_ood["annotations"]:
+                    annotations["annotations"].append(ann)
+            else:
+                raise ValueError(f'Invalid value for ood_or_mixed: {self.ood_or_mixed}')
+            
+            # 3. Create the labels using the annotations
+            self.labels = self.create_labels_using_coco_ood_json_annotations(annotations)
+            # 4: Update the attributes related with the labels (im_files, ni, npy_files, ...)
+            self.update_attributes_to_new_labels()
+            assert len(self.labels) == len(self.im_files), 'Number of labels and images must be equal'
+
+        else:
+            # Case OWOD or VOC or COCO standard
+            if self.owod_task:
+                print(f'Using OWOD task {self.owod_task} to filter dataset')
+            else:
+                print(f'Using the number of classes defined in the dataset to filter the dataset')
+            self.number_of_classes = self.select_number_of_classes_owod(self.owod_task)
+            self.number_of_classes = len(self.data["names"]) if self.number_of_classes == 0 else self.number_of_classes
+
+            # 2: Update the labels
+            self.upate_labels_to_use_less_classes()  # TODO: Separar esta clase en dos clases, una para OWOD y otra para limitar el numero de clases a traves de los names
+            
+            # 3: Update the attributes related with the labels (im_files, ni, npy_files, ...)
+            self.update_attributes_to_new_labels()
+
+            # 4: Limit images to the ones that are part of the OWOD task (again checks if labels are correctly updated)
+            if self.owod_task:
+                self.limit_images_by_owod_tasks(self.owod_task)
+            assert len(self.labels) == len(self.im_files), 'Number of labels and images must be equal'
+
         print(f'Succesfully filtered dataset. New dataset:')
         print(f'  * {len(self.labels)} images')
         print(f'  * {self.number_of_classes} classes')
@@ -349,6 +395,10 @@ class FilteredYOLODataset(YOLODataset):
         return im_files
 
     def upate_labels_to_use_less_classes(self):
+        """
+        This method maps the COCO classes to the OWOD classes if we are in OWOD mode and then
+        filters the labels to include only the ones present in the YAML file in "names".        
+        """
         # 1: Map COCO classes to OWOD classes if we are in OWOD
         if self.data.get('coco_to_owod_mapping'):
             # If present, means we are in OWOD using Pascal class order
@@ -379,6 +429,72 @@ class FilteredYOLODataset(YOLODataset):
         """Remove images with no annotations."""
         self.labels = [lb for lb in self.labels if len(lb['cls']) > 0]
 
+    ### COCO OOD and Mixed Methods ###
+    def create_labels_using_coco_ood_json_annotations(self, annotations: Dict[str, List]) -> List[Dict]:
+        """Replace the labels with the annotations from the json file."""
+        # Take the images from the labels and create a dictionary with the image id as key and the image file as value
+        img_files = {lb["im_file"].split('/')[-1]: lb["im_file"] for lb in self.labels}
+
+        # Fill a dictionary with the annotations per image id
+        annotations_per_image_id = {}
+        for image in annotations["images"]:
+            image_id = image["id"]
+            annotations_per_image_id[image_id] = {
+                "im_file": img_files[image["file_name"]],
+                "shape": (image["height"], image["width"]),  # Height x Width is the convention
+                "cls": [],  # Placeholder for the class
+                "bboxes": [],  # Placeholder for the bbox
+                "segments": [],
+                "keypoints": None,  
+                "bbox_format": "xywh",
+                "normalized": True
+            }
+        set_img_ids_in_annotations_per_img = set(annotations_per_image_id.keys())
+
+        # Using the annotations img id, fill the cls and bboxes iteratively
+        print('WARNING: COCO OOD and Mixed classes, start at 1, so a -1 is applied to the cls to match OWOD classes.')
+        coco_ood_to_owod_mapping = self.data.get('coco_ood_to_owod_mapping')
+        img_ids_not_in_the_actual_images = set()
+        for ann in annotations["annotations"]:
+            image_id = ann["image_id"]
+
+            # WARNING: This is because some image IDs of the annotations of the mixed_OOD are not in the 
+            #   actual images (anntations["images"]), so I assume we skip them, as I assume in UnSniffer they do it
+            if image_id not in set_img_ids_in_annotations_per_img:
+                img_ids_not_in_the_actual_images.add(image_id)
+                continue
+
+            # Transform the cls to OWOD convention. First subtract 1 to match COCO classes, then apply mapping
+            ann_cls = ann["category_id"] - 1  # COCO OOD and Mixed classes start at 1
+            if ann_cls != 80:
+                ann_cls = coco_ood_to_owod_mapping[ann_cls]
+            annotations_per_image_id[image_id]["cls"].append([ann_cls])
+            # Obtain height and width of the image to normalize the bbox
+            im_height, im_width = annotations_per_image_id[image_id]["shape"]  # Height x Width is the convention
+            # Transform to cx, cy, w, h normalized
+            bbox = ann["bbox"]
+            x, y, w, h = bbox  # Annotation of bboxes come in xywh format
+            cx = (x + w / 2) / im_width
+            cy = (y + h / 2) / im_height
+            # Append bbox
+            annotations_per_image_id[image_id]["bboxes"].append(
+                [cx, cy, w / im_width, h / im_height]
+            )
+        print(f'WARNING: {len(img_ids_not_in_the_actual_images)} images in the annotations are not in the actual images, SKIPPING them!')
+        
+        # Finally, convert the dictionary to a list of labels and the cls and bboxes to numpy arrays
+        labels = list(annotations_per_image_id.values())
+        for label in labels:
+            if len(label["cls"]) == 0:
+                label["cls"] = np.empty((0, 1), dtype=np.float32)
+                label["bboxes"] = np.empty((0, 4), dtype=np.float32)
+            else:
+                label["cls"] = np.array(label["cls"], dtype=np.float32)
+                label["bboxes"] = np.array(label["bboxes"], dtype=np.float32)
+
+        return labels
+
+    ### OWOD Methods ###
     def map_coco_to_owod(self):
         """Map COCO classes to OWOD classes."""
         mapping = self.data.get('coco_to_owod_mapping')
