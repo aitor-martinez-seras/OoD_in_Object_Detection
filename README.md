@@ -27,6 +27,10 @@ To install the package:
 
 Datasets must be outside the source code folder
 
+# Warnings
+
+The code has been only tested on Linux and some of the code may not work, as some parts are not OS agnostic due to the usage of the `/` for splitting paths.
+
 # Download datasets
 
 ## TAO
