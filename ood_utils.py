@@ -1,4 +1,4 @@
-from typing import List, Tuple, Callable, Type, Union
+from typing import List, Tuple, Callable, Type, Union, Dict
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -13,8 +13,10 @@ import torchvision.ops as t_ops
 from scipy.optimize import linear_sum_assignment
 
 from ultralytics import YOLO
+from ultralytics.yolo.data.build import InfiniteDataLoader
 from ultralytics.yolo.engine.results import Results
 from visualization_utils import plot_results
+from datasets_utils.owod.owod_evaluation_protocol import compute_metrics
 
 
 #@dataclass(slots=True)
@@ -223,7 +225,7 @@ class OODMethod(ABC):
             imgs, targets = data
         return imgs, targets
 
-    def iterate_data_to_plot_with_ood_labels(self, model, dataloader, device, logger, folder_path: Path, now: str):
+    def iterate_data_to_plot_with_ood_labels(self, model: YOLO, dataloader: InfiniteDataLoader, device: str, logger: Logger, folder_path: Path, now: str):
         
         # # Obtain the bbox format from the last transform of the dataset
         # if hasattr(dataloader.dataset.transforms.transforms[-1], "bbox_format"):
@@ -234,31 +236,140 @@ class OODMethod(ABC):
         logger.warning(f"Using a confidence threshold of {self.min_conf_threshold} for tests")
         count_of_images = 0
         number_of_images_saved = 0
+
+        # TODO: Activado para ejecutar los plots OOD con targets
+        if callable(getattr(self, "compute_ood_decision_with_ftmaps", None)):
+            model.model.modo = 'all_ftmaps'
+
         for idx_of_batch, data in enumerate(dataloader):
             count_of_images += len(data['im_file'])
-            if count_of_images < 8000:
-                continue
+            # if count_of_images < 8000:
+            #     continue
             ### Preparar imagenes y targets ###
             imgs, targets = self.prepare_data_for_model(data, device)
             
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
             results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold)
-
-            ### Comprobar si las cajas predichas son OoD ###
-            ood_decision = self.compute_ood_decision_on_results(results, logger)
             
-            plot_results( 
-                class_names=model.names,
-                results=results,
-                folder_path=folder_path,
-                now=now,
-                valid_preds_only=False,
-                origin_of_idx=idx_of_batch*dataloader.batch_size,
-                image_format='pdf',
-                ood_decision=ood_decision,
-                ood_method_name=self.name,
-                targets=targets
-            )
+            # TODO: Activado para ejecutar los plots OOD con targets
+            if True:
+                ### Experiment with targets ###
+                # Lo que hago es representar los targets para cada imagen con el label de Known o UNK en funcion de si son clases
+                #   conocidas o no. Ademas, para cada uno de estos casos el score se ha obtenido de forma diferente. En ambos casos 
+                #   Hay 3 valores, uno por cada stride, con el orden s8/s16/s32.
+                # Known: Cada valor representa si para el espacio del stride y la clase correspondientes al objeto en la imagen, la caja es OoD o no
+                # UNK: Cada valor representa el % de espacios de clase para el stride correspondiente que han considerado el objeto OOD
+                if callable(getattr(self, "compute_ood_decision_with_ftmaps", None)):
+                    # Create a list of lists with the roi aligned features of each bouding box of each image
+                    # First list is for the image, second list is for the bbox
+
+                    # 1.Group ftmaps of all images in the batch per level, so that 
+                    #   we can do the RoIAlign efficiently once per level
+                    ftmaps_per_level = []
+                    for idx_lvl in range(3):
+                        one_level_ftmaps = []
+                        for i_bt in range(len(results)):
+                            one_level_ftmaps.append(results[i_bt].extra_item[idx_lvl].to('cpu'))
+                        ftmaps_per_level.append(torch.stack(one_level_ftmaps))
+                    
+                    # 2.Prepare the boxes in a list of boxes and keep track of the image index
+                    #   so that we can match the boxes with the correct image. Each position in the list of bboxes
+                    #   refers to one image bboxes
+                    _bboxes = []
+                    idx_of_img_per_box = []
+                    for _idx, one_img_bboxes in enumerate(targets["bboxes"]):
+                        _bboxes.append(one_img_bboxes.to(torch.float32))
+                        idx_of_img_per_box.append(torch.tensor([_idx]*len(one_img_bboxes), dtype=torch.int32))
+                    #_bboxes = torch.cat(_boxes, dim=0)
+                    idx_of_img_per_box = torch.cat(idx_of_img_per_box, dim=0)
+                    #_bboxes = [b.to(torch.float32) for b in targets["bboxes"]]
+                    
+                    # 3. RoIAlign the features per stride
+                    roi_aligned_features_all_images_per_stride = []
+                    
+                    for idx_lvl in range(3):                        
+                        roi_aligned_ftmaps_one_stride = t_ops.roi_align(
+                            input=ftmaps_per_level[idx_lvl],
+                            boxes=_bboxes,
+                            output_size=(1,1),  # Tiene que ser el mismo que hayamos usado para entrenar el algoritmo OOD
+                            spatial_scale=ftmaps_per_level[idx_lvl].shape[2]/imgs[0].shape[2]
+                        )
+
+                        roi_aligned_features_all_images_per_stride.append(roi_aligned_ftmaps_one_stride)
+
+                    # Now create a list of lists, where the first list refers to the image and the second list to the stride
+                    activations = []
+                    for idx_img in range(len(results)):
+                        positions_of_activations_to_select = torch.where(idx_of_img_per_box == idx_img)[0]
+                        activations.append([])
+                        for idx_stride in range(3):
+                            activations[idx_img].append(roi_aligned_features_all_images_per_stride[idx_stride][positions_of_activations_to_select].numpy())
+
+                    # OOD Decision is a list of lists, where the first list refers to the image and the second list to the bbox
+                    # Each bbox has 3 scores, one per stride
+                    ood_decision = self.compute_ood_decision_with_ftmaps(activations, bboxes=targets, logger=logger)
+
+                    # PLOT #
+                    width = 2
+                    font = 'FreeMonoBold'
+                    font_size = 11
+                    # Create folder to store images
+                    prueba_ahora_path = folder_path / f'{now}_{self.name}'
+                    prueba_ahora_path.mkdir(exist_ok=True)
+
+                    import matplotlib.pyplot as plt
+                    from torchvision.utils import draw_bounding_boxes
+
+                    for idx_img, bboxes_one_img in enumerate(targets['bboxes']):
+                        
+                        # The labels are the ood decisions for each bbox
+                        labels_str = []
+                        for idx_bbox in range(len(bboxes_one_img)):
+                            if targets['cls'][idx_img][idx_bbox] <= 19:
+                                # Use the name of the class
+                                known_or_unk = f'{model.names[int(targets["cls"][idx_img][idx_bbox])]}'
+                            else:
+                                known_or_unk = 'UNK'
+                            labels_str.append(f'{known_or_unk}: {ood_decision[idx_img][idx_bbox][0]}/{ood_decision[idx_img][idx_bbox][1]}/{ood_decision[idx_img][idx_bbox][2]}')
+
+                        # The color will be red if the mean of the ood decisions is more than 0.5, green otherwise
+                        colors = ['red' if sum(ood_decision[idx_img][idx_bbox]) > 1.5 else 'green' for idx_bbox in range(len(bboxes_one_img))]
+
+                        im = draw_bounding_boxes(
+                            imgs[idx_img].cpu(),
+                            bboxes_one_img,
+                            width=width,
+                            font=font,
+                            font_size=font_size,
+                            labels=labels_str,
+                            colors=colors
+                        )
+
+                        plt.imshow(im.permute(1,2,0))
+                        plt.savefig(prueba_ahora_path / f'{(count_of_images + idx_img):03}.pdf', dpi=300)
+                        plt.close()
+
+
+                else:
+                    raise NotImplementedError("The method does not have the function compute_ood_decision_with_ftmaps implemented")
+            else:
+                # Por aqui va la ejecucion normal
+
+                ### Comprobar si las cajas predichas son OoD ###
+                ood_decision = self.compute_ood_decision_on_results(results, logger)
+            
+                plot_results( 
+                    class_names=model.names,
+                    results=results,
+                    folder_path=folder_path,
+                    now=now,
+                    valid_preds_only=False,
+                    origin_of_idx=idx_of_batch*dataloader.batch_size,
+                    image_format='pdf',
+                    ood_decision=ood_decision,
+                    ood_method_name=self.name,
+                    targets=targets
+                )
             number_of_images_saved += len(data['im_file'])
             # TODO: De momento no queremos plotear todo, solo unos pocos batches
             if number_of_images_saved > 200:
@@ -266,27 +377,89 @@ class OODMethod(ABC):
             # if idx_of_batch > 10:
             #     quit()
                 
-    def iterate_data_to_compute_metrics(self, model, dataloader, device, logger, folder_path: Path, now: str):
+    def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger, known_classes: List[int]):
 
         logger.warning(f"Using a confidence threshold of {self.min_conf_threshold} for tests")
-        count_of_images = 0
         number_of_images_processed = 0
+        number_of_batches = len(dataloader)
         all_preds = []
         all_targets = []
+        assert hasattr(dataloader.dataset, "number_of_classes"), "The dataset does not have the attribute number_of_classes to know the number of classes known in the dataset"
+        class_names = list(dataloader.dataset.data['names'].values())[:dataloader.dataset.number_of_classes]
+        class_names.append('unknown')
+        known_classes_tensor = torch.tensor(known_classes, dtype=torch.float32)
         for idx_of_batch, data in enumerate(dataloader):
+
+            if idx_of_batch % 50 == 0 or idx_of_batch == number_of_batches - 1:
+                logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch+1} of {number_of_batches}") 
 
             ### Preparar imagenes y targets ###
             imgs, targets = self.prepare_data_for_model(data, device)
             
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
-            results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold)
+            results = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold)
 
             ### Comprobar si las cajas predichas son OoD ###
             ood_decision = self.compute_ood_decision_on_results(results, logger)
 
-            ### Calcular las metricas de las cajas predichas ###
-        
-            number_of_images_processed += len(data['im_file'])
+            # Cada prediccion va a ser un diccionario con las siguientes claves:
+            #   'img_idx': int -> Indice de la imagen
+            #   'img_name': str -> Nombre del archivo de la imagen
+            #   'bboxes': List[torch.Tensor] -> Lista de tensores con las cajas predichas
+            #   'cls': List[torch.Tensor] -> Lista de tensores con las clases predichas
+            #   'conf': List[torch.Tensor] -> Lista de tensores con las confianzas de las predicciones (en yolov8 es cls)
+            #   'ood_decision': List[int] -> Lista de enteros con la decision de si la caja es OoD o no
+            for img_idx, res in enumerate(results):
+                #for idx_bbox in range(len(res.boxes.cls)):
+                # Parse the ood elements as the unknown class (80)
+                ood_decision_one_image = torch.tensor(ood_decision[img_idx], dtype=torch.float32)
+                unknown_mask = ood_decision_one_image == 0
+                bboxes_cls = torch.where(unknown_mask, torch.tensor(80, dtype=torch.float32), res.boxes.cls.cpu())
+                all_preds.append({
+                    'img_idx': number_of_images_processed + img_idx,
+                    'img_name': Path(data['im_file'][img_idx]).stem,
+                    'bboxes': res.boxes.xyxy,
+                    'cls': bboxes_cls,
+                    'conf': res.boxes.conf,
+                    'ood_decision': torch.tensor(ood_decision[img_idx], dtype=torch.float32)
+                })
+                # Transform the classes to index 80 if they are not in the known classes
+                known_mask = torch.isin(targets['cls'][img_idx], known_classes_tensor)
+                transformed_target_cls = torch.where(known_mask, targets['cls'][img_idx], torch.tensor(80, dtype=torch.float32))
+                all_targets.append({
+                    'img_idx': number_of_images_processed + img_idx,
+                    'img_name': Path(data['im_file'][img_idx]).stem,
+                    'bboxes': targets['bboxes'][img_idx],
+                    'cls': transformed_target_cls
+                })
+
+            ### Acumular predicciones y targets ###
+            number_of_images_processed += len(imgs)
+
+            # # Plot one image of the batch with predictions and targets
+            # idx_image = 4
+            # plot_results(
+            #     class_names=model.names,
+            #     results=results,
+            #     folder_path=Path('.'),
+            #     now='ahora',
+            #     valid_preds_only=False,
+            #     origin_of_idx=idx_of_batch*dataloader.batch_size,
+            #     image_format='pdf',
+            #     #ood_decision=ood_decision,
+            #     targets=targets,
+            # )
+
+        # All predictions collected, now compute metrics
+        compute_metrics(all_preds, all_targets, class_names, known_classes, logger)
+
+        # Count the number of non-unknown instances and the number of unknown instances
+        number_of_known_boxes = 0 
+        number_of_unknown_boxes = 0
+        for _target in all_targets:
+            number_of_known_boxes += torch.sum(_target['cls'] != 80).item()
+            number_of_unknown_boxes += torch.sum(_target['cls'] == 80).item()
+
     
     def generate_thresholds(self, ind_scores: list, tpr: float, logger) -> Union[List[float], List[List[float]]]:
         """
@@ -677,6 +850,89 @@ class DistanceMethod(OODMethod):
 
         return ood_decision
 
+    def compute_ood_decision_with_ftmaps(self, activations: Union[List[np.array], List[List[np.array]]], bboxes: Dict[str, List], logger: Logger) -> List[List[List[int]]]:
+        """
+        Compute the OOD decision for each class using the in-distribution activations (usually feature maps).
+        If per_class, activations must be a list of lists, where each position is a list of tensors, one for each stride.
+        """
+        # Como hay 3 strides y estoy con los targets (por lo que no se que clase predicha tendrian asignada),
+        # voy a asignar un % de OOD a cada caja por cada stride, donde el % es el % de clases para las cuales el elemento es OOD
+        # Por tanto devuelvo una lista de listas de listas, donde la primera lista es para cada imagen, la segunda para cada caja
+        # y la tercera para cada stride el % de OOD
+        known_classes = set(range(20))
+        # Loop imagenes
+        ood_decision = []
+        for idx_img, activations_one_img in enumerate(activations):
+
+            # Loop strides
+            #ood_decision.append([])
+            percentage_ood_one_img_all_bboxes_per_stride = []
+            for idx_stride, activations_one_img_one_stride in enumerate(activations_one_img):
+                #ood_decision[idx_img].append([])
+                
+                # Check if there is any bbox
+                if len(activations_one_img_one_stride) > 0:
+                    
+                    # Loop clusters
+                    # Loop over the cluster of each class to obtain per stride one "score" for each bbox
+                    ood_decision_per_cls_per_bbox = []
+                    for idx_cls, cluster in enumerate(self.clusters):
+                        if len(cluster[idx_stride]) > 0:
+                            distances_per_bbox = self.compute_distance(
+                                cluster[idx_stride][None, :],
+                                #self.activations_transformation(activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1))
+                                activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1)  # Flatten the activations
+                            )
+                            # IN THIS CASE: 1 is OoD, 0 is InD
+                            # Ya que las distancias que sean mayores que el threshold son OoD
+                            ood_decision_per_cls_per_bbox.append((distances_per_bbox > self.thresholds[idx_cls][idx_stride]).astype(int))
+                            # Check 
+                        else:
+                            if idx_cls > 19:
+                                continue
+                            # TODO: Aqui tengo que hacer que el numero de distancias = 1000 sea como el numero de cajas
+                            raise ValueError("The clusters must have at least one sample")
+                    
+                    # Compute the percentage of OOD for each bbox
+                    ood_decision_per_cls_per_bbox = np.stack(ood_decision_per_cls_per_bbox, axis=1)
+                    percentage_ood_one_img_all_bboxes_per_stride.append(np.sum(ood_decision_per_cls_per_bbox, axis=1) / 20)
+
+                # Check for each bbox if the cls is in the known classes and if it is, compare only agains the corresponding cluster
+                for _bbox_idx, _cls_idx in enumerate(bboxes['cls'][idx_img]):
+                    _cls_idx = int(_cls_idx.item())
+                    if _cls_idx in known_classes:
+                        # Compruebo si hay cluster
+                        if len(self.clusters[_cls_idx][idx_stride]) > 0:
+                            # Calculo distancia si hay cluster
+                            distance = self.compute_distance(
+                                self.clusters[_cls_idx][idx_stride][None, :],
+                                activations_one_img_one_stride[_bbox_idx].reshape(1, -1)
+                            )[0]
+                            # Checkeo si la distancia es menor que el threshold, en ese caso es InD (0), sino OoD (1)
+                            if self.thresholds[_cls_idx][idx_stride]:
+                                if distance < self.thresholds[_cls_idx][idx_stride]:
+                                    percentage_ood_one_img_all_bboxes_per_stride[idx_stride][_bbox_idx] = 0
+                                else:
+                                    percentage_ood_one_img_all_bboxes_per_stride[idx_stride][_bbox_idx] = 1
+                            else:
+                                percentage_ood_one_img_all_bboxes_per_stride[idx_stride][_bbox_idx] = 1
+                        else:
+                            raise ValueError("The clusters must have at least one sample")
+                    else:
+                        # Si la clase no es conocida, no hay que cambiar nada
+                        pass
+                        #percentage_ood_one_img_all_bboxes_per_stride[bbox_idx] = 0
+            
+            ood_decision.append(np.stack(percentage_ood_one_img_all_bboxes_per_stride, axis=1))
+            print(f'{idx_img} image done!')
+
+        return ood_decision
+
+                        
+
+
+            
+
     def generate_clusters(self, ind_tensors: Union[List[np.array], List[List[np.array]]], logger: Logger) -> Union[List[np.array], List[List[np.array]]]:
         """
         Generate the clusters for each class using the in-distribution tensors (usually feature maps).
@@ -790,6 +1046,28 @@ class L2DistanceOneClusterPerStride(DistanceMethod):
                 )
 
             return distances[0]
+
+
+class CosineDistanceOneClusterPerStride(DistanceMethod):
+    
+        # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
+        def __init__(self, agg_method, **kwargs):
+            name = 'CosineDistancePerStride'
+            per_class = True
+            per_stride = True
+            cluster_method = 'one'
+            cluster_optimization_metric = 'silhouette'
+            super().__init__(name, agg_method, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
+        
+        def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
+
+            distances = pairwise_distances(
+                cluster,
+                activations,
+                metric='cosine'
+                )
+
+            return distances[0]
         
 
 class GAPL2DistanceOneClusterPerStride(DistanceMethod):
@@ -844,7 +1122,7 @@ class ActivationsExtractor(DistanceMethod):
         raise NotImplementedError("Not implemented yet")
         return np.mean(activations, axis=(2,3))  # Already reshapes to [N, features]
     
-    def iterate_data_to_extract_ind_activations_and_create_its_annotations(self, data_loader, model, device, split: str):
+    def iterate_data_to_extract_ind_activations_and_create_its_annotations(self, data_loader: InfiniteDataLoader, model, device, split: str):
         """
         Custom function to iterate over the data to extract the internal activations of the model along
         with the annotations for the dataset. They will be in the same order as in the 
@@ -922,7 +1200,7 @@ class FeaturemapExtractor(DistanceMethod):
         raise NotImplementedError("Not implemented yet")
         return np.mean(activations, axis=(2,3))  # Already reshapes to [N, features]
     
-    def iterate_data_to_extract_ind_activations_and_create_its_annotations(self, data_loader, model, device, split: str):
+    def iterate_data_to_extract_ind_activations_and_create_its_annotations(self, data_loader: InfiniteDataLoader, model, device, split: str):
         """
         Custom function to iterate over the data to extract the internal activations of the model along
         with the annotations for the dataset. They will be in the same order as in the 

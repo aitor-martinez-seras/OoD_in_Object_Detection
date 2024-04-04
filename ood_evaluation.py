@@ -19,7 +19,7 @@ from ultralytics.yolo.data.build import InfiniteDataLoader
 
 
 from ood_utils import get_measures, configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, ODIN, \
-    L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride
+    L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride
 
 from data_utils import read_json, write_json, load_dataset_and_dataloader
 
@@ -32,7 +32,7 @@ PRUEBAS_ROOT_PATH = ROOT / 'pruebas'
 IOU_THRESHOLD = 0.5
 
 OOD_METHOD_CHOICES = ['MSP', 'ODIN', 'Energy', 'Mahalanobis', 'GradNorm','RankFeat','React', 'L1_cl_stride', 'L2_cl_stride', \
-                      'GAP_L2_cl_stride']
+                      'GAP_L2_cl_stride', 'Cosine_cl_stride']
 
 
 # parser.add_argument("--in_datadir", help="Path to the in-distribution data folder.")
@@ -103,6 +103,8 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
         return L2DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
     elif args.ood_method == 'GAP_L2_cl_stride':
         return GAPL2DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+    elif args.ood_method == 'Cosine_cl_stride':
+        return CosineDistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
     else:
         raise NotImplementedError("Not implemented yet")
 

@@ -99,14 +99,39 @@ def plot_results(class_names, results, folder_path: Path, now: str, valid_preds_
         
         # Just plot normal predictions
         else:
-            im = draw_bounding_boxes(
-                res.orig_img[img_idx].cpu(),
-                bboxes,
-                width=5,
-                font=font,
-                font_size=font_size,
-                labels=[f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}' for i, n in enumerate(labels)]
-            )
+            if targets:
+                bboxes_preds_plus_gt = torch.cat((bboxes, targets["bboxes"][img_idx]), dim=0)
+                #labels_preds_plus_gt = torch.cat((labels, targets["cls"][img_idx]), dim=0)
+                # import random
+                # get_colors = lambda n: ["#%06x" % random.randint(0, 0xFFFFFF) for _ in range(n)]
+                # colors = get_colors(len(labels))
+                #colors.extend(['violet']*len(targets["cls"][img_idx]))
+                colors = ['green']*len(labels) + ['violet']*len(targets["cls"][img_idx])
+                
+                labels_str = []
+                for i, lbl in enumerate(labels):
+                    # Check if they are predictions  for this image
+                    labels_str.append(f'{class_names[int(lbl.item())]} - {res.boxes.conf[i]:.2f}')
+                for i, lbl in enumerate(targets["cls"][img_idx]):
+                    labels_str.append(f'{class_names[int(lbl.item())]} - GT')
+                im = draw_bounding_boxes(
+                    res.orig_img[img_idx].cpu(),
+                    bboxes_preds_plus_gt,
+                    width=width,
+                    font=font,
+                    font_size=font_size,
+                    labels=labels_str,
+                    colors=colors
+                )
+            else:
+                im = draw_bounding_boxes(
+                    res.orig_img[img_idx].cpu(),
+                    bboxes,
+                    width=5,
+                    font=font,
+                    font_size=font_size,
+                    labels=[f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}' for i, n in enumerate(labels)]
+                )
 
         plt.imshow(im.permute(1,2,0))
         plt.savefig(prueba_ahora_path / f'{(origin_of_idx + img_idx):03}.{image_format}', dpi=300)
