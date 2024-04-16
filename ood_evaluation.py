@@ -112,7 +112,7 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
         raise NotImplementedError("Not implemented yet")
 
 
-def obtain_thresholds_for_ood_detection_method(ood_method: Union[LogitsMethod, DistanceMethod], model: YOLO, device: str, 
+def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsMethod, DistanceMethod], model: YOLO, device: str, 
                                                in_loader: InfiniteDataLoader, logger: Logger, args: SimpleArgumentParser):
     """
     Function that loads or generates the thresholds for the OOD evaluation. The thresholds are
@@ -158,7 +158,7 @@ def obtain_thresholds_for_ood_detection_method(ood_method: Union[LogitsMethod, D
             logger.info(f"In-distribution activations succesfully saved in {activations_path}")
 
         ### 2. Obtain scores ###
-        # Distance methods need to have clusters representing the In-Distribution data
+        # Distance methods need to have clusters representing the In-Distribution data and then compute the scores
         if ood_method.distance_method:
             
             ### 2.1. Distance methods need to obtain clusters for scores ###
@@ -178,8 +178,9 @@ def obtain_thresholds_for_ood_detection_method(ood_method: Union[LogitsMethod, D
             # Generate the scores that are necessary to create the thresholds by using the clusters and the activations
             logger.info("Generating in-distribution scores...")
             ind_scores = ood_method.compute_scores_from_activations(ind_activations, logger)
-
-        else:  # For the rest of the methods activations are the scores themselves
+        
+        # For the rest of the methods activations are the scores themselves
+        else:
             ind_scores = ind_activations 
 
         ### 3. Obtain thresholds ###
@@ -271,8 +272,9 @@ def main(args: SimpleArgumentParser):
     ### OOD evaluation ###
     # TODO: Si metemos otro dataset habra que hacer esto de forma mas general
     known_classes = [x for x in range(ind_dataset.number_of_classes)]
-    # First fill the thresholds attribute of the OODMethod object
-    obtain_thresholds_for_ood_detection_method(ood_method, model, device, ind_dataloader, logger, args)
+
+    # Main function that executes the pipeline for the OOD evaluation (explained inside the function)
+    execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
 
     if args.visualize_oods:    
         # Save images with OoD detection (Green for In-Distribution, Red for Out-of-Distribution, Violet the Ground Truth)
@@ -280,6 +282,7 @@ def main(args: SimpleArgumentParser):
         
     elif args.compute_metrics:
         
+        ### Compute the metrics for various confidence thresholds ###
         if args.benchmark_conf:
             logger.info(f"Running benchmark for confidences {CONF_THRS_FOR_BENCHMARK} in datasets {args.ind_dataset} vs {args.ood_dataset}")
             import pandas as pd
@@ -306,6 +309,8 @@ def main(args: SimpleArgumentParser):
             results_df = results_df[['Method', 'Conf_threshold', 'tpr_thr'] + res_columns + ['Model']]  # Reorder columns
             results_df.to_csv(RESULTS_PATH / f'{NOW}_{args.ood_method}.csv', index=False)
             results_df.to_excel(RESULTS_PATH / f'{NOW}_{args.ood_method}.xlsx', index=False)
+
+        ### Compute metrics for a single configuration ###
         else:
             # Run the normal evaluation to compute the metrics
             _ = run_eval(ood_method, model, device, ood_dataloader, known_classes, logger)
