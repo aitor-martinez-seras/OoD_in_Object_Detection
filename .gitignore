@@ -13,6 +13,7 @@ runs/
 runs_OAK/
 runs*
 nohup.out
+/*.png
 
 
 # C extensions
