@@ -2,7 +2,7 @@ import time
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Type, Union, Literal, List, Tuple
+from typing import Type, Union, Literal, List, Tuple, Dict
 from logging import Logger
 
 from tap import Tap
@@ -28,15 +28,16 @@ NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
 ROOT = Path(__file__).parent  # Assumes this script is in the root of the project
 STORAGE_PATH = ROOT / 'storage'
 PRUEBAS_ROOT_PATH = ROOT / 'pruebas'
+RESULTS_PATH = ROOT / 'results'
 
 IOU_THRESHOLD = 0.5
 
 OOD_METHOD_CHOICES = ['MSP', 'ODIN', 'Energy', 'Mahalanobis', 'GradNorm','RankFeat','React', 'L1_cl_stride', 'L2_cl_stride', \
                       'GAP_L2_cl_stride', 'Cosine_cl_stride']
 
+CONF_THRS_FOR_BENCHMARK = [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001]
 
-# parser.add_argument("--in_datadir", help="Path to the in-distribution data folder.")
-# parser.add_argument("--out_datadir", help="Path to the out-of-distribution data folder.")
+
 class SimpleArgumentParser(Tap):
     
     device: int  # Device to use for training on GPU. Indicate more than one to use multiple GPUs. Use -1 for CPU.
@@ -47,6 +48,8 @@ class SimpleArgumentParser(Tap):
     
     logdir: str = 'logs'  # Where to log test info (small).
     name: str = 'prueba'  # Name of this run. Used for monitoring and checkpointing
+    # Benchmarks
+    benchmark_conf: bool = False  # Run confidence benchmark over confidence thresholds [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001]
     # Hyperparameters
     conf_thr: float = 0.15  # Confidence threshold for the detections
     tpr_thr: float = 0.95  # TPR threshold for the OoD detection
@@ -196,18 +199,21 @@ def save_images_with_ood_detection(ood_method: OODMethod, model: YOLO, device: s
     ood_method.iterate_data_to_plot_with_ood_labels(model, ood_loader, device, logger, PRUEBAS_ROOT_PATH, NOW)
 
 
-def run_eval(ood_method: OODMethod, model: YOLO, device: str, ood_loader: InfiniteDataLoader, known_classes:List[int], logger: Logger):
+def run_eval(ood_method: OODMethod, model: YOLO, device: str, ood_loader: InfiniteDataLoader, known_classes:List[int], logger: Logger) -> Dict[str, float]:
     logger.info("Running test to compute metrics...")
     logger.flush()
     assert ood_method.thresholds is not None, "Thresholds must be generated or loaded before predicting with OoD detection"
 
-    ood_method.iterate_data_to_compute_metrics(model, device, ood_loader, logger, known_classes)
+    results = ood_method.iterate_data_to_compute_metrics(model, device, ood_loader, logger, known_classes)
+
+    return results
 
 
 def main(args: SimpleArgumentParser):
-    print('---------------------------- OOD Detection ----------------------------')    
+    print('---------------------------- OOD Detection ----------------------------')
     # Setup logger
     logger = log.setup_logger(args)
+    print('-----------------------------------------------------------------------')
 
     # TODO: This is for reproducibility 
     # torch.backends.cudnn.benchmark = True
@@ -273,8 +279,36 @@ def main(args: SimpleArgumentParser):
         save_images_with_ood_detection(ood_method, model, device, ood_dataloader, logger)
         
     elif args.compute_metrics:
-        # Run the evaluation to compute the metrics
-        run_eval(ood_method, model, device, ood_dataloader, known_classes, logger)
+        
+        if args.benchmark_conf:
+            logger.info(f"Running benchmark for confidences {CONF_THRS_FOR_BENCHMARK} in datasets {args.ind_dataset} vs {args.ood_dataset}")
+            import pandas as pd
+            final_results = []
+            for conf_threshold in CONF_THRS_FOR_BENCHMARK:
+                print("-"*50)
+                logger.info(f" *** Confidence threshold: {conf_threshold} ***")
+                ood_method.min_conf_threshold = conf_threshold
+                # Extract metrics
+                results_one_run = run_eval(ood_method, model, device, ood_dataloader, known_classes, logger)
+                # Make data be in range [0, 1]
+                for key in results_one_run.keys():
+                    if key not in ["A-OSE", "WI-08"]:
+                        results_one_run[key] = results_one_run[key] / 100
+                res_columns = list(results_one_run.keys())
+                results_one_run['Method'] = args.ood_method
+                results_one_run['Conf_threshold'] = conf_threshold
+                results_one_run["tpr_thr"] = args.tpr_thr
+                results_one_run['Model'] = args.model_path if args.model_path else model_to_load
+                final_results.append(results_one_run)
+                print("-"*50, '\n')
+            # Save the results
+            results_df = pd.DataFrame(final_results)
+            results_df = results_df[['Method', 'Conf_threshold', 'tpr_thr'] + res_columns + ['Model']]  # Reorder columns
+            results_df.to_csv(RESULTS_PATH / f'{NOW}_{args.ood_method}.csv', index=False)
+            results_df.to_excel(RESULTS_PATH / f'{NOW}_{args.ood_method}.xlsx', index=False)
+        else:
+            # Run the normal evaluation to compute the metrics
+            _ = run_eval(ood_method, model, device, ood_dataloader, known_classes, logger)
 
     end_time = time.time()
 
