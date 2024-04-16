@@ -237,10 +237,20 @@ class OODMethod(ABC):
         count_of_images = 0
         number_of_images_saved = 0
 
+        # TODO: Estamos usando esta funcion para meter las diferentes pruebas... Finalmente deberia quedar solo
+        #   la ejecucion normal. Al final lo que tenemos que dejar es el metodo que pone en el if como "normal"
+
+        # TODO: MODOS PARA DEBUGEAR
+        # localizacion: buscamos crear un algoritmo capaz de mejorar la localizacion de las cajas
+        # clasificacion: queremos ver si localizando las cajas seriamos capaces de clasificarlas como UNK
+        # normal: ejecucion normal, se predicen cajas y se ve si son UNK o no
+        debugeando_en_modo = "localizacion"
+
         # TODO: Activado para ejecutar los plots OOD con targets
         if callable(getattr(self, "compute_ood_decision_with_ftmaps", None)):
             model.model.modo = 'all_ftmaps'
 
+        c = 0
         for idx_of_batch, data in enumerate(dataloader):
             count_of_images += len(data['im_file'])
             # if count_of_images < 8000:
@@ -252,7 +262,7 @@ class OODMethod(ABC):
             results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold)
             
             # TODO: Activado para ejecutar los plots OOD con targets
-            if True:
+            if debugeando_en_modo == "clasificacion":
                 ### Experiment with targets ###
                 # Lo que hago es representar los targets para cada imagen con el label de Known o UNK en funcion de si son clases
                 #   conocidas o no. Ademas, para cada uno de estos casos el score se ha obtenido de forma diferente. En ambos casos 
@@ -352,7 +362,496 @@ class OODMethod(ABC):
 
                 else:
                     raise NotImplementedError("The method does not have the function compute_ood_decision_with_ftmaps implemented")
-            else:
+
+            elif debugeando_en_modo == "localizacion":
+                ### 1º prueba ###
+                import matplotlib.pyplot as plt
+                from torchvision.utils import draw_bounding_boxes
+                from skimage.transform import resize
+                from sklearn.metrics import pairwise_distances
+                from sklearn import metrics
+                from sklearn.cluster import DBSCAN
+                # Pintar los feature maps de algunas imagenes
+                # Cogemos solo los mapas 80x80 de momento
+                # Create folder to store images
+                prueba_ahora_path = folder_path / f'{now}_{self.name}'
+                prueba_ahora_path.mkdir(exist_ok=True)
+
+                torch.set_printoptions(precision=2, threshold=10)
+                np.set_printoptions(precision=2, threshold=10)
+
+                for _img_idx, res in enumerate(results):
+                    c += 1
+                    if _img_idx == -1:
+                        continue
+                    else:
+                        # Obtain the original image shape from the data dict
+                        # and figure out which zones of the feature maps 
+                        # should be removed
+                        original_shape = data['ori_shape'][_img_idx]
+                        # The ratio pad has in its first dimension the factor to which the image has been 
+                        # resized in each dimension (H, W) and
+                        # in the second dimension the padding in each dimension (X, Y). It is important to note
+                        # that the padding indicated is done by each of the sides of the image (left and right, top and bottom)
+                        ratio_pad = np.array(data['ratio_pad'][_img_idx][1], dtype=float)  # Take the padding
+                        # Remove the padding from the feature maps, but first we have to take into account that the
+                        # ftmaps have a lower resolution than the original image. In this case, the ratio is 8.
+                        ratio_pad_for_ftmaps = ratio_pad / 8  # For stride 8
+                        x_padding = int(ratio_pad_for_ftmaps[0])  # The padding in the x dimension is the first element
+                        y_padding = int(ratio_pad_for_ftmaps[1])  # The padding in the y dimension is the second element
+                        ftmaps = res.extra_item[0].cpu().detach().numpy()
+                        ftmap_height = ftmaps.shape[1]
+                        ftmap_width = ftmaps.shape[2]
+                        ftmaps = ftmaps[:, y_padding:ftmap_height-y_padding, x_padding:ftmap_width-x_padding]
+
+                        # CREATE ONLY THE SUBPLOTS
+                        if True:
+                            # Save also the original with annotations
+                            orig_annotated = draw_bounding_boxes(
+                                imgs[_img_idx].cpu(),
+                                targets['bboxes'][_img_idx],
+                                width=2,
+                                font='FreeMonoBold',
+                                font_size=11,
+                                # Convert the classes to the names and above 19 all should be named unk
+                                labels=[model.names[int(cls)] if cls <= 19 else "UNK" for cls in targets['cls'][_img_idx]],                        
+                                colors=['blue']*len(targets['cls'][_img_idx])
+                            )
+                            # Mean
+                            mean_ftmap = ftmaps.mean(axis=0)
+                            mean_ftmap = (mean_ftmap - mean_ftmap.min()) / (mean_ftmap.max() - mean_ftmap.min())
+                            # Add the padding
+                            mean_ftmap = np.pad(mean_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
+                            # STD
+                            std_ftmap = ftmaps.std(axis=0)
+                            std_ftmap = (std_ftmap - std_ftmap.min()) / (std_ftmap.max() - std_ftmap.min())
+                            # Add the padding
+                            std_ftmap = np.pad(std_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
+                            # CLUSTERS. Clustering with DBSCAN but adding the spatial information
+                            # Original feature map shape
+                            num_channels, height, width = ftmaps.shape
+                            # Create the coordinate channels
+                            y_coords, x_coords = np.meshgrid(np.arange(height), np.arange(width), indexing='ij')
+                            # Add the coordinate channels to the original feature map
+                            yx_augmented_feature_map = np.concatenate([ftmaps, y_coords[None, :, :], x_coords[None, :, :]])
+                            # Now flatten the feature maps and make the first dimension be the pixels
+                            flattened_ftmaps_with_yx = yx_augmented_feature_map.reshape(num_channels + 2, -1).T
+                            ft_metric = 'cosine'
+                            samples_pairwise_distances_features = pairwise_distances(flattened_ftmaps_with_yx[:, :-2], metric=ft_metric)
+                            mean_ft_distance = samples_pairwise_distances_features.mean()
+                            std_ft_distance = samples_pairwise_distances_features.std()
+                            # Euclidean distance between sample coordinates. Normalize them to be in the same range as the feature distances
+                            samples_pairwise_distances_yx = pairwise_distances(flattened_ftmaps_with_yx[:, -2:], metric='euclidean')
+                            samples_pairwise_distances_yx = (samples_pairwise_distances_yx - samples_pairwise_distances_yx.min()) / (samples_pairwise_distances_yx.max() - samples_pairwise_distances_yx.min())
+                            samples_pairwise_distances_yx = samples_pairwise_distances_yx * (std_ft_distance + mean_ft_distance - (mean_ft_distance - std_ft_distance)) + (mean_ft_distance - std_ft_distance)
+                            # Merge the two distances using a weight lambda
+                            lambda_weight = 0.5
+                            samples_pairwise_distances_weighted = lambda_weight * samples_pairwise_distances_features + (1 - lambda_weight) * samples_pairwise_distances_yx
+                            # Now cluster
+                            eps = 18 if ft_metric == 'euclidean' else 0.13
+                            db = DBSCAN(eps=eps, min_samples=16).fit(samples_pairwise_distances_weighted)
+                            labels = db.labels_
+                            n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
+                            print(f"Number of clusters: {n_clusters_}")
+                            # Plot the labels as an image in the original size
+                            labels_as_image = labels.reshape(ftmaps.shape[1], ftmaps.shape[2])
+                            # Add padding to the labels
+                            labels_as_image = np.pad(labels_as_image, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(-1, -1))
+                            labels_as_image_spatial_info = labels_as_image.copy()
+                            # Create a PNG of good quality with 4 subplots, the original image, the mean, the std and the clustering
+                            # with no axis and no white space
+                            fig, axs = plt.subplots(2, 2, figsize=(8, 8))
+                            axs[0, 0].imshow(orig_annotated.permute(1,2,0))
+                            axs[0, 0].axis('off')
+                            axs[0, 0].set_title('Original (annotated)')
+                            axs[0, 1].imshow(mean_ftmap, cmap='gray')
+                            axs[0, 1].axis('off')
+                            axs[0, 1].set_title('Mean')
+                            axs[1, 0].imshow(std_ftmap, cmap='gray')
+                            axs[1, 0].axis('off')
+                            axs[1, 0].set_title('Std')
+                            axs[1, 1].imshow(labels_as_image_spatial_info, cmap='tab20')
+                            axs[1, 1].axis('off')
+                            axs[1, 1].set_title('Cluster')
+                            plt.tight_layout()
+                            plt.savefig(prueba_ahora_path / f'subplots_{c:0>3}.png', dpi=300, bbox_inches='tight')
+                            plt.close()
+
+                            # Create clusters for different lambdas
+                            lambda_imgs = []
+                            for lmb in [0.8,0.5,0.2]:
+                                samples_pairwise_distances_yx = pairwise_distances(flattened_ftmaps_with_yx[:, -2:], metric='euclidean')
+                                samples_pairwise_distances_yx = (samples_pairwise_distances_yx - samples_pairwise_distances_yx.min()) / (samples_pairwise_distances_yx.max() - samples_pairwise_distances_yx.min())
+                                samples_pairwise_distances_yx = samples_pairwise_distances_yx * (std_ft_distance + mean_ft_distance - (mean_ft_distance - std_ft_distance)) + (mean_ft_distance - std_ft_distance)
+                                samples_pairwise_distances_weighted = lmb * samples_pairwise_distances_features + (1 - lmb) * samples_pairwise_distances_yx
+                                db = DBSCAN(eps=eps, min_samples=16).fit(samples_pairwise_distances_weighted)
+                                labels = db.labels_
+                                n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
+                                print(f"Number of clusters for lambda {lmb}: {n_clusters_}")
+                                # Plot the labels as an image in the original size
+                                labels_as_image = labels.reshape(ftmaps.shape[1], ftmaps.shape[2])
+                                # Add padding to the labels
+                                labels_as_image = np.pad(labels_as_image, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(-1, -1))
+                                lambda_imgs.append(labels_as_image)
+
+                            # Create a PNG of good quality with 4 subplots, the original image, the mean, the std and the clustering
+                            # with no axis and no white space
+                            fig, axs = plt.subplots(2, 2, figsize=(8, 8))
+                            axs[0, 0].imshow(orig_annotated.permute(1,2,0))
+                            axs[0, 0].axis('off')
+                            axs[0, 0].set_title('Original (annotated)')
+                            axs[0, 1].imshow(lambda_imgs[2], cmap='tab20')
+                            axs[0, 1].axis('off')
+                            axs[0, 1].set_title('Lambda 0.2')
+                            axs[1, 0].imshow(lambda_imgs[1], cmap='tab20')
+                            axs[1, 0].axis('off')
+                            axs[0, 1].set_title('Lambda 0.5')
+                            axs[1, 1].imshow(lambda_imgs[0], cmap='tab20')
+                            axs[1, 1].axis('off')
+                            axs[0, 1].set_title('Lambda 0.8')
+                            plt.tight_layout()
+                            plt.savefig(prueba_ahora_path / f'subplots_{c:0>3}_lambdas.png', dpi=300, bbox_inches='tight')
+                            plt.close()
+
+                            # Skip to next iteration
+                            continue
+
+                        # Create folder for the image using the batch index and image index
+                        ftmaps_path = prueba_ahora_path / f'{number_of_images_saved + _img_idx}'
+                        ftmaps_path.mkdir(exist_ok=True)
+                        # First save the original image
+                        plt.imshow(imgs[_img_idx].cpu().permute(1,2,0))
+                        plt.savefig(ftmaps_path / 'A_original.pdf')
+                        plt.close()
+                        # Save also the original with annotations
+                        im = draw_bounding_boxes(
+                            imgs[_img_idx].cpu(),
+                            targets['bboxes'][_img_idx],
+                            width=2,
+                            font='FreeMonoBold',
+                            font_size=11,
+                            # Convert the classes to the names and above 19 all should be named unk
+                            labels=[model.names[int(cls)] if cls <= 19 else "UNK" for cls in targets['cls'][_img_idx]],                        
+                            colors=['blue']*len(targets['cls'][_img_idx])
+                        )
+                        plt.imshow(im.permute(1,2,0))
+                        plt.savefig(ftmaps_path / 'A_original_with_annotations.pdf')
+                        plt.close()
+                        # # Save the feature maps
+                        # for idx_ftmap in range(ftmaps.shape[0]):
+                        #     # Reshape the feature map to original size
+                        #     ftmap = ftmaps[idx_ftmap]
+
+                        #     # Option 1: resize and plot
+                        #     # ftmap = resize(ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
+                        #     # plt.imshow(ftmap, vmin=-2, vmax=2, cmap='bwr')
+
+                        #     # Option 2: normalize to 0 - 1, resize and plot
+                        #     ftmap = (ftmap - ftmap.min()) / (ftmap.max() - ftmap.min())
+                        #     ftmap = resize(ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
+                        #     plt.imshow(ftmap, cmap='gray')
+
+                        #     # Save close
+                        #     plt.savefig(ftmaps_path / f'ftmap_{idx_ftmap}.pdf')
+                        #     plt.close()
+                        
+                        # Make the mean of the feature maps
+                        mean_ftmap = ftmaps.mean(axis=0)
+                        mean_ftmap = (mean_ftmap - mean_ftmap.min()) / (mean_ftmap.max() - mean_ftmap.min())
+                        # Add the padding
+                        mean_ftmap = np.pad(mean_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
+                        plt.imshow(mean_ftmap, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_mean_ftmap.pdf')
+                        plt.close()
+                        mean_ftmap = resize(mean_ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
+                        plt.imshow(mean_ftmap, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_mean_ftmap_reshaped.pdf')
+                        plt.close()
+
+                        # Make an image as the std of the feature maps
+                        std_ftmap = ftmaps.std(axis=0)
+                        std_ftmap = (std_ftmap - std_ftmap.min()) / (std_ftmap.max() - std_ftmap.min())
+                        # Add the padding
+                        std_ftmap = np.pad(std_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
+                        plt.imshow(std_ftmap, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_std_ftmap.pdf')
+                        plt.close()
+                        # Transform them to txt file and save it
+                        np.savetxt(ftmaps_path / 'A_std_ftmap.txt', std_ftmap)
+                        std_ftmap = resize(std_ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
+                        plt.imshow(std_ftmap, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_std_ftmap_reshaped.pdf')
+                        plt.close()
+
+                        # Make an image as the max of the feature maps
+                        max_ftmap = ftmaps.max(axis=0)
+                        max_ftmap = (max_ftmap - max_ftmap.min()) / (max_ftmap.max() - max_ftmap.min())
+                        # Add the padding
+                        max_ftmap = np.pad(max_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
+                        plt.imshow(max_ftmap, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_max_ftmap.pdf')
+                        plt.close()
+                        max_ftmap = resize(max_ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
+                        plt.imshow(max_ftmap, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_max_ftmap_reshaped.pdf')
+                        plt.close()
+
+                        # Make an image as the min of the feature maps -> GIVES NO INFO
+                        min_ftmap = ftmaps.min(axis=0)
+                        min_ftmap = (min_ftmap - min_ftmap.min()) / (min_ftmap.max() - min_ftmap.min())
+                        # Add the padding
+                        min_ftmap = np.pad(min_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
+                        plt.imshow(min_ftmap, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_min_ftmap.pdf')
+                        plt.close()
+                        min_ftmap = resize(min_ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
+                        plt.imshow(min_ftmap, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_min_ftmap_reshaped.pdf')
+                        plt.close()
+
+                        # Make an image of the IQR of the feature maps usign scipy.stats.iqr
+                        from scipy.stats import iqr
+                        iqr_ftmap = iqr(ftmaps, axis=0)
+                        iqr_ftmap = (iqr_ftmap - iqr_ftmap.min()) / (iqr_ftmap.max() - iqr_ftmap.min())
+                        # Add the padding
+                        iqr_ftmap = np.pad(iqr_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
+                        plt.imshow(iqr_ftmap, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_IQR_ftmap.pdf')
+                        plt.close()
+
+                        # Make and image of the MAD of the feature maps
+                        mean_ftmaps = ftmaps.mean(axis=0)
+                        mad_ftmap = np.mean(np.abs(ftmaps - mean_ftmaps), axis=0)
+                        mad_ftmap = (mad_ftmap - mad_ftmap.min()) / (mad_ftmap.max() - mad_ftmap.min())
+                        # Add the padding
+                        mad_ftmap = np.pad(mad_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
+                        plt.imshow(mad_ftmap, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_MAD_ftmap.pdf')
+                        plt.close()
+                        
+                        # Make an image of the sum of the topK values per pixel
+                        #topK = 10
+                        flattened_ftmaps = ftmaps.reshape(ftmaps.shape[0], -1).T
+                        topK_folder_path = ftmaps_path / 'topK'
+                        topK_folder_path.mkdir(exist_ok=True)
+                        for topK in [1,2,3,4,5,8,10,12,15,20,25,30]:
+                            topK_ftmap = np.sort(flattened_ftmaps, axis=1) # Sort the values (channels) of the pixels
+                            topK_ftmap = topK_ftmap.reshape(ftmaps.shape[1], ftmaps.shape[2], -1)  # Reshape to the original shape
+                            topK_ftmap = topK_ftmap[:,:, -topK:].sum(axis=2)  # Take the topK values of every pixel and sum them
+                            topK_ftmap = (topK_ftmap - topK_ftmap.min()) / (topK_ftmap.max() - topK_ftmap.min())  # Normalize
+                            # Add the padding
+                            topK_ftmap = np.pad(topK_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
+                            #topK_ftmap = topK_ftmap.reshape(ftmaps.shape[1], ftmaps.shape[2])
+                            plt.imshow(topK_ftmap, cmap='gray')
+                            plt.savefig(topK_folder_path / f'A_top{topK}_ftmap.pdf')
+                            plt.close()
+                            topK_ftmap = resize(topK_ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
+                            plt.imshow(topK_ftmap, cmap='gray')
+                            plt.savefig(topK_folder_path / f'A_top{topK}_ftmap_reshaped.pdf')
+                            plt.close()
+
+                        # CLuster
+                        # OPTION 1. Directly clustering
+                        features_metric = 'euclidean'
+                        min_samples = 16
+                        eps_options = {
+                            "euclidean": 18,
+                            "cosine": 0.1,
+                            "manhattan": 18
+                        }
+                        eps = eps_options[features_metric]
+                        # Flatten feature maps. original shape is (features, height, width). We want (n_samples, features)
+                        flattened_ftmaps = ftmaps.reshape(ftmaps.shape[0], -1).T
+                        db = DBSCAN(eps=eps, min_samples=min_samples, metric=features_metric).fit(flattened_ftmaps)
+                        labels = db.labels_
+                        n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
+                        print(f"Number of clusters: {n_clusters_}")
+                        # Plot the labels as an image in the original size
+                        labels_as_image = labels.reshape(ftmaps.shape[1], ftmaps.shape[2])
+                        plt.imshow(labels_as_image)
+                        plt.savefig(ftmaps_path / f'A_cluster_dbscan.pdf')
+                        plt.close()
+
+                        # Scale the feature maps
+                        from sklearn.preprocessing import StandardScaler
+                        scaler = StandardScaler()
+                        flattened_ftmaps_scaled = scaler.fit_transform(flattened_ftmaps)
+                        # Cluster
+                        db = DBSCAN(eps=eps, min_samples=min_samples).fit(flattened_ftmaps_scaled)
+                        labels = db.labels_
+                        n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
+                        print(f"Number of clusters: {n_clusters_}")
+                        # Plot the labels as an image in the original size
+                        labels_as_image = labels.reshape(ftmaps.shape[1], ftmaps.shape[2])
+                        plt.imshow(labels_as_image)
+                        plt.savefig(ftmaps_path / f'A_cluster_dbscan_scaled.pdf')
+                        plt.close()
+
+                        # Clustering with DBSCAN but adding the spatial information
+                        # Original feature map shape
+                        num_channels, height, width = ftmaps.shape
+                        # Create the coordinate channels
+                        y_coords, x_coords = np.meshgrid(np.arange(height), np.arange(width), indexing='ij')
+                        # Add the coordinate channels to the original feature map
+                        yx_augmented_feature_map = np.concatenate([ftmaps, y_coords[None, :, :], x_coords[None, :, :]])
+                        # Now flatten the feature maps and make the first dimension be the pixels
+                        flattened_ftmaps_with_yx = yx_augmented_feature_map.reshape(num_channels + 2, -1).T
+                        samples_pairwise_distances_features = pairwise_distances(flattened_ftmaps_with_yx[:, :-2], metric=features_metric)
+                        mean_ft_distance = samples_pairwise_distances_features.mean()
+                        std_ft_distance = samples_pairwise_distances_features.std()
+                        # Euclidean distance between sample coordinates. Normalize them to be in the same range as the feature distances
+                        samples_pairwise_distances_yx = pairwise_distances(flattened_ftmaps_with_yx[:, -2:], metric='euclidean')
+                        samples_pairwise_distances_yx = (samples_pairwise_distances_yx - samples_pairwise_distances_yx.min()) / (samples_pairwise_distances_yx.max() - samples_pairwise_distances_yx.min())
+                        samples_pairwise_distances_yx = samples_pairwise_distances_yx * (std_ft_distance + mean_ft_distance - (mean_ft_distance - std_ft_distance)) + (mean_ft_distance - std_ft_distance)
+                        # Merge the two distances using a weight lambda
+                        lambda_weight = 0.5
+                        samples_pairwise_distances_weighted = lambda_weight * samples_pairwise_distances_features + (1 - lambda_weight) * samples_pairwise_distances_yx
+                        # Now cluster 
+                        db = DBSCAN(eps=eps, min_samples=min_samples).fit(samples_pairwise_distances_weighted)
+                        labels = db.labels_
+                        n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
+                        print(f"Number of clusters: {n_clusters_}")
+                        # Plot the labels as an image in the original size
+                        labels_as_image = labels.reshape(ftmaps.shape[1], ftmaps.shape[2])
+                        # Add padding to the labels
+                        labels_as_image = np.pad(labels_as_image, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(-1, -1))
+                        labels_as_image_spatial_info = labels_as_image.copy()
+                        # As matrix
+                        plt.matshow(labels_as_image, cmap='tab20')
+                        # Plot also the legend
+                        plt.savefig(ftmaps_path / f'A_cluster_with_spatial_info_matshow.pdf')
+                        plt.close()
+                        # As image
+                        plt.imshow(labels_as_image, cmap='viridis')
+                        plt.savefig(ftmaps_path / f'A_cluster_with_spatial_info_imshow.pdf')
+                        plt.close()
+                        # As image resized to the original size but maintaining the clusters
+                        labels_as_image = resize(labels_as_image, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
+                        labels_as_image = np.rint(labels_as_image)                     
+                        plt.imshow(labels_as_image, cmap='tab20')
+                        plt.savefig(ftmaps_path / f'A_cluster_with_spatial_info_imshow_reshaped.pdf')
+                        plt.close()
+
+                        # Creating boxes with cv2 and std_ftmap
+                        import cv2
+                        # Remove one extra pixel from the padding
+                        # ftmaps_one_less_pixel = ftmaps[:, 1:-1, 1:-1]
+                        # std_ftmap = ftmaps_one_less_pixel.std(axis=0)
+                        std_ftmap = ftmaps.std(axis=0)
+                        std_ftmap = (std_ftmap - std_ftmap.min()) / (std_ftmap.max() - std_ftmap.min())
+                        #std_ftmap = np.pad(std_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
+                        # Threshold the map
+                        saliency_map_8bit = np.uint8(std_ftmap * 255)
+                        _, binary_map = cv2.threshold(saliency_map_8bit, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                        plt.imshow(binary_map, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_binary_map_otsu.pdf')
+                        plt.close()
+
+                        # Adaptive Mean Thresholding
+                        adaptive_mean = cv2.adaptiveThreshold(saliency_map_8bit, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
+                        plt.imshow(adaptive_mean, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_binary_map_adaptive_mean.pdf')
+                        plt.close()
+
+                        # Adaptive Gaussian Thresholding
+                        adaptive_gaussian = cv2.adaptiveThreshold(saliency_map_8bit, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+                        plt.imshow(adaptive_gaussian, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_binary_map_adaptive_gaussian.pdf')
+                        plt.close()
+
+                        # Triangle thresholding
+                        _, triangle_threshold = cv2.threshold(saliency_map_8bit, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_TRIANGLE)
+                        plt.imshow(triangle_threshold, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_binary_map_triangle.pdf')
+                        plt.close()
+
+                        from skimage.filters import threshold_multiotsu
+                        # Applying Multi-Otsu threshold for the values in image
+                        thresholds = threshold_multiotsu(saliency_map_8bit, classes=3)
+                        multi_otsu_result = np.digitize(saliency_map_8bit, bins=thresholds)
+                        plt.imshow(multi_otsu_result, cmap='gray')
+                        plt.savefig(ftmaps_path / f'A_binary_map_multi_otsu.pdf')
+                        plt.close()
+
+                        # Selective search for bounding boxes (opencv)
+                        # TODO: Deactivated for the moment
+                        if False:
+                            ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
+                            ss.setBaseImage(saliency_map_8bit)
+                            ss.switchToSelectiveSearchFast()
+                            #ss.switchToSelectiveSearchQuality()
+                            # run selective search on the input image
+                            import time
+                            start = time.time()
+                            rects = ss.process()
+                            end = time.time()
+                            # show how along selective search took to run along with the total
+                            # number of returned region proposals
+                            print("[INFO] selective search took {:.4f} seconds".format(end - start))
+                            print("[INFO] {} total region proposals".format(len(rects)))
+
+                            # loop over the region proposals in chunks (so we can better visualize them)
+                            import random
+                            for i in range(0, len(rects), 100):
+                                # clone the original image so we can draw on it
+                                output = saliency_map_8bit.copy()
+                                # loop over the current subset of region proposals
+                                for (x, y, w, h) in rects[i:i + 100]:
+                                    # draw the region proposal bounding box on the image
+                                    color = [random.randint(0, 255) for j in range(0, 3)]
+                                    cv2.rectangle(output, (x, y), (x + w, y + h), color, 2)
+                            # Find contours
+                            contours, _ = cv2.findContours(binary_map, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            # Draw bounding boxes
+                            output_image = cv2.cvtColor(saliency_map_8bit, cv2.COLOR_GRAY2BGR)  # Convert to BGR for coloring
+                            for contour in contours:
+                                x, y, w, h = cv2.boundingRect(contour)
+                                cv2.rectangle(output_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                            
+                            plt.imshow(output_image)
+                            plt.savefig(ftmaps_path / f'A_boxes_from_std_ftmap.pdf')
+                            plt.close()
+                            # Save the result in an image with cv2 (same path as with matplotlib)
+                            cv2.imwrite(str(ftmaps_path / f'A_boxes_from_std_ftmap_cv2.png'), output_image)
+
+                        if False:
+                            # OPTION 2. Clustering algorithms
+                            # CLUSTERING OPTIONS:
+                            cluster_option = 'optics'
+                            if cluster_option == 'meanshift':
+                                from sklearn.cluster import MeanShift
+                                mean_shift = MeanShift(bandwidth=None)  # Experiment with the bandwidth parameter
+                                labels = mean_shift.fit_predict(flattened_ftmaps_with_xy_scaled)
+                            elif cluster_option == 'dbscan':
+                                db = DBSCAN(eps=0.9, min_samples=8).fit(flattened_ftmaps_with_xy_scaled)
+                                labels = db.labels_
+                            elif cluster_option == 'gmm':
+                                from sklearn.mixture import GaussianMixture
+                                gmm = GaussianMixture(n_components=5, covariance_type='full')
+                                labels = gmm.fit_predict(flattened_ftmaps_with_xy_scaled)
+                            elif cluster_option == 'optics':
+                                from sklearn.cluster import OPTICS
+                                optics = OPTICS(min_samples=8, xi=.05, min_cluster_size=.05)
+                                optics_labels = optics.fit_predict(flattened_ftmaps_with_xy_scaled)
+                                print(f"OPTICS found {len(np.unique(optics_labels))} clusters")
+                            else:
+                                raise ValueError("The cluster option is not valid")
+                            # Number of clusters
+                            n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
+                            print(f"Number of clusters: {n_clusters_}")
+                            # Plot the labels as an image in the original size
+                            labels_as_image = labels.reshape(ftmaps_shape[1], ftmaps_shape[2])
+                            plt.imshow(labels_as_image, cmap='tab20')
+                            # Plot also the legend
+                            plt.colorbar()
+                            plt.savefig(ftmaps_path / f'A_cluster_with_spatial_info_{cluster_option}.pdf')
+                            plt.close()                            
+
+                print()
+                if c > 20:
+                    quit()
+
+            elif debugeando_en_modo == "normal":
                 # Por aqui va la ejecucion normal
 
                 ### Comprobar si las cajas predichas son OoD ###
@@ -370,6 +869,9 @@ class OODMethod(ABC):
                     ood_method_name=self.name,
                     targets=targets
                 )
+            else:
+                raise ValueError("The mode to debug is not valid")
+            
             number_of_images_saved += len(data['im_file'])
             # TODO: De momento no queremos plotear todo, solo unos pocos batches
             if number_of_images_saved > 200:
@@ -377,7 +879,7 @@ class OODMethod(ABC):
             # if idx_of_batch > 10:
             #     quit()
                 
-    def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger, known_classes: List[int]):
+    def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger, known_classes: List[int]) -> Dict[str, float]:
 
         logger.warning(f"Using a confidence threshold of {self.min_conf_threshold} for tests")
         number_of_images_processed = 0
@@ -451,7 +953,7 @@ class OODMethod(ABC):
             # )
 
         # All predictions collected, now compute metrics
-        compute_metrics(all_preds, all_targets, class_names, known_classes, logger)
+        results_dict = compute_metrics(all_preds, all_targets, class_names, known_classes, logger)
 
         # Count the number of non-unknown instances and the number of unknown instances
         number_of_known_boxes = 0 
@@ -459,6 +961,10 @@ class OODMethod(ABC):
         for _target in all_targets:
             number_of_known_boxes += torch.sum(_target['cls'] != 80).item()
             number_of_unknown_boxes += torch.sum(_target['cls'] == 80).item()
+        logger.info(f"Number of known boxes: {number_of_known_boxes}")
+        logger.info(f"Number of unknown boxes: {number_of_unknown_boxes}")
+
+        return results_dict
 
     
     def generate_thresholds(self, ind_scores: list, tpr: float, logger) -> Union[List[float], List[List[float]]]:
