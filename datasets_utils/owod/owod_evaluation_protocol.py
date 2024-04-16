@@ -155,7 +155,7 @@ def compute_WI_at_a_recall_level(recalls, tp_plus_fp_cs, fp_os, recall_level=0.5
     return wi_at_iou
 
 
-def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_names: List[str], known_classes: List[int], logger: Logger):
+def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_names: List[str], known_classes: List[int], logger: Logger) -> Dict[str, float]:
     """
     Returns:
         dict: has a key "segm", whose value is a dict of "AP", "AP50", and "AP75".
@@ -225,6 +225,7 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     # WI is calculated for all_test?? Or only for WI split?
     wi = compute_WI_at_many_recall_level(all_recs, tp_plus_fp_cs, fp_os, known_classes=known_classes)
     logger.info('Wilderness Impact: ' + str(wi))
+    logger.info('Wilderness Impact Recall 0.8: ' + str(wi[0.8]))
 
     avg_precision_unk = compute_avg_precision_at_many_recall_level_for_unk(all_precs, all_recs)
     logger.info('avg_precision: ' + str(avg_precision_unk))
@@ -244,43 +245,50 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     logger.info("Precisions50: " + str(['%.1f' % x for x in precs[50]]))
     logger.info("Recall50: " + str(['%.1f' % x for x in recs[50]]))
     # logger.info("AP75: " + str(['%.1f' % x for x in aps[75]]))
-    # TODO: Voy a tener que llevar un trackeo de las classes introducidas previamente y las actuales
-    if self.prev_intro_cls > 0:
-        # logger.info("\nPrev class AP__: " + str(np.mean(avg_precs[:self.prev_intro_cls])))
-        logger.info("Prev class AP50: " + str(np.mean(aps[50][:self.prev_intro_cls])))
-        logger.info("Prev class Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls])))
-        logger.info("Prev class Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls])))
-        print("Prev class AP50: " + str(np.mean(aps[50][:self.prev_intro_cls])))
-        print("Prev class Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls])))
-        print("Prev class Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls])))
+    if False:
+        # TODO: Voy a tener que llevar un trackeo de las classes introducidas previamente y las actuales
+        if self.prev_intro_cls > 0:
+            # logger.info("\nPrev class AP__: " + str(np.mean(avg_precs[:self.prev_intro_cls])))
+            logger.info("Prev class AP50: " + str(np.mean(aps[50][:self.prev_intro_cls])))
+            logger.info("Prev class Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls])))
+            logger.info("Prev class Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls])))
+            print("Prev class AP50: " + str(np.mean(aps[50][:self.prev_intro_cls])))
+            print("Prev class Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls])))
+            print("Prev class Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls])))
 
-        # logger.info("Prev class AP75: " + str(np.mean(aps[75][:self.prev_intro_cls])))
+            # logger.info("Prev class AP75: " + str(np.mean(aps[75][:self.prev_intro_cls])))
 
-    # logger.info("\nCurrent class AP__: " + str(np.mean(avg_precs[self.prev_intro_cls:self.curr_intro_cls])))
-    logger.info("Current class AP50: " + str(np.mean(aps[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-    logger.info("Current class Precisions50: " + str(np.mean(precs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-    logger.info("Current class Recall50: " + str(np.mean(recs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-    print("Current class AP50: " + str(np.mean(aps[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-    print("Current class Precisions50: " + str(np.mean(precs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-    print("Current class Recall50: " + str(np.mean(recs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-    # logger.info("Current class AP75: " + str(np.mean(aps[75][self.prev_intro_cls:self.curr_intro_cls])))
+        # logger.info("\nCurrent class AP__: " + str(np.mean(avg_precs[self.prev_intro_cls:self.curr_intro_cls])))
+        logger.info("Current class AP50: " + str(np.mean(aps[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
+        logger.info("Current class Precisions50: " + str(np.mean(precs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
+        logger.info("Current class Recall50: " + str(np.mean(recs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
+        print("Current class AP50: " + str(np.mean(aps[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
+        print("Current class Precisions50: " + str(np.mean(precs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
+        print("Current class Recall50: " + str(np.mean(recs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
+        # logger.info("Current class AP75: " + str(np.mean(aps[75][self.prev_intro_cls:self.curr_intro_cls])))
 
     # logger.info("\nKnown AP__: " + str(np.mean(avg_precs[:self.prev_intro_cls + self.curr_intro_cls])))
-    logger.info("Known AP50: " + str(np.mean(aps[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    logger.info("Known Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    logger.info("Known Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    print("Known AP50: " + str(np.mean(aps[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    print("Known Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    print("Known Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls + self.curr_intro_cls])))
+    logger.info("Known AP50: " + str(np.mean(aps[50][:-1])))
+    logger.info("Known Precisions50: " + str(np.mean(precs[50][:-1])))
+    logger.info("Known Recall50: " + str(np.mean(recs[50][:-1])))
+    # print("Known AP50: " + str(np.mean(aps[50][:-1])))
+    # print("Known Precisions50: " + str(np.mean(precs[50][:-1])))
+    # print("Known Recall50: " + str(np.mean(recs[50][:-1])))
     # logger.info("Known AP75: " + str(np.mean(aps[75][:self.prev_intro_cls + self.curr_intro_cls])))
+    # logger.info("Known AP50: " + str(np.mean(aps[50][:self.prev_intro_cls + self.curr_intro_cls])))
+    # logger.info("Known Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls + self.curr_intro_cls])))
+    # logger.info("Known Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls + self.curr_intro_cls])))
+    # print("Known AP50: " + str(np.mean(aps[50][:self.prev_intro_cls + self.curr_intro_cls])))
+    # print("Known Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls + self.curr_intro_cls])))
+    # print("Known Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls + self.curr_intro_cls])))
 
     # logger.info("\nUnknown AP__: " + str(avg_precs[-1]))
     logger.info("Unknown AP50: " + str(aps[50][-1]))
     logger.info("Unknown Precisions50: " + str(precs[50][-1]))
     logger.info("Unknown Recall50: " + str(recs[50][-1]))
-    print("Unknown AP50: " + str(aps[50][-1]))
-    print("Unknown Precisions50: " + str(precs[50][-1]))
-    print("Unknown Recall50: " + str(recs[50][-1]))
+    # print("Unknown AP50: " + str(aps[50][-1]))
+    # print("Unknown Precisions50: " + str(precs[50][-1]))
+    # print("Unknown Recall50: " + str(recs[50][-1]))
     # logger.info("Unknown AP75: " + str(aps[75][-1]))
 
     # logger.info("R__: " + str(['%.1f' % x for x in list(np.mean([x for _, x in recs.items()], axis=0))]))
@@ -291,7 +299,43 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     # logger.info("P50: " + str(['%.1f' % x for x in precs[50]]))
     # logger.info("P75: " + str(['%.1f' % x for x in precs[75]]))
 
-    return ret
+    # Info for paper
+    known_ap50 = np.mean(aps[50][:-1])
+    unknown_ap50 = aps[50][-1]
+    unknown_f1 = 2 * (precs[50][-1] * recs[50][-1]) / (precs[50][-1] + recs[50][-1])
+    unknown_precision = precs[50][-1]
+    unknown_recall = recs[50][-1]
+    wilderness_impact_recall_08 = wi[0.8][50]
+    total_num_unk_det_as_known = total_num_unk_det_as_known[50]
+    results_dict = {
+        'mAP': known_ap50,
+        'U-AP': unknown_ap50,
+        'U-F1': unknown_f1,
+        'U-PRE': unknown_precision,
+        'U-REC': unknown_recall,
+        'A-OSE': total_num_unk_det_as_known,
+        'WI-08': wilderness_impact_recall_08,
+    }
+    logger.info('Summary:')
+    logger.info('-----------------')    
+    logger.info('Known mAP50 [%]: ' + str(known_ap50))
+    logger.info('Unknown AP50 [%]: ' + str(unknown_ap50))
+    logger.info('Unknown F1 score [%]: ' + str(unknown_f1))
+    logger.info('Unknown Precision [%]: ' + str(unknown_precision))
+    logger.info('Unknown Recall [%]: ' + str(unknown_recall))
+    logger.info('A-OSE: ' + str(total_num_unk_det_as_known))
+    logger.info('Wilderness Impact Recall 0.8 [%]: ' + str(wilderness_impact_recall_08))
+    logger.info('-----------------')    
+    # logger.info('-----------------')
+    # logger.info('Known mAP50 [%]: ' + str(np.mean(aps[50][:-1])))
+    # logger.info('Unknown AP50 [%]: ' + str(aps[50][-1]))
+    # logger.info('Unknown F1 score [%]: ' + str(2 * (precs[50][-1] * recs[50][-1]) / (precs[50][-1] + recs[50][-1])))
+    # logger.info('Unknown Precision [%]: ' + str(precs[50][-1]))
+    # logger.info('Unknown Recall [%]: ' + str(recs[50][-1]))
+    # logger.info('A-OSE: ' + str(total_num_unk_det_as_known))
+    # logger.info('Wilderness Impact Recall 0.8 [%]: ' + str(wi[0.8]))
+    # logger.info('-----------------')
+    return results_dict
 
 
 ##############################################################################
@@ -411,7 +455,7 @@ def voc_eval(current_class_predictions: Dict[str, List], all_targets: List[Dict]
     # assumes imagesetfile is a text file with each line an image name
 
     # Classname to idx
-    class_mapping = {class_name: idx for idx, class_name in enumerate(class_names)}
+    class_mapping = {class_name: idx if class_name != 'unknown' else 80 for idx, class_name in enumerate(class_names)}
     class_idx = class_mapping[classname]  # Tengo que llevar hasta aqui el mapping de las clases
 
     # MANTENGO
@@ -439,9 +483,10 @@ def voc_eval(current_class_predictions: Dict[str, List], all_targets: List[Dict]
     #       - bbox: [xmin, ymin, xmax, ymax]
 
     # Assert every imagename of the set is present in the targets
-    imagenames_set = set(imagenames)
-    target_imagenames_set = set([x['img_name'] for x in all_targets])
-    assert imagenames_set == target_imagenames_set, 'Some images are missing in the targets'
+    if False:  # This check is only for OWOD... As we also use COCO Mixed we cannot do this check as it is now
+        imagenames_set = set(imagenames)
+        target_imagenames_set = set([x['img_name'] for x in all_targets])
+        assert imagenames_set == target_imagenames_set, 'Some images are missing in the targets'
 
     ### Coger el GT de la clase actual para TODAS las imagenes y formatear al estilo de ellos ###
     # ELIMINO y CAMBIO
