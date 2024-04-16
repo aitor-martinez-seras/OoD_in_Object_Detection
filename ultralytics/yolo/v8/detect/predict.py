@@ -10,8 +10,13 @@ from ultralytics.yolo.engine.results import Results
 from ultralytics.yolo.utils import DEFAULT_CFG, ROOT, ops
 
 
-def extract_roi_aligned_features_from_correct_stride(ftmaps: List[Tensor], boxes: List[Tensor], strides: List[Tensor],
-                                                     img_shape: List[int], device) -> List[List[Tensor]]:
+def extract_roi_aligned_features_from_correct_stride(
+    ftmaps: List[Tensor],
+    boxes: List[Tensor],
+    strides: List[Tensor],
+    img_shape: List[int],
+    device
+    ) -> List[List[Tensor]]:
     """
     Extracts the features of each bounding box from the correct feature map, using RoIAlign. This is needed because
     the bounding boxes are predicted in the original image, but the features are extracted from the feature maps,
@@ -123,7 +128,7 @@ def extract_roi_aligned_features_from_correct_stride(ftmaps: List[Tensor], boxes
     #         spatial_scale=output_extra[0].shape[2]/img.shape[2]
     #     )
 
-    return roi_aligned_ftmaps_per_image  # Sobreescibimos el output_extra con el resultado del roi_align
+    return roi_aligned_ftmaps_per_image  # List[List[Tensor]]
 
 class DetectionPredictor(BasePredictor):
 
@@ -135,16 +140,18 @@ class DetectionPredictor(BasePredictor):
         #       - preds[0] es un tensor de (N, 84, 8000) -> Las predicciones
         #       - preds[1] es una lista con 3 tensores de (N, 144, H, W)  -> No se que son...
         #   - Si viene con output_extra:
-        #       - preds[0] es el tensor sin output_extra
+        #       - preds[0] es el tensor sin output_extra (es lo mostrado arriba, con las preds en la posicion 0)
         #       - preds[1] es el output_extra:
         #           - Si es 'conv' O 'all_ftmaps': lista de 3 tensores de (N, C, H, W) -> Los feature maps
         #           - Si es 'logits': tensor de  -> Los logits
 
-        if hasattr(self.model.model, 'modo'):
+        ### Execution for internal information extraction ###
+        ood_info_retrieval_mode = hasattr(self.model.model, 'modo')
+        if ood_info_retrieval_mode:
             
             output_extra = preds[1]  # Los feature maps o logits
             preds = preds[0][0]  # Las predicciones
-
+            
             if self.model.model.modo == 'conv':
                 # Para la prediccion se usan las 3 escalas de feature maps (8,16,32)
                 # y por tanto me he traido las 3 escalas, que vienen en la forma
@@ -231,9 +238,45 @@ class DetectionPredictor(BasePredictor):
                                                 agnostic=self.args.agnostic_nms,
                                                 max_det=self.args.max_det,
                                                 classes=self.args.classes)
+
+            elif self.model.model.modo == 'ftmaps_and_strides':
                 
+                # Create a list of lists, where first dimension is N and second is S, the stride
+                # Each element of the second list is a tensor of shape [C, H, W] where C is the number of channels
+                output_extra = [list(batch) for batch in zip(*output_extra)]
+
+                # Strides. We use this variable to mantain the info of which is the scale of each predicted bounding box
+                #   in the final predictions. This is needed for using RoIAlign with the correct feature map
+                input_size = img.shape[2]
+                s8 = input_size // 8
+                s16 = input_size // 16
+                s32 = input_size // 32
+                device = self.device
+                strides = torch.cat(
+                    (torch.zeros((s8*s8), device=device),  # 0
+                    torch.ones((s16*s16), device=device),  # 1
+                    torch.ones((s32*s32), device=device) * 2)  # 2
+                )
+
+                # Perform NMS and extract the strides to which the final predicted bboxes belong
+                preds, strides = ops.non_max_suppression(
+                    preds,
+                    self.args.conf,
+                    self.args.iou,
+                    agnostic=self.args.agnostic_nms,
+                    max_det=self.args.max_det,
+                    classes=self.args.classes,  # Usually None
+                    extra_item=None,
+                    strides=strides
+                )
+
+                # Merge the feature maps and the strides into a list of lists
+                # where the first list has as many elements as images in the batch (N),
+                # and each element is list of two elements, the feature maps and the strides
+                output_extra = list(zip(output_extra, strides))
+
             
-        # Normal execution
+        ### Standard execution ###
         else:
             preds = ops.non_max_suppression(preds[0],
                                             self.args.conf,
@@ -250,7 +293,7 @@ class DetectionPredictor(BasePredictor):
                 pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
             path = self.batch[0]
             img_path = path[i] if isinstance(path, list) else path
-            if self.model.model.modo in ['logits', 'conv', 'all_ftmaps']:
+            if ood_info_retrieval_mode:  # True if we are retrieving logits or feature maps from the model
                 results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names, boxes=pred, extra_item=output_extra[i]))
             else:
                 results.append(Results(orig_img=orig_img, path=img_path, names=self.model.names, boxes=pred))
