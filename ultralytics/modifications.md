@@ -1,11 +1,16 @@
 # Where to modify for extracting activations from the internals of the model
 
-[BasePredictor](yolo/engine/predictor.py) (```ultralytics/yolo/engine/predictor.py```): in ```stream_inference``` is where the dataset is looped, calling the batches and the preprocessing, processing and postprocessing steps. In the processing part, where the model is called, we arrive to the next object.
+[BasePredictor](yolo/engine/predictor.py) (```ultralytics/yolo/engine/predictor.py```): in ```stream_inference``` is where the dataset is looped, calling the batches and the preprocessing, processing and postprocessing steps. In the processing part, where the model is called (the forward pass), we arrive to the next object, the [BaseModel](nn/tasks.py).
 
-[BaseModel](nn/tasks.py) (```ultralytics/nn/tasks.py```): called by ```BasePredictor```, contains the functions where the model makes the forward pass throught the layers and where you can take the activations out of the layer you want. Specifically follow the calls ```forward -> predict -> _predict_once```. We have passed throught the wanted activations as a variable called ```output_extra``` that comes out to the next object, the ```DetectionPredictor```.
+configure_extra_output_of_the_model
 
+[BaseModel](nn/tasks.py) (```ultralytics/nn/tasks.py```): called by ```BasePredictor```, contains the functions where the model makes the forward pass throught the layers and where you can take the activations out of the layer you want. Specifically follow the calls ```forward -> predict -> _predict_once```. 
+Here some logic with an ```if``` statement can be added to take the activations out of the layer you want. This ```if``` statement is controlled in our case by an added attribute to the model called ```.extraction_mode```. The statement has the mode hardcoded, so in case you want to add more modes, you have to modify this ```if``` statement manually in the function.
+Then, we pass throught the wanted activations as a variable called ```output_extra``` that comes out to the next object, the ```DetectionPredictor```. 
 
-[DetectionPredictor](yolo/v8/detect/predict.py) (```ultralytics/yolo/v8/detect/predict.py```): inherits from ```BasePredictor``` and modifies the postprocessing step. There is where we can take the ```output_extra``` and handle as we want to include it in the ```Results``` object as we want.
+[DetectionPredictor](yolo/v8/detect/predict.py) (```ultralytics/yolo/v8/detect/predict.py```): inherits from ```BasePredictor``` and modifies the postprocessing step. There is where we can take the ```output_extra``` and handle as we want to include it in the ```Results``` object as we want. The results object has been conveniently modified to include the ```output_extra``` in the ```__init__``` method.
+
+In the [ood_utils.py](../ood_utils.py), in the ```configure_extra_output_of_the_model``` function, it is the logic and the hardcoded strings to control the extraction of the activations.
 
 # Where to modify training
 
