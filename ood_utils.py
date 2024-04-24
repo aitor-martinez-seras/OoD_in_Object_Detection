@@ -1474,8 +1474,10 @@ class OODMethod(ABC):
         sufficient_samples = 10
         good_number_of_samples = 50
 
+        # One threshold per class
         if self.per_class:
-
+            
+            # One threshold per stride
             if self.per_stride:
 
                 # Per class with stride differentiation
@@ -1489,8 +1491,8 @@ class OODMethod(ABC):
                         else:
                             logger.warning(f'Class {idx_cls:03}, Stride {idx_stride} -> Has less than {sufficient_samples} samples. No threshold is generated')
             
+            # Same threshold for all strides
             else:
-
                 # Per class with no stride differentiation
                 thresholds = [0 for _ in range(len(ind_scores))]
                 for idx, cl_scores in enumerate(ind_scores):
@@ -1500,7 +1502,8 @@ class OODMethod(ABC):
                             logger.warning(f"Class {idx}: {len(cl_scores)} samples. The threshold may not be accurate")
                     else:
                         logger.warning(f"Class {idx} has less than {sufficient_samples} samples. No threshold is generated")
-                        
+        
+        # One threshold for all classes
         else:
             raise NotImplementedError("Not implemented yet")
         
@@ -1758,10 +1761,10 @@ class DistanceMethod(OODMethod):
                         strides=[strides],
                         img_shape=res.orig_img.shape[2:],
                         device=device
-                    )[0]  # As we only introduce one image, we need to get the only element of the batch
+                    )
                     
-                    # Add the valid roi aligned ftmaps to the list
-                    self._extract_valid_preds_from_one_image_roi_aligned_ftmaps(cls_idx_one_pred, roi_aligned_ftmaps_per_stride, valid_preds, all_activations)
+                    # Add the valid roi aligned ftmaps to the list. As we only introduce one image, we need to get the only element of roi aligned ftmaps
+                    self._extract_valid_preds_from_one_image_roi_aligned_ftmaps(cls_idx_one_pred, roi_aligned_ftmaps_per_stride[0], valid_preds, all_activations)
 
             else:
                 raise ValueError("Wrong ind_info_creation_option for the selected internal activations.")
@@ -1920,83 +1923,172 @@ class DistanceMethod(OODMethod):
 
     def compute_ood_decision_on_results(self, results: Results, logger) -> List[List[int]]:
         """
-        Compute the OOD decision for each class using the in-distribution activations (usually feature maps).
+        Compute the OOD decision for each class using the in-distribution activations, 
+        either feature maps along with the strides of the bounding boxes or 
+        already RoI aligned feature maps.
+        Parameters:
+            results: List[Results] -> List of the results of the model for each image
+            logger: Logger -> Logger object to log messages
+        Returns:
+            ood_decision: List[List[int]] -> List of decisions for each class and for each bounding box
+        """
+        ood_decision = []  # List of decisions for each image
+        for idx_img, res in enumerate(results):
+            ood_decision.append([])  # Every image has a list of decisions for each bbox
+            
+            # Extract the RoI aligned feature maps from the feature maps and the strides
+            if self.which_internal_activations == "ftmaps_and_strides":
+                ftmaps, strides = res.extra_item
+                roi_aligned_ftmaps_per_stride = extract_roi_aligned_features_from_correct_stride(
+                    ftmaps=[ft[None, ...] for ft in ftmaps],
+                    boxes=[res.boxes.xyxy],
+                    strides=[strides],
+                    img_shape=res.orig_img.shape[2:],
+                    device=res.boxes.xyxy.device,
+                    extract_all_strides=False,
+                )
+                # As we are processing one image only and the output is a list per image, we take the first element
+                roi_aligned_ftmaps_per_stride = roi_aligned_ftmaps_per_stride[0]
+
+            # RoI aligned feature maps are already extracted from the model
+            elif self.which_internal_activations == 'roi_aligned_ftmaps':
+                roi_aligned_ftmaps_per_stride = res.extra_item
+            
+            else:
+                raise ValueError(f"The method {self.which_internal_activations} is invalid implemented yet")
+
+            self._compute_ood_decision_for_one_result_from_roi_aligned_feature_maps(
+                idx_img=idx_img,
+                one_img_bboxes_cls_idx=res.boxes.cls.cpu(),
+                roi_aligned_ftmaps_one_img_per_stride=roi_aligned_ftmaps_per_stride,  # As we are processing one image only
+                ood_decision=ood_decision,
+                logger=logger,
+            )
+
+        return ood_decision
+
+        ####
+        # if self.which_internal_activations == "ftmaps_and_strides":
+        #     for idx_img, res in enumerate(results):
+        #         ood_decision.append([])
+        #         ftmaps, strides = res.extra_item
+        #         roi_aligned_ftmaps_per_stride = extract_roi_aligned_features_from_correct_stride(
+        #             ftmaps=[ft[None, ...] for ft in ftmaps],
+        #             boxes=[res.boxes.xyxy],
+        #             strides=[strides],
+        #             img_shape=res.orig_img.shape[2:],
+        #             device=res.boxes.xyxy.device,
+        #             extract_all_strides=False,
+        #         )
+        #         self._compute_ood_decision_for_one_result_from_roi_aligned_feature_maps(
+        #             idx_img=idx_img,
+        #             one_img_bboxes_cls_idx=res.boxes.cls.cpu(),
+        #             roi_aligned_ftmaps_one_img_per_stride=roi_aligned_ftmaps_per_stride[0],  # As we are processing one image only
+        #             ood_decision=ood_decision,
+        #             logger=logger,
+        #         )                    
+
+        # elif self.which_internal_activations == 'roi_aligned_ftmaps':
+        #     for idx_img, res in enumerate(results):
+        #         ood_decision.append([])  # Every image has a list of decisions for each bbox
+        #         self._compute_ood_decision_for_one_result_from_roi_aligned_feature_maps(
+        #             idx_img=idx_img,
+        #             one_img_bboxes_cls_idx=res.boxes.cls.cpu(),
+        #             roi_aligned_ftmaps_one_img_per_stride=res.extra_item,
+        #             ood_decision=ood_decision,
+        #             logger=logger,
+        #         )
+
+        #         # ood_decision.append([])  # Every image has a decisions for each bbox
+        #         # for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(res.extra_item):
+
+        #         #     if len(bbox_idx_in_one_stride) > 0:  # Only enter if there are any predictions in this stride
+        #         #         # Each ftmap is from a bbox prediction
+        #         #         for idx, ftmap in enumerate(ftmaps):
+        #         #             bbox_idx = idx
+        #         #             cls_idx = int(res.boxes.cls[bbox_idx].cpu())
+        #         #             ftmap = ftmap.cpu().unsqueeze(0).numpy()  # To obtain a tensor of shape [1, C, H, W]
+        #         #             # ftmap = ftmap.cpu().flatten().unsqueeze(0).numpy()
+        #         #             # [None, :] is to do the same as unsqueeze(0) but with numpy
+        #         #             if len(self.clusters[cls_idx][stride_idx]) == 0:
+        #         #                 logger.warning(f'Image {idx_img}, bbox {bbox_idx} is viewed as an OOD.' \
+        #         #                                 'It cannot be compared as there is no cluster for class {cls_idx} and stride {stride_idx')
+        #         #                 distance = 1000
+        #         #             else:
+        #         #                 distance = self.compute_distance(
+        #         #                     self.clusters[cls_idx][stride_idx][None, :], 
+        #         #                     self.activations_transformation(ftmap)
+        #         #                 )[0]
+                            
+        #         #             # d = pairwise_distances(clusters[cls_idx][stride_idx][None,:], ftmap.cpu().numpy().reshape(1, -1), metric='l1')
+
+        #         #             # print('------------------------------')
+        #         #             # print('idx_img:\t', idx_of_batch*dataloader.batch_size + idx_img)
+        #         #             # print('bbox_idx:\t', bbox_idx)
+        #         #             # print('cls:\t\t', cls_idx)
+        #         #             # print('conf:\t\t', res.boxes.conf[bbox_idx])
+        #         #             # print('ftmap:\t\t',ftmap.shape)
+        #         #             # print('ftmap_reshape:\t', ftmap.cpu().numpy().reshape(1, -1).shape)
+        #         #             # print('distance:\t', distance)
+        #         #             # print('threshold:\t', self.thresholds[cls_idx][stride_idx])
+
+        #         #             if self.thresholds[cls_idx][stride_idx]:
+        #         #                 if distance < self.thresholds[cls_idx][stride_idx]:
+        #         #                     ood_decision[idx_img].append(1)  # InD
+        #         #                 else:
+        #         #                     ood_decision[idx_img].append(0)  # OOD
+        #         #             else:
+        #         #                 # logger.warning(f'WARNING: Class {cls_idx:03}, Stride {stride_idx} -> No threshold!')
+        #         #                 ood_decision[idx_img].append(0)  # OOD
+
+        # else:
+        #     raise NotImplementedError("Not implemented yet")
+
+    def _compute_ood_decision_for_one_result_from_roi_aligned_feature_maps(
+            self, idx_img: int, one_img_bboxes_cls_idx: Tensor, roi_aligned_ftmaps_one_img_per_stride, ood_decision: List,logger: Logger
+        ):
+        """
+        Compute the OOD decision for one image using the in-distribution activations (usually feature maps).
         Pipeline:
-            1. Loop over the results (predictions). Each result is from one image
+            1. Loop over the strides. Each stride is a list of bboxes and their feature maps
             2. Compute the distance between the prediction and the cluster of the predicted class
             3. Compare the distance with the threshold
         """
-        ood_decision = []
-        if self.which_internal_activations == "ftmaps_and_strides":
-            for idx_img, res in enumerate(results):
-                ood_decision.append([])
-                ftmaps, strides = res.extra_item
-                roi_aligned_ftmaps_per_stride = extract_roi_aligned_features_from_correct_stride(
-                            ftmaps=[ft[None, ...] for ft in one_stride_ftmaps],
-                            boxes=[res.boxes.xyxy[stride_mask]],
-                            strides=[strides[stride_mask]],
-                            img_shape=res.orig_img.shape[2:],
-                            device=res.boxes.xyxy.device,
-                            extract_all_strides=False,
+        # Loop each stride of the image. Select the first element of the list as we are processing one image only
+        for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(roi_aligned_ftmaps_one_img_per_stride):
+            
+            # Only enter if there are any predictions in this stride
+            if len(bbox_idx_in_one_stride) > 0:
+                # Each ftmap is from a bbox prediction
+                for idx, ftmap in enumerate(ftmaps):
+                    bbox_idx = idx
+                    cls_idx = int(one_img_bboxes_cls_idx[bbox_idx])
+                    ftmap = ftmap.cpu().unsqueeze(0).numpy()  # To obtain a tensor of shape [1, C, H, W]
+                    # ftmap = ftmap.cpu().flatten().unsqueeze(0).numpy()
+                    # [None, :] is to do the same as unsqueeze(0) but with numpy
+                    # Check if there is a cluster for the class and stride
+                    if len(self.clusters[cls_idx][stride_idx]) == 0:
+                        logger.warning(
+                            f'Image {idx_img}, bbox {bbox_idx} is viewed as an OOD.' \
+                            f'It cannot be compared as there is no cluster for class {cls_idx} and stride {stride_idx}'
                         )
-                
+                        distance = 1000
+                    else:
+                        distance = self.compute_distance(
+                            self.clusters[cls_idx][stride_idx][None, :], 
+                            self.activations_transformation(ftmap)
+                        )[0]
 
-                for stride_idx, one_stride_ftmaps in enumerate(ftmaps):
-                    stride_mask = strides == stride_idx
-                    if stride_mask.any():  # Only enter if there are any predictions in this stride
-                        print(f'stride_idx: {stride_idx}')
-                        # Now RoIAlign the ftmaps of the stride
-                       
-                    
+                    # Check if the distance is lower than the threshold
+                    if self.thresholds[cls_idx][stride_idx]:
+                        if distance < self.thresholds[cls_idx][stride_idx]:
+                            ood_decision[idx_img].append(1)  # InD
+                        else:
+                            ood_decision[idx_img].append(0)  # OOD
+                    else:
+                        # logger.warning(f'WARNING: Class {cls_idx:03}, Stride {stride_idx} -> No threshold!')
+                        ood_decision[idx_img].append(0)  # OOD   
 
-        elif self.which_internal_activations == 'roi_aligned_ftmaps':
-            for idx_img, res in enumerate(results):
-                ood_decision.append([])  # Every image has a decisions for each bbox
-                for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(res.extra_item):
-
-                    if len(bbox_idx_in_one_stride) > 0:  # Only enter if there are any predictions in this stride
-                        # Each ftmap is from a bbox prediction
-                        for idx, ftmap in enumerate(ftmaps):
-                            bbox_idx = idx
-                            cls_idx = int(res.boxes.cls[bbox_idx].cpu())
-                            ftmap = ftmap.cpu().unsqueeze(0).numpy()  # To obtain a tensor of shape [1, C, H, W]
-                            # ftmap = ftmap.cpu().flatten().unsqueeze(0).numpy()
-                            # [None, :] is to do the same as unsqueeze(0) but with numpy
-                            if len(self.clusters[cls_idx][stride_idx]) == 0:
-                                logger.warning(f'Image {idx_img}, bbox {bbox_idx} is viewed as an OOD.' \
-                                                'It cannot be compared as there is no cluster for class {cls_idx} and stride {stride_idx')
-                                distance = 1000
-                            else:
-                                distance = self.compute_distance(
-                                    self.clusters[cls_idx][stride_idx][None, :], 
-                                    self.activations_transformation(ftmap)
-                                )[0]
-                            
-                            # d = pairwise_distances(clusters[cls_idx][stride_idx][None,:], ftmap.cpu().numpy().reshape(1, -1), metric='l1')
-
-                            # print('------------------------------')
-                            # print('idx_img:\t', idx_of_batch*dataloader.batch_size + idx_img)
-                            # print('bbox_idx:\t', bbox_idx)
-                            # print('cls:\t\t', cls_idx)
-                            # print('conf:\t\t', res.boxes.conf[bbox_idx])
-                            # print('ftmap:\t\t',ftmap.shape)
-                            # print('ftmap_reshape:\t', ftmap.cpu().numpy().reshape(1, -1).shape)
-                            # print('distance:\t', distance)
-                            # print('threshold:\t', self.thresholds[cls_idx][stride_idx])
-
-                            if self.thresholds[cls_idx][stride_idx]:
-                                if distance < self.thresholds[cls_idx][stride_idx]:
-                                    ood_decision[idx_img].append(1)  # InD
-                                else:
-                                    ood_decision[idx_img].append(0)  # OOD
-                            else:
-                                # logger.warning(f'WARNING: Class {cls_idx:03}, Stride {stride_idx} -> No threshold!')
-                                ood_decision[idx_img].append(0)  # OOD
-
-        else:
-            raise NotImplementedError("Not implemented yet")
-
-        return ood_decision
 
     def compute_ood_decision_with_ftmaps(self, activations: Union[List[np.ndarray], List[List[np.ndarray]]], bboxes: Dict[str, List], logger: Logger) -> List[List[List[int]]]:
         """
