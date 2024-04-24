@@ -18,25 +18,14 @@ from ultralytics.yolo.data import BaseDataset
 from ultralytics.yolo.data.build import InfiniteDataLoader
 
 
-from ood_utils import get_measures, configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, ODIN, \
+from ood_utils import get_measures, configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, \
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride
 
 from data_utils import read_json, write_json, load_dataset_and_dataloader
+from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, IOU_THRESHOLD, OOD_METHOD_CHOICES, CONF_THRS_FOR_BENCHMARK
 
 
 NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
-ROOT = Path(__file__).parent  # Assumes this script is in the root of the project
-STORAGE_PATH = ROOT / 'storage'
-PRUEBAS_ROOT_PATH = ROOT / 'pruebas'
-RESULTS_PATH = ROOT / 'results'
-
-IOU_THRESHOLD = 0.5
-
-OOD_METHOD_CHOICES = ['MSP', 'ODIN', 'Energy', 'Mahalanobis', 'GradNorm','RankFeat','React', 'L1_cl_stride', 'L2_cl_stride', \
-                      'GAP_L2_cl_stride', 'Cosine_cl_stride']
-
-CONF_THRS_FOR_BENCHMARK = [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001]
-
 
 class SimpleArgumentParser(Tap):
     
@@ -62,6 +51,9 @@ class SimpleArgumentParser(Tap):
     owod_task_ood: Literal["", "t1", "t2", "t3", "t4", "all_task_test"] = ""  # OWOD task to use in the out-of-distribution dataset
     # OOD related
     ood_method: str
+    ind_info_creation_option: str = 'valid_preds_one_stride'  # How to create the in-distribution information for the distance methods
+    enhanced_unk_localization: bool = False  # Whether to use enhanced unknown localization
+    which_internal_activations: str = 'roi_aligned_ftmaps'  # Which internal activations to use for the OoD detection
     # ODIN and Energy
     temperature: int = 1000
     epsilon_odin: float = 0.0
@@ -94,20 +86,34 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
     """
     Select the OOD method to use for the evaluation.
     """
+    common_kwargs = {
+        'iou_threshold_for_matching': IOU_THRESHOLD,
+        'min_conf_threshold': args.conf_thr
+    }
+    distance_methods_kwargs = {
+        'agg_method': 'mean',
+        'ind_info_creation_option': args.ind_info_creation_option,
+        'enhanced_unk_localization': args.enhanced_unk_localization,
+        'which_internal_activations': args.which_internal_activations,
+    }
+    distance_methods_kwargs.update(common_kwargs)
+
     if args.ood_method == 'MSP':
-        return MSP(per_class=True, per_stride=False, iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
-    elif args.ood_method == 'ODIN':
-        return ODIN()
+        return MSP(per_class=True, per_stride=False, **common_kwargs)
     elif args.ood_method == 'Energy':
-        return Energy(temper=args.temperature, per_class=True, per_stride=False, iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+        return Energy(temper=args.temperature, per_class=True, per_stride=False, **common_kwargs)
     elif args.ood_method == 'L1_cl_stride':
-        return L1DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+        #return L1DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+        return L1DistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'L2_cl_stride':
-        return L2DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+        #return L2DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+        return L2DistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'GAP_L2_cl_stride':
-        return GAPL2DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+        #return GAPL2DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+        return GAPL2DistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'Cosine_cl_stride':
-        return CosineDistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+        #return CosineDistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
+        return CosineDistanceOneClusterPerStride(**distance_methods_kwargs)
     else:
         raise NotImplementedError("Not implemented yet")
 
@@ -115,8 +121,16 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
 def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsMethod, DistanceMethod], model: YOLO, device: str, 
                                                in_loader: InfiniteDataLoader, logger: Logger, args: SimpleArgumentParser):
     """
-    Function that loads or generates the thresholds for the OOD evaluation. The thresholds are
-        stored in the OODMethod object.
+    Execute the pipeline for the OOD evaluation. This includes the following steps:
+    1. Extract activations from the in-distribution data
+    2. Generate clusters (Only for distance methods)
+    3. Compute scores
+    4. Generate thresholds
+    5. Save thresholds
+    
+    We can select to skip some of the steps by loading the activations, clusters or thresholds from disk.
+
+    The generated thresholds (and clusters) are stored in the OODMethod object.
     """
     logger.info("Obtaining thresholds...")
     logger.flush()

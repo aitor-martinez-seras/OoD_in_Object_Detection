@@ -42,7 +42,7 @@ class BaseModel(nn.Module):
         """
         if isinstance(x, dict):  # for cases of training and validating while training.
             return self.loss(x, *args, **kwargs)
-        if hasattr(self, 'modo'):
+        if hasattr(self, 'extraction_mode'):
             x, output_extra = self.predict(x, *args, **kwargs)
             return x, output_extra
         else:
@@ -66,7 +66,7 @@ class BaseModel(nn.Module):
             return self._predict_augment(x)
         
         # To enable training mode and ood evaluation
-        if hasattr(self, 'modo'):
+        if hasattr(self, 'extraction_mode'):
             x, output_extra = self._predict_once(x, profile, visualize)
             return x, output_extra
         else:
@@ -97,17 +97,18 @@ class BaseModel(nn.Module):
             x = m(x)  # run
             y.append(x if m.i in self.save else None)  # save output
 
-            if hasattr(self, 'modo'):
-                if self.modo in ['conv', 'all_ftmaps']:
+            # Extract the feature maps of the model
+            if hasattr(self, 'which_layers_to_extract'):
+                if self.which_layers_to_extract == 'convolutional_layers':
                     if m.i in [15, 18, 21]:
                         output_extra.append(deepcopy(x))
 
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
 
-        # En el modo logits, nos quedamos con lo ultimo que sale
-        if hasattr(self, 'modo'):
-            if self.modo == 'logits':
+        # In logit extraction mode, we return the output of the last layer
+        if hasattr(self, 'which_layers_to_extract'):
+            if self.which_layers_to_extract == 'logits':
                 output_extra = deepcopy(x)
     
             return x, output_extra
