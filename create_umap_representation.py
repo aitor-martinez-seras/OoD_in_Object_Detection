@@ -157,7 +157,7 @@ def main():
     model_folder_path = ROOT / args.model_folder
     model = YOLO(model=model_folder_path / 'weights' / 'best.pt')
     # Modify internal attributes of the model to obtain the desired outputs in the extra_item
-    model.model.modo = 'all_ftmaps'
+    model.model.extraction_mode = 'all_ftmaps'
     print('Model loaded!')
     
     # Dataset selection
