@@ -10,6 +10,7 @@ from tap import Tap
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from torch import Tensor
 
 import log
 from ultralytics import YOLO
@@ -20,8 +21,8 @@ from ultralytics.yolo.data.build import InfiniteDataLoader
 
 from ood_utils import get_measures, configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, \
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride
-
 from data_utils import read_json, write_json, load_dataset_and_dataloader
+from unknown_localization_utils import ftmap_minus_mean_of_ftmaps_then_abs_sum, recursive_otsu
 from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, IOU_THRESHOLD, OOD_METHOD_CHOICES, CONF_THRS_FOR_BENCHMARK
 
 
@@ -95,6 +96,8 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
         'ind_info_creation_option': args.ind_info_creation_option,
         'enhanced_unk_localization': args.enhanced_unk_localization,
         'which_internal_activations': args.which_internal_activations,
+        'saliency_map_computation_function': ftmap_minus_mean_of_ftmaps_then_abs_sum,
+        'thresholds_out_of_saliency_map_function': recursive_otsu,
     }
     distance_methods_kwargs.update(common_kwargs)
 

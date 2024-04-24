@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from pathlib import Path
 from logging import Logger
-import json 
+import json
+import inspect
 
 import numpy as np
 # import sklearn.metrics as sk
@@ -19,10 +20,14 @@ from ultralytics.yolo.engine.results import Results
 from ultralytics.yolo.v8.detect.predict import extract_roi_aligned_features_from_correct_stride
 from visualization_utils import plot_results
 from datasets_utils.owod.owod_evaluation_protocol import compute_metrics
+from unknown_localization_utils import extract_bboxes_from_saliency_map_and_thresholds
 from constants import IND_INFO_CREATION_OPTIONS, AVAILABLE_CLUSTERING_METHODS, \
     AVAILABLE_CLUSTER_OPTIMIZATION_METRICS, INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS, \
     FTMAPS_RELATED_OPTIONS, LOGITS_RELATED_OPTIONS, OOD_METHOD_CHOICES, TARGETS_RELATED_OPTIONS
 
+
+# FUNCIONES QUE VAMOS A TENER QUE ELIMINAR
+################################################################################################
 
 # Funciones para asignar peso a los feature maps
 def weighted_variance(saliency_maps):
@@ -63,27 +68,7 @@ def entropy(saliency_maps):
     entropy = -np.sum(normalized_maps * np.log2(normalized_maps + 1e-9), axis=(1, 2))  # Avoid log(0)
     return entropy
 
-import numpy as np
-import matplotlib.pyplot as plt
-from skimage import filters, measure, io
-from skimage.color import rgb2gray
-from skimage.transform import resize
-import matplotlib.patches as patches
-# Function to apply recursive Otsu thresholding
-def recursive_otsu(image, num_classes, current_depth=1, thresholds=None):
-    if thresholds is None:
-        thresholds = []
 
-    if current_depth < num_classes - 1:
-        thresh = filters.threshold_otsu(image)
-        thresholds.append(thresh)
-        lower_region = image[image <= thresh]
-        upper_region = image[image > thresh]
-
-        recursive_otsu(lower_region, num_classes, current_depth + 1, thresholds)
-        recursive_otsu(upper_region, num_classes, current_depth + 1, thresholds)
-
-    return sorted(set(thresholds))
 
 def multi_threshold_otsu(image, num_classes):
     # Multi-level Otsu's Thresholding
@@ -177,7 +162,7 @@ def basic_plots_for_one_set_of_thrs(saliency_map, thresholds, folder_path, origi
     plt.tight_layout()
     plt.savefig(folder_path / f"bboxes_on_original_separated_{method_name}.pdf")
     plt.close()
-    
+
 
 def generate_image_with_bboxes(saliency_map, folder_path, original_image, padding, option, ftmaps=None, ood_method=None):
 
@@ -345,6 +330,9 @@ def generate_image_with_bboxes(saliency_map, folder_path, original_image, paddin
     else:
         raise ValueError("Option not recognized")
 
+################################################################################################
+# FINAL DE FUNCIONES QUE VAMOS A TENER QUE ELIMINAR
+
 
 #@dataclass(slots=True)
 class OODMethod(ABC):
@@ -374,9 +362,14 @@ class OODMethod(ABC):
     min_conf_threshold: float
     which_internal_activations: str  # Where to extract internal activations from
     enhanced_unk_localization: bool  # If True, the method will try to enhance the localization of the UNK objects by adding new boxes
+    compute_saliency_map_one_stride: Callable  # Function to compute the saliency map of one stride
+    compute_thresholds_out_of_saliency_map: Callable  # Function to compute the thresholds out of the saliency map
+    extract_bboxes_from_saliency_map_and_thresholds: Callable  # Function to extract the bboxes from the saliency map and the thresholds
 
     def __init__(self, name: str, distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float,
-                 min_conf_threshold: float, which_internal_activations: str, enhanced_unk_localization: bool = False):
+                 min_conf_threshold: float, which_internal_activations: str, enhanced_unk_localization: bool = False,
+                 saliency_map_computation_function: Callable = None, thresholds_out_of_saliency_map_function: Callable = None
+        ):
         self.name = name
         self.distance_method = distance_method
         self.per_class = per_class
@@ -386,11 +379,42 @@ class OODMethod(ABC):
         self.thresholds = None  # This will be computed later
         self.which_internal_activations = self.validate_internal_activations_option(which_internal_activations)
         self.enhanced_unk_localization = enhanced_unk_localization
+        if enhanced_unk_localization:
+            self.compute_saliency_map_one_stride = self.validate_saliency_map_computation_function(saliency_map_computation_function)
+            self.compute_thresholds_out_of_saliency_map = self.validate_thresholds_out_of_saliency_map_function(thresholds_out_of_saliency_map_function)
+            self.extract_bboxes_from_saliency_map_and_thresholds = extract_bboxes_from_saliency_map_and_thresholds
 
-    def validate_internal_activations_option(self, selected_option: str):
+    @staticmethod
+    def validate_internal_activations_option(selected_option: str):
         assert selected_option in INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS, f"Invalid option selected ({selected_option}) for " \
          f"internal activations extraction. Options are: {INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS}"
         return selected_option
+    
+    @staticmethod
+    def validate_saliency_map_computation_function(passed_function: Callable) -> Callable:
+        # Check that the function passed is a valid function
+        assert callable(passed_function), "The passed function is not a callable"
+        # Check if the function accepts only one argument
+        assert len(passed_function.__code__.co_varnames) == 1, "The passed function must accept only one argument"
+        # Check if the signature accepts a Tensor
+        sig = inspect.signature(passed_function)
+        params = sig.parameters
+        assert params[list(params.keys())[0]].annotation == Tensor, "The passed function must accept a Tensor as input"
+        # Check if the function returns a Tensor
+        assert passed_function(torch.zeros(100, 80, 80)).shape == (80, 80), "The passed function must convert (C, H, W) to (H, W)"
+        return passed_function
+    
+    @staticmethod
+    def validate_thresholds_out_of_saliency_map_function(passed_function: Callable) -> Callable:
+        # Check that the function passed is a valid function
+        assert callable(passed_function), "The passed function is not a callable"
+        # Check if the signatures first argument accepts a Tensor
+        sig = inspect.signature(passed_function)
+        params = sig.parameters
+        assert params[list(params.keys())[0]].annotation == Tensor, "The passed function first argument must be the saliency map and accept a Tensor as input"
+        # Check if the function returns a List
+        assert isinstance(passed_function(torch.onez(80, 80)), list), "The passed function must return a list with the thresholds"
+        return passed_function
 
     @abstractmethod
     def extract_internal_activations(self, results: Results, all_activations: Union[List[float], List[List[np.ndarray]]], targets: Dict[str, Tensor]):
@@ -1339,7 +1363,7 @@ class OODMethod(ABC):
 
                 ### Añadir posibles cajas desconocidas a las predicciones ###
                 if self.enhanced_unk_localization:
-                    possible_unk_bboxes, ood_decision_on_unknown = self.compute_extra_possible_unkwnown_bboxes(results, logger)
+                    possible_unk_bboxes, ood_decision_on_unknown = self.compute_extra_possible_unkwnown_bboxes(results, data)
             
                 plot_results( 
                     class_names=model.names,
@@ -1509,17 +1533,58 @@ class OODMethod(ABC):
         
         return thresholds
     
-    def compute_extra_possible_unkwnown_bboxes(self, feature_maps: Union[Results, Tensor, np.ndarray], logger: Logger) -> Tuple[List[Tensor], List[int]]:
+    ### Uknown localization methods ###
+    
+    def compute_extra_possible_unkwnown_bboxes(self, results_per_image: List[Results], data: Dict) -> Tuple[List[Tensor], List[int]]:
         """
         Compute the possible unknown bounding boxes using the feature maps of the model.
         """
-        if isinstance(feature_maps, Results):
-            pass
-        elif isinstance(feature_maps, Tensor):
-            pass
-        elif isinstance(feature_maps, np.ndarray):
-            pass
+        for img_idx, res in enumerate(results_per_image):
+        
+            ratio_pad = np.array(data['ratio_pad'][img_idx][1], dtype=float)  # Take the padding
+            possible_unk_boxes = self.compute_unknonwn_boxes_for_one_image(res.extra_item, ratio_pad)
+            
 
+    
+    def compute_unknonwn_boxes_for_one_image(self, feature_maps_per_stride: List[Tensor], ratio_pad: np.ndarray) -> Tuple[Tensor, int]:
+        
+        # The strides of the feature maps. The first one is the one with the highest resolution
+        # and the last one is the one with the lowest resolution. The ratio represents the shrink
+        # of the feature maps with respect to the original image in that stride
+        strides_ratio = [8, 16, 32]
+
+        ### 1. Select the feature maps to use and remove padding from LetterBox augmentation
+        # We use the first stride, the one with the highest resolution as it is the most detailed one
+        # and therefore presumably better suited for the localization
+        selected_stride = 0  
+        ftmaps = feature_maps_per_stride[selected_stride]
+        ratio_pad_for_ftmaps = ratio_pad / strides_ratio[selected_stride]
+        x_padding = int(ratio_pad_for_ftmaps[0])  # The padding in the x dimension is the first element
+        y_padding = int(ratio_pad_for_ftmaps[1])  # The padding in the y dimension is the second element
+        ftmap_height, ftmap_width = ftmaps.shape[1], ftmaps.shape[2]
+        ftmaps = ftmaps[:, y_padding:ftmap_height-y_padding, x_padding:ftmap_width-x_padding]
+
+        ### 2. Compute a saliency map out of the feature maps
+        # It is a way of summarizing the info of the feature maps into a single image
+        saliency_map = self.compute_saliency_map_one_stride(ftmaps)
+
+        ### 3. Compute the thresholds for the saliency map
+        thresholds = self.compute_thresholds_out_of_saliency_map(saliency_map)
+
+        ### 4. Extract the bounding boxes from the saliency map using the thresholds
+        possible_unk_boxes_per_thr = self.extract_bboxes_from_saliency_map_and_thresholds(saliency_map, thresholds)
+        
+        ### 5. Postprocess the bounding boxes
+        possible_unk_boxes = self.postprocess_unk_bboxes(possible_unk_boxes_per_thr, padding=(y_padding, x_padding))
+
+        return possible_unk_boxes
+
+    def postprocess_unk_bboxes(self, possible_unk_boxes: List[Tensor], padding) -> Tensor:
+        """
+        Postprocess the possible unknown bounding boxes.
+        """
+        
+        pass        
         
 
 #################################################################################
