@@ -66,7 +66,8 @@ def extract_roi_aligned_features_from_correct_stride(
                 input=ftmap,
                 boxes=relevant_boxes,
                 output_size=(1, 1),  # Example fixed output size
-                spatial_scale=ftmap.shape[-1] / img_shape[1]  # Width ratio
+                spatial_scale=ftmap.shape[-1] / img_shape[1],  # Width ratio
+                aligned=False
             )
 
         # Distribute features back to corresponding images and positions
