@@ -6,8 +6,6 @@ PRUEBAS_ROOT_PATH = ROOT / 'pruebas'
 RESULTS_PATH = ROOT / 'results'
 
 # OOD Related
-IOU_THRESHOLD = 0.5
-
 OOD_METHOD_CHOICES = ['MSP', 'ODIN', 'Energy', 'Mahalanobis', 'GradNorm','RankFeat','React', 'L1_cl_stride', 'L2_cl_stride', \
                       'GAP_L2_cl_stride', 'Cosine_cl_stride']
 
@@ -32,3 +30,14 @@ IND_INFO_CREATION_OPTIONS = TARGETS_RELATED_OPTIONS + PREDICTIONS_RELATED_OPTION
 
 # Benchmarks
 CONF_THRS_FOR_BENCHMARK = [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001]
+
+### Hyperparameters ###
+
+# For YOLO
+IOU_THRESHOLD = 0.5
+STRIDES_RATIO = [8, 16, 32]  # The ratio between each level of the FPN and the original image size ((orig_img_size / feature_map_size) = ratio)
+
+# For Unknown Localization Enhancement
+MAX_IOU_WITH_PREDS = 0.5  # The maximum IOU between an UNK proposal bbox and a predicted bbox. If over the threshold, the UNK proposal is discarded
+MIN_BOX_SIZE = 3  # The minimum size of a box in the feature map space
+MAX_BOX_SIZE_PERCENT = 0.9  # The percentage of the feature map size that a box can take

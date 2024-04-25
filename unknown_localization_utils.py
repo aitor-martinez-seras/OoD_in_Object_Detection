@@ -9,16 +9,16 @@ from skimage.transform import resize
 import matplotlib.patches as patches
 from torch import Tensor
 
-def extract_bboxes_from_saliency_map_and_thresholds(saliency_map: np.ndarray, thresholds: List[float]) -> List[np.ndarray]:
+def extract_bboxes_from_saliency_map_and_thresholds(saliency_map: np.ndarray, thresholds: List[float]) -> List[Tensor]:
     """
     Extract bounding boxes from a saliency map using a list of thresholds to binarize the saliency map.
     Parameters:
         saliency_map: Tensor with shape (height, width). The saliency map to extract the bounding boxes.
         thresholds: List of float. The thresholds to binarize the saliency map.
     Returns:
-        List of np.ndarray. Each position of the list are the thresholds obtained by each threshold. 
-            Each element is a bounding box with shape (4,). The bounding box is represented as [minr, minc, maxr, maxc], 
-            which corresponds to [y_min, x_min, y_max, x_max]. 
+        List of Tensor. Each position of the list are the bounding boxes obtained by each threshold. 
+            Each Tensor is of shape (N_thr, 4). Where N_thr is the number of bounding boxes obtained by the threshold.
+            The bounding box is represented as [minr, minc, maxr, maxc], which corresponds to [y_min, x_min, y_max, x_max]. 
     """
     boxes_per_thr = []
     for i, thresh in enumerate(thresholds):
@@ -31,7 +31,7 @@ def extract_bboxes_from_saliency_map_and_thresholds(saliency_map: np.ndarray, th
             x_min, y_min, x_max, y_max = minc, minr, maxc, maxr
             boxes_one_thr.append([x_min, y_min, x_max, y_max])
         # Convert to numpy array and append to the list per threshold
-        boxes_per_thr.append(np.array(boxes_one_thr))
+        boxes_per_thr.append(torch.tensor(boxes_one_thr))
     return boxes_per_thr
 
 def ftmap_minus_mean_of_ftmaps_then_abs_sum(ftmaps: np.ndarray) -> np.ndarray:

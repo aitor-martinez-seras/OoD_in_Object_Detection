@@ -12,6 +12,7 @@ from sklearn.metrics import pairwise_distances
 import torch
 from torch import Tensor
 import torchvision.ops as t_ops
+from torchvision.ops import box_iou
 from scipy.optimize import linear_sum_assignment
 
 from ultralytics import YOLO
@@ -23,7 +24,7 @@ from datasets_utils.owod.owod_evaluation_protocol import compute_metrics
 from unknown_localization_utils import extract_bboxes_from_saliency_map_and_thresholds
 from constants import IND_INFO_CREATION_OPTIONS, AVAILABLE_CLUSTERING_METHODS, \
     AVAILABLE_CLUSTER_OPTIMIZATION_METRICS, INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS, \
-    FTMAPS_RELATED_OPTIONS, LOGITS_RELATED_OPTIONS, OOD_METHOD_CHOICES, TARGETS_RELATED_OPTIONS
+    FTMAPS_RELATED_OPTIONS, LOGITS_RELATED_OPTIONS, STRIDES_RATIO
 
 
 # FUNCIONES QUE VAMOS A TENER QUE ELIMINAR
@@ -364,7 +365,7 @@ class OODMethod(ABC):
     enhanced_unk_localization: bool  # If True, the method will try to enhance the localization of the UNK objects by adding new boxes
     compute_saliency_map_one_stride: Callable  # Function to compute the saliency map of one stride
     compute_thresholds_out_of_saliency_map: Callable  # Function to compute the thresholds out of the saliency map
-    extract_bboxes_from_saliency_map_and_thresholds: Callable  # Function to extract the bboxes from the saliency map and the thresholds
+    #extract_bboxes_from_saliency_map_and_thresholds: Callable  # Function to extract the bboxes from the saliency map and the thresholds
 
     def __init__(self, name: str, distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float,
                  min_conf_threshold: float, which_internal_activations: str, enhanced_unk_localization: bool = False,
@@ -382,7 +383,7 @@ class OODMethod(ABC):
         if enhanced_unk_localization:
             self.compute_saliency_map_one_stride = self.validate_saliency_map_computation_function(saliency_map_computation_function)
             self.compute_thresholds_out_of_saliency_map = self.validate_thresholds_out_of_saliency_map_function(thresholds_out_of_saliency_map_function)
-            self.extract_bboxes_from_saliency_map_and_thresholds = extract_bboxes_from_saliency_map_and_thresholds
+            #self.extract_bboxes_from_saliency_map_and_thresholds = extract_bboxes_from_saliency_map_and_thresholds
 
     @staticmethod
     def validate_internal_activations_option(selected_option: str):
@@ -1363,10 +1364,13 @@ class OODMethod(ABC):
 
                 ### Añadir posibles cajas desconocidas a las predicciones ###
                 if self.enhanced_unk_localization:
-                    possible_unk_bboxes, ood_decision_on_unknown = self.compute_extra_possible_unkwnown_bboxes(results, data, imgs)
-            
+                    possible_unk_bboxes, ood_decision_on_unknown = self.compute_extra_possible_unkwnown_bboxes_and_decision(results, data, imgs)
+                    
+                class_names = {k:v for k, v in model.names.items() if k < 20}
+                class_names.update({80: 'unknown'})
                 plot_results( 
-                    class_names=model.names,
+                    #class_names=model.names,
+                    class_names=class_names,
                     results=results,
                     folder_path=folder_path,
                     now=now,
@@ -1414,7 +1418,7 @@ class OODMethod(ABC):
 
             ### Añadir posibles cajas desconocidas a las predicciones ###
             if self.enhanced_unk_localization:
-                possible_unk_bboxes, ood_decision_on_possible_unk = self.compute_extra_possible_unkwnown_bboxes(results, data)
+                possible_unk_bboxes, ood_decision_on_possible_unk = self.compute_extra_possible_unkwnown_bboxes_and_decision(results, data)
 
             # Cada prediccion va a ser un diccionario con las siguientes claves:
             #   'img_idx': int -> Indice de la imagen
@@ -1535,24 +1539,30 @@ class OODMethod(ABC):
     
     ### Uknown localization methods ###
     
-    def compute_extra_possible_unkwnown_bboxes_and_decision(self, results_per_image: List[Results], data: Dict, img=None) -> Tuple[List[Tensor], List[np.ndarray]]:
+    def compute_extra_possible_unkwnown_bboxes_and_decision(self, results_per_image: List[Results], data: Dict, img_batch=None) -> Tuple[List[Tensor], List[np.ndarray]]:
         """
         Compute the possible unknown bounding boxes using the feature maps of the model.
         """
         assert self.which_internal_activations == 'ftmaps_and_strides', "The method needs the full feature maps and strides to compute the possible unknown bounding boxes"
         
         # Select the stride to use for the unknown localization enhancement
-        selected_stride = 0  # The stride with the highest resolution
-        
+        # We use the stride with the highest resolution, the first one (stride 8)
+        selected_stride = 0  # Stride 8
+        stride_ratio = STRIDES_RATIO[selected_stride]
+
         # Loop over images
         possible_unk_boxes_per_image = []
+        ood_decision_on_unk_boxes_per_image = []
         for img_idx, res in enumerate(results_per_image):
             
             #### Compute new possible unknown bounding boxes by binarizing the feature maps ####
             ### 1. Select the stride and remove padding from the feature maps
             ratio_pad = np.array(data['ratio_pad'][img_idx][1], dtype=float)  # Take the padding
             ftmaps, _ = res.extra_item
-            ftmaps_of_selected_stride, padding_x_y = self.select_stride_and_remove_padding_of_ftmaps(ftmaps, selected_stride, ratio_pad)
+            # Compute the padding in the feature map space
+            ratio_pad_for_ftmaps = ratio_pad / stride_ratio
+            # Get the feature map of the selected stride and unpad it
+            ftmaps_of_selected_stride, padding_x_y = self.select_stride_and_remove_padding_of_ftmaps(ftmaps, selected_stride, ratio_pad_for_ftmaps)
             ftmaps_height, ftmaps_width = ftmaps_of_selected_stride.shape[1], ftmaps_of_selected_stride.shape[2]
 
             ### 2. Compute the saliency map out of the selected feature maps
@@ -1562,60 +1572,122 @@ class OODMethod(ABC):
             thresholds = self.compute_thresholds_out_of_saliency_map(saliency_map)
 
             ### 4. Extract the bounding boxes from the saliency map using the thresholds
-            possible_unk_boxes_per_thr = self.extract_bboxes_from_saliency_map_and_thresholds(saliency_map, thresholds)
+            possible_unk_boxes_per_thr = extract_bboxes_from_saliency_map_and_thresholds(saliency_map, thresholds)
 
             ### 5. Postprocess the bounding boxes
-            possible_unk_boxes = self.postprocess_unk_bboxes(possible_unk_boxes_per_thr, padding_x_y, ftmaps_shape=(ftmaps_height, ftmaps_width))
+            # First unpad the bounding boxes and then convert them to the size of the feature maps
+            unpaded_bbox_preds = res.boxes.xyxy.to('cpu')
+            x_pad_orig, y_pad_orig = ratio_pad.astype(int)
+            unpaded_bbox_preds[:, 0] = unpaded_bbox_preds[:, 0] - x_pad_orig
+            unpaded_bbox_preds[:, 1] = unpaded_bbox_preds[:, 1] - y_pad_orig
+            unpaded_bbox_preds[:, 2] = unpaded_bbox_preds[:, 2] - x_pad_orig
+            unpaded_bbox_preds[:, 3] = unpaded_bbox_preds[:, 3] - y_pad_orig
+            bbox_preds_in_ftmap_size = unpaded_bbox_preds / STRIDES_RATIO[selected_stride]  # The bounding boxes are in the original image size
+            possible_unk_boxes = self.postprocess_unk_bboxes(possible_unk_boxes_per_thr, padding_x_y, ftmaps_shape=(ftmaps_height, ftmaps_width), bbox_preds=bbox_preds_in_ftmap_size)
 
             ### 6. Decide wheter the unknown boxes are OoD or not
             ood_decision_on_unk_boxes = self.compute_ood_decision_on_possible_unk_boxes(possible_unk_boxes, ftmaps_of_selected_stride)
 
-            # Append the possible unknown bounding boxes
+            # Append the possible unknown bounding boxes and the decision to diferent lists
             possible_unk_boxes_per_image.append(possible_unk_boxes)
+            ood_decision_on_unk_boxes_per_image.append(ood_decision_on_unk_boxes)
 
-            # Plot the original image with the boxes (use draw_bounding_boxes from torch)
+            # # Plot the original image with the boxes (use draw_bounding_boxes from torch)
             # import matplotlib.pyplot as plt
             # from torchvision.utils import draw_bounding_boxes
-            # im = draw_bounding_boxes(image=img[img_idx],boxes=possible_unk_boxes*8)
+            # im = draw_bounding_boxes(image=img_batch[img_idx],boxes=possible_unk_boxes*8)
             # plt.imshow(im.permute(1, 2, 0).cpu().numpy())
             # plt.savefig('aaaaa.png')
             # plt.close()
 
-        return possible_unk_boxes_per_image
+            # # CODE TO DEMONSTRATE THAT THE UNPAD IS MADE CORRECTLY
+            # # UNPAD ORIGINAL IMAGE
+            # # Unpad the original image
+            # img = img_batch[img_idx]
+            # x_pad, y_pad = ratio_pad.astype(int)
+            # img = img[:, y_pad:img.shape[1]-y_pad, x_pad:img.shape[2]-x_pad]
+            # unpaded_bbox_preds = res.boxes.xyxy.to('cpu')
+            # unpaded_bbox_preds[:, 0] = unpaded_bbox_preds[:, 0] - x_pad
+            # unpaded_bbox_preds[:, 1] = unpaded_bbox_preds[:, 1] - y_pad
+            # unpaded_bbox_preds[:, 2] = unpaded_bbox_preds[:, 2] - x_pad
+            # unpaded_bbox_preds[:, 3] = unpaded_bbox_preds[:, 3] - y_pad
+            # im = draw_bounding_boxes(image=img, boxes=unpaded_bbox_preds)
+            # plt.imshow(img.permute(1, 2, 0).cpu().numpy())
+            # plt.savefig('BBB.png')
+            # plt.close()
+
+            # # Plot the saliency map with the boxes
+            # STRIDES_RATIO = [8, 16, 32]
+            # unpaded_bbox_preds = res.boxes.xyxy.to('cpu')
+            # x_pad_orig, y_pad_orig = ratio_pad.astype(int)
+            # unpaded_bbox_preds[:, 0] = unpaded_bbox_preds[:, 0] - x_pad_orig
+            # unpaded_bbox_preds[:, 1] = unpaded_bbox_preds[:, 1] - y_pad_orig
+            # unpaded_bbox_preds[:, 2] = unpaded_bbox_preds[:, 2] - x_pad_orig
+            # unpaded_bbox_preds[:, 3] = unpaded_bbox_preds[:, 3] - y_pad_orig
+            # bbox_preds_in_ftmap_size = unpaded_bbox_preds / STRIDES_RATIO[selected_stride]  # The bounding boxes are in the original image size
+            # # Convert saliency map to  [0, 255] in uint8
+            # saliency_map_uint8 = (saliency_map - saliency_map.min()) / (saliency_map.max() - saliency_map.min()) * 255
+            # saliency_map_uint8 = torch.from_numpy(saliency_map_uint8.astype(np.uint8)).unsqueeze(0)
+            # saliency_map_with_boxes = draw_bounding_boxes(
+            #     image=saliency_map_uint8, boxes=bbox_preds_in_ftmap_size)
+            # plt.imshow(saliency_map_with_boxes.permute(1,2,0).numpy())
+            # plt.savefig('A_saliency_map_boxes.png')
+            # plt.close()
+
+        return possible_unk_boxes_per_image, ood_decision_on_unk_boxes_per_image
     
-    def select_stride_and_remove_padding_of_ftmaps(self, ftmaps: List[Tensor], selected_stride: int, ratio_pad: np.ndarray) -> Tuple[Tensor, Tuple[int]]:
+    def select_stride_and_remove_padding_of_ftmaps(self, ftmaps: List[Tensor], selected_stride: int, ratio_pad_for_ftmaps: np.ndarray) -> Tuple[Tensor, Tuple[int]]:
         """
         Select the feature maps of the selected stride and remove the padding from the feature maps.
         """
-        # The strides of the feature maps. The first one is the one with the highest resolution
-        # and the last one is the one with the lowest resolution. The ratio represents the shrink
-        # of the feature maps with respect to the original image in that stride
-        strides_ratio = [8, 16, 32]
         # Select the feature maps of the selected stride
         ftmaps = ftmaps[selected_stride]
-        # Remove padding from the feature maps
-        ratio_pad_for_ftmaps = ratio_pad / strides_ratio[selected_stride]
         x_padding = int(ratio_pad_for_ftmaps[0])  # The padding in the x dimension is the first element
         y_padding = int(ratio_pad_for_ftmaps[1])  # The padding in the y dimension is the second element
         ftmap_height, ftmap_width = ftmaps.shape[1], ftmaps.shape[2] 
         return ftmaps[:, y_padding:ftmap_height-y_padding, x_padding:ftmap_width-x_padding], (x_padding, y_padding)
 
-    def compute_ood_decision_on_possible_unk_boxes(self, possible_unk_boxes: Tensor, ftmaps_of_selected_stride: Tensor) -> np.ndarray:
-        pass
+    def compute_ood_decision_on_possible_unk_boxes(self, possible_unk_boxes_one_img: Tensor, ftmaps_of_selected_stride: Tensor) -> np.ndarray:
+        """
+        Compute the OoD decision for the possible unknown bounding boxes.
+        """
+        from torchvision.ops import roi_align
+        # Extract the RoI Aligned feature maps of the possible unknown bounding boxes
+        roi_aligned_features = roi_align(
+            input=ftmaps_of_selected_stride.unsqueeze(0),
+            boxes=[possible_unk_boxes_one_img.to(ftmaps_of_selected_stride.device)],
+            output_size=(1,1),
+            spatial_scale = 1.0,
+            aligned=False,
+        )
+
+        # As theese boxes are not asociated with a prediction, we can't known which predicted class they are. 
+        ood_decision = self.compute_ood_decision_on_roi_aligned_unk_boxes(roi_aligned_features)
+
+        return ood_decision
+
+    def compute_ood_decision_on_roi_aligned_unk_boxes(self, roi_aligned_features: Tensor) -> np.ndarray:
+        """
+        Compute the OoD decision for the RoI Aligned feature maps of the possible unknown bounding boxes.
+        """
+        # TODO: Por el momento dejo que todos sean UNK. Igual esta funcion la tengo que pasar
+        #   como parametro tal y como lo hago con las que computan el mapa de saliencia o los thresholds
+        return np.zeros(roi_aligned_features.shape[0], dtype=int)
+        
+
             
     # def compute_unknonwn_boxes_for_one_image(self, ftmaps_one_stride: Tensor, ratio_pad: np.ndarray) -> Tensor:
         
     #     # # The strides of the feature maps. The first one is the one with the highest resolution
     #     # # and the last one is the one with the lowest resolution. The ratio represents the shrink
     #     # # of the feature maps with respect to the original image in that stride
-    #     # strides_ratio = [8, 16, 32]
 
     #     # ### 1. Select the feature maps to use and remove padding from LetterBox augmentation
     #     # # We use the first stride, the one with the highest resolution as it is the most detailed one
     #     # # and therefore presumably better suited for the localization
     #     # selected_stride = 0  
     #     # ftmaps = feature_maps_per_stride[selected_stride]
-    #     # ratio_pad_for_ftmaps = ratio_pad / strides_ratio[selected_stride]
+    #     # ratio_pad_for_ftmaps = ratio_pad / STRIDES_RATIO[selected_stride]
     #     # x_padding = int(ratio_pad_for_ftmaps[0])  # The padding in the x dimension is the first element
     #     # y_padding = int(ratio_pad_for_ftmaps[1])  # The padding in the y dimension is the second element
     #     # ftmap_height, ftmap_width = ftmaps.shape[1], ftmaps.shape[2]
@@ -1639,7 +1711,8 @@ class OODMethod(ABC):
 
     #     return possible_unk_boxes
 
-    def postprocess_unk_bboxes(self, possible_unk_boxes_per_thr: List[np.ndarray], padding: Tuple[int], ftmaps_shape: Tuple[int]) -> Tensor:
+    def postprocess_unk_bboxes(self, possible_unk_boxes_per_thr: List[np.ndarray], padding: Tuple[int],
+                               ftmaps_shape: Tuple[int], bbox_preds_in_ftmap_size: Tensor) -> Tensor:
         """
         Postprocess the possible unknown bounding boxes.
         Parameters:
@@ -1648,13 +1721,20 @@ class OODMethod(ABC):
                 x1, y1, x2, y2.
             padding: Tuple[int] -> The padding used to remove the LetterBox padding from the feature maps.
                 The first element is the padding in the x dimension and the second element is the padding in the y dimension.
+            ftmaps_shape: Tuple[int] -> The shape of the feature maps (height, width).
+            bbox_preds_in_ftmap_size: Tensor -> The bounding boxes in the size of the feature maps.
+        Returns:
+            possible_unk_boxes: Tensor -> The possible unknown bounding boxes. The shape is (num_boxes, 4)
         """
         all_boxes = []
+        # TODO: Add this to constants.py
         # For small boxes removal
         min_box_size = 3
         # For big boxes removal
         ftmap_height, ftmap_width = ftmaps_shape
         max_box_size_percent = 0.9  # The percentage of the feature map size that a box can take
+        # IoU threshold for preds
+        iou_thr = 0.5
         for idx_thr, bboxes in enumerate(possible_unk_boxes_per_thr):
             # Remove the boxes from the first stride?
             # if idx_thr == 0:
@@ -1670,11 +1750,18 @@ class OODMethod(ABC):
             mask_big_boxes = (w < int(max_box_size_percent * ftmap_width)) & (h < int(max_box_size_percent * ftmap_height))
             mask = mask_small_boxes & mask_big_boxes
             bboxes = bboxes[mask]
+            # Remove boxes with IoU > iou_thr with the predictions
+            if len(bboxes) > 0:
+                # Compute the IoU with the predictions
+                ious = box_iou(bboxes, bbox_preds_in_ftmap_size)
+                # Remove the boxes with IoU > iou_thr
+                mask = ious.max(dim=1).values < iou_thr
+                bboxes = bboxes[mask]
             # Append the boxes
             all_boxes.append(torch.from_numpy(bboxes))
 
         # Return a tensor with shape (num_boxes, 4)
-        return torch.cat(all_boxes, dim=0)
+        return torch.cat(all_boxes, dim=0).float()
 
 
         
