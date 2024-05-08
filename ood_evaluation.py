@@ -29,13 +29,16 @@ from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, IOU_T
 NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 class SimpleArgumentParser(Tap):
-    
+    # MAIN OPTION TO SELECT
+    visualize_oods: bool = False  # visualize the OoD detection
+    compute_metrics: bool = False  # compute the metrics
+    # Model options
     device: int  # Device to use for training on GPU. Indicate more than one to use multiple GPUs. Use -1 for CPU.
     model: Literal["n", "s", "m", "l", "x"]  # Which variant of the model YOLO to use
     model_path: str = ''  # Relative path to the model you want to use as a starting point. Deactivates using sizes.
     workers: int = 2  # Number of background threads used to load data.
     batch_size: int = 16  # Batch size.
-    
+    # Save options
     logdir: str = 'logs'  # Where to log test info (small).
     name: str = 'prueba'  # Name of this run. Used for monitoring and checkpointing
     # Benchmarks
@@ -58,8 +61,6 @@ class SimpleArgumentParser(Tap):
     # ODIN and Energy
     temperature: int = 1000
     epsilon_odin: float = 0.0
-    visualize_oods: bool = False  # visualize the OoD detection
-    compute_metrics: bool = False  # compute the metrics
     load_ind_activations: bool = False  # load in-distribution scores from disk
     load_clusters: bool = False  # load clusters from disk
     load_thresholds: bool = False  # load thresholds from disk
