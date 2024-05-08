@@ -14,7 +14,9 @@ runs_OAK/
 runs*
 nohup.out
 /*.png
-
+/*.jpg
+al_expl_imgs
+explainability_images
 
 # C extensions
 *.so
