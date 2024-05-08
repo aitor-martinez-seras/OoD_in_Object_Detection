@@ -176,18 +176,18 @@ def create_folder(folder_path: Path, now: str, ood_method_name: str = '') -> Pat
 
 def prepare_bboxes_and_labels(
         results: Results, class_names: List[str], ood_decision: Optional[List[int]], targets: Optional[Dict[str, Tensor]],
-        img_idx: int, valid_preds_only: bool, possible_unk_boxes: Optional[List[Tensor]] = None, ood_decision_on_possible_unk_boxes: Optional[List[int]] = None):
+        img_idx: int, valid_preds_only: bool, possible_unk_boxes: Optional[List[Tensor]] = None, ood_decision_on_possible_unk_boxes: Optional[List[List[int]]] = None):
     """Prepare bounding boxes and labels for plotting."""
     if valid_preds_only and hasattr(results, 'valid_preds'):
         # Filter bounding boxes and labels based on valid predictions
-        valid_preds = results.valid_preds[img_idx].cpu()
-        bboxes = results.boxes.xyxy[img_idx].cpu()[valid_preds]
-        labels = results.boxes.cls[img_idx].cpu()[valid_preds]
-        confs = results.boxes.conf[img_idx].cpu()[valid_preds]
+        valid_preds = results.valid_preds.cpu()
+        bboxes = results.boxes.xyxy.cpu()[valid_preds]
+        labels = results.boxes.cls.cpu()[valid_preds]
+        confs = results.boxes.conf.cpu()[valid_preds]
     else:
-        bboxes = results.boxes.xyxy[img_idx].cpu()
-        labels = results.boxes.cls[img_idx].cpu()
-        confs = results.boxes.conf[img_idx].cpu()
+        bboxes = results.boxes.xyxy.cpu()
+        labels = results.boxes.cls.cpu()
+        confs = results.boxes.conf.cpu()
 
     labels_str = [f'{class_names[int(lbl.item())]} - {conf:.2f}' for lbl, conf in zip(labels, confs)]
     colors = ['green'] * len(labels)  # Default color for in-distribution
@@ -204,18 +204,36 @@ def prepare_bboxes_and_labels(
         # Append target bounding boxes and labels
         bboxes = torch.cat((bboxes, targets["bboxes"][img_idx]), dim=0)
         target_labels = targets["cls"][img_idx]
+        # If the target is cls 80, then use the color pink else purple
         labels_str.extend([f'{class_names[int(lbl.item())]} - GT' for lbl in target_labels])
-        colors.extend(['violet'] * len(target_labels))  # Color for ground truth
+        colors.extend(['pink' if lbl == 80 else 'purple' for lbl in target_labels])
 
     if possible_unk_boxes:
         # Append possible unknown bounding boxes and labels
-        for i, boxes in enumerate(possible_unk_boxes):
-            bboxes = torch.cat((bboxes, boxes), dim=0)
-            labels_str.extend([f'UNK PROP'] * len(boxes))
-            colors.extend(['yellow'] * len(boxes))    
+        # Extract the possible unknown boxes and the OoD decision from the list
+        one_img_possible_unk_boxes = possible_unk_boxes[img_idx] 
+        one_img_ood_decision_on_possible_unk_boxes = ood_decision_on_possible_unk_boxes[img_idx] if ood_decision_on_possible_unk_boxes else None
+        # Append the possible unknown boxes to the tensor of boxes
+        bboxes = torch.cat((bboxes, one_img_possible_unk_boxes), dim=0)
+        # If the OoD decision is provided, use the decision for the string and color the possible unknown boxes
+        if one_img_ood_decision_on_possible_unk_boxes:
+                labels_str.extend([f'PROP - UNK' if one_img_ood_decision_on_possible_unk_boxes[_box_idx] == 0 else f'PROP - IN-DIST' for _box_idx in range(len(one_img_possible_unk_boxes))])
+                colors.extend(['yellow' if one_img_ood_decision_on_possible_unk_boxes[_box_idx] == 0 else 'orange' for _box_idx in range(len(one_img_possible_unk_boxes))])
+        else:
+            labels_str.extend([f'PROP'] * len(one_img_possible_unk_boxes))
+            colors.extend(['yellow'] * len(one_img_possible_unk_boxes))   
+
+        # for i, boxes in enumerate(one_img_possible_unk_boxes):
+        #     bboxes = torch.cat((bboxes, boxes), dim=0)
+        #     # If the OoD decision is provided, use the decision for the possible unknown boxes
+        #     if ood_decision_on_possible_unk_boxes:
+        #         labels_str.extend([f'UNK PROP - UNK' if one_img_ood_decision_on_possible_unk_boxes[i] == 0 else f'UNK PROP - IN-DIST' for _ in range(len(boxes))])
+        #         colors.extend(['yellow' if one_img_ood_decision_on_possible_unk_boxes[i] == 0 else 'orange'] * len(boxes))
+        #     else:
+        #         labels_str.extend([f'UNK PROP'] * len(boxes))
+        #         colors.extend(['yellow'] * len(boxes))    
 
     return bboxes, labels_str, colors
-
 
 
 def plot_bounding_boxes(img: Tensor, bboxes: Tensor, labels: List[str], colors: List[str], width: int, font: str, font_size: int, image_path: Path):
@@ -247,7 +265,7 @@ def plot_results(
         ood_method_name: str = '',
         targets: Optional[Dict[str, Tensor]] = None,
         possible_unk_boxes: Optional[List[Tensor]] = None,
-        ood_decision_on_possible_unk_boxes: Optional[List[int]] = None, 
+        ood_decision_on_possible_unk_boxes: Optional[List[List[int]]] = None, 
     ):
     """Main function to plot results."""
     width = 2
@@ -259,6 +277,7 @@ def plot_results(
     output_folder = create_folder(folder_path, now, ood_method_name)
 
     for img_idx, res in enumerate(results):
+
         bboxes, labels_str, colors = prepare_bboxes_and_labels(
             res, class_names, ood_decision, targets, img_idx, valid_preds_only, possible_unk_boxes, ood_decision_on_possible_unk_boxes
         )
