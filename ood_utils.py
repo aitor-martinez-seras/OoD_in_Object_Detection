@@ -1,4 +1,4 @@
-from typing import List, Tuple, Callable, Type, Union, Dict
+from typing import List, Tuple, Callable, Type, Union, Dict, Optional
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -8,8 +8,10 @@ import inspect
 
 import numpy as np
 # import sklearn.metrics as sk
+from numpy.core.multiarray import array as array
 from sklearn.metrics import pairwise_distances
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 import torchvision.ops as t_ops
 from torchvision.ops import box_iou
@@ -25,316 +27,52 @@ from unknown_localization_utils import extract_bboxes_from_saliency_map_and_thre
 from constants import IND_INFO_CREATION_OPTIONS, AVAILABLE_CLUSTERING_METHODS, \
     AVAILABLE_CLUSTER_OPTIMIZATION_METRICS, INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS, \
     FTMAPS_RELATED_OPTIONS, LOGITS_RELATED_OPTIONS, STRIDES_RATIO, MAX_IOU_WITH_PREDS, \
-    MIN_BOX_SIZE, MAX_BOX_SIZE_PERCENT
+    MIN_BOX_SIZE, MAX_BOX_SIZE_PERCENT, XAI_METHOD, XAI_TARGET_LAYERS, XAI_RENORMALIZE, USE_XAI, \
+    RANK_BOXES, RANK_BOXES_OPERATION, MAX_NUM_UNK_BOXES_PER_IMAGE, GET_BOXES_WITH_GREATER_RANK
 
+from YOLOv8_Explainer import yolov8_heatmap
+def compute_pixels_to_ignore_per_image(explainability_model: yolov8_heatmap, images_batch: Tensor) -> List[Tensor]:
 
-# FUNCIONES QUE VAMOS A TENER QUE ELIMINAR
-################################################################################################
+    # Generate Explainability Heatmaps 
+    expl_heatmaps = explainability_model(images_batch, return_type='Tensor', show_image=False)
 
-# Funciones para asignar peso a los feature maps
-def weighted_variance(saliency_maps):
-    # VALORES ALTOS DE ESTE NOS DICE QUE MAPAS TIENE PUNTOS MUY CONCENTRADOS CON ALTO VALOR, SIENDO EL RESTO
-    # PRACTIAMENTE CERO
-    # No tiene gran utilidad aparente
-    weights = np.sum(saliency_maps, axis=(1, 2), keepdims=True)
-    indices = np.indices(saliency_maps.shape[1:])
-    mean_x = np.sum(indices[0] * saliency_maps, axis=(1, 2)) / weights.squeeze()
-    mean_y = np.sum(indices[1] * saliency_maps, axis=(1, 2)) / weights.squeeze()
-    variance_x = np.sum(saliency_maps * (indices[0] - mean_x[:, None, None])**2, axis=(1, 2)) / weights.squeeze()
-    variance_y = np.sum(saliency_maps * (indices[1] - mean_y[:, None, None])**2, axis=(1, 2)) / weights.squeeze()
-    return variance_x + variance_y
+    # Clean the heatmaps that 
 
-def spatial_frequency_analysis(saliency_maps):
-    # Parece ser bueno para encontrar mapas utiles, pero tienes que usar:
-    # topK_indices = np.argsort(spatial_frequency_analysis(ftmaps))[::-1][-topK:]
-    # Es decir, hay que coger los de MENOR valor.
-    freq_maps = np.fft.fft2(saliency_maps, axes=(1, 2))
-    magnitude = np.abs(freq_maps)
-    frequencies1 = np.fft.fftfreq(n=saliency_maps.shape[1], d=1.0)
-    frequencies2 = np.fft.fftfreq(n=saliency_maps.shape[2], d=1.0)
-    high_freq_power = np.sum(magnitude * (frequencies1[:, None]**2 + frequencies2[None, :]**2), axis=(1, 2))
-    return high_freq_power
+def limit_heatmaps_to_bounding_boxes(expl_heatmaps: List[Tensor], results: List[Results]) -> List[Tensor]:
+    processed_heatmaps = []
+    for _i, expl_heatmaps_one_image in enumerate(expl_heatmaps):
+        processed_heatmap_one_image = np.zeros(expl_heatmaps_one_image.shape, dtype=np.float32)
+        boxes = results[_i].boxes.xyxy.cpu().numpy()
+        orig_h, orig_w = results[_i].orig_img.shape[2:]
+        # Convert boxes to heatmap size
+        boxes = boxes * np.array(
+            # The array is the reduction that has to be made in xyxy boxes format. The values of it are correspoding to (x1, y1, x2, y2)
+            [expl_heatmaps_one_image.shape[1] / orig_w, expl_heatmaps_one_image.shape[0] / orig_h,  expl_heatmaps_one_image.shape[1] / orig_w, expl_heatmaps_one_image.shape[0] / orig_h]
+        )
+        boxes = boxes.astype(int)
+        # # Draw bounding boxes over the heatmap
+        # import matplotlib.pyplot as plt
+        # im = draw_bounding_boxes(
+        #     (torch.tensor(expl_heatmaps_one_image).unsqueeze(0) * 255).to(torch.uint8),
+        #     torch.tensor(boxes),
+        #     width=2,
+        #     font='FreeMonoBold',
+        #     font_size=11,
+        #     colors=['red']*len(boxes)
+        # )
+        # plt.imshow(im.permute(1,2,0))
+        # plt.savefig('EEEEE.png')
+        # plt.close()
 
-def center_of_mass_and_spread(saliency_maps):
-    total_saliency = np.sum(saliency_maps, axis=(1, 2))
-    coordinates = np.indices((saliency_maps.shape[1], saliency_maps.shape[2]))
-    com_x = np.sum(coordinates[0] * saliency_maps, axis=(1, 2)) / total_saliency
-    com_y = np.sum(coordinates[1] * saliency_maps, axis=(1, 2)) / total_saliency
-    spread = np.sqrt(np.sum(saliency_maps * ((coordinates[0] - com_x[:, None, None])**2 + (coordinates[1] - com_y[:, None, None])**2), axis=(1, 2)) / total_saliency)
-    return np.stack((com_x, com_y), axis=1), spread
+        for x1, y1, x2, y2 in boxes:
+            x1, y1 = max(x1, 0), max(y1, 0)
+            x2, y2 = min(expl_heatmaps_one_image.shape[1] - 1, x2), min(expl_heatmaps_one_image.shape[0] - 1, y2)
+            processed_heatmap_one_image[y1:y2, x1:x2] = expl_heatmaps_one_image[y1:y2, x1:x2].clone()
 
-def entropy(saliency_maps):
-    # Puede ser util, ya que cuanta mas alta la entropia parace contener mas informacion
-    # PROBLEMA: Hay NaNs... ¿Por que? ¿Como los manejamos?
-    normalized_maps = saliency_maps / (np.sum(saliency_maps, axis=(1, 2), keepdims=True) + 1e-9)  # Avoid division by zero
-    entropy = -np.sum(normalized_maps * np.log2(normalized_maps + 1e-9), axis=(1, 2))  # Avoid log(0)
-    return entropy
-
-
-
-def multi_threshold_otsu(image, num_classes):
-    # Multi-level Otsu's Thresholding
-    thresholds = filters.threshold_multiotsu(image, classes=num_classes)
-    return thresholds
-
-def k_means_thresholding(image, num_clusters):
-    from sklearn.cluster import KMeans
-    # Flatten the image for clustering
-    pixels = image.reshape(-1, 1)
-    # Apply K-means clustering
-    kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(pixels)
-    cluster_centers = np.sort(kmeans.cluster_centers_.flatten())
-    # Thresholding based on cluster centers
-    thresholds = np.mean(np.vstack([cluster_centers[:-1], cluster_centers[1:]]), axis=0)
-    return thresholds
-
-
-def draw_bounding_boxes_from_regions(regions, ax, color='blue', padding=None, stride=8, resized=False):
-    # TODO: Añadir opcion de plot de OOD decision
-    min_side_length = 3
-    if resized:
-        min_side_length = min_side_length * stride
-    for region in regions:
-        minr, minc, maxr, maxc = region.bbox
-        # Remove small patches
-        if (maxr - minr) >= min_side_length and (maxc - minc) >= min_side_length:  # Minimo 3 de lado
-            #print(f"minr: {minr}, minc: {minc}, maxr: {maxr}, maxc: {maxc}")
-            if padding is not None:
-                minr += padding[0]
-                minc += padding[1]
-                maxr += padding[0]
-                maxc += padding[1]
-                minr *= stride
-                minc *= stride
-                maxr *= stride
-                maxc *= stride
-            rect = patches.Rectangle((minc, minr), maxc - minc, maxr - minr,
-                                    fill=False, edgecolor=color, linewidth=2)
-            ax.add_patch(rect)
-
-def basic_plots_for_one_set_of_thrs(saliency_map, thresholds, folder_path, original_image, padding, stride, method_name, ftmaps=None, ood_method=None):
-    # Plotting thresholded images with bounding boxes for each threshold
-    figsize = (len(thresholds)*4, 6)
-    fig, axs = plt.subplots(1, len(thresholds), figsize=figsize)
-    for i, thresh in enumerate(thresholds):
-        binary_mask = saliency_map > thresh
-        labeled_mask = measure.label(binary_mask)
-        regions = measure.regionprops(labeled_mask)
-        ax = axs[i]
-        ax.imshow(binary_mask, cmap='hot')
-        ax.set_title(f'Threshold > {thresh:.2f}')
-        ood_decision = None  # TODO
-        # Draw bounding boxes
-        draw_bounding_boxes_from_regions(regions, ax, color='blue', ood_decision=ood_decision)
-        ax.axis('off')
-    plt.tight_layout()
-    plt.savefig(folder_path / f"thresholds_with_bboxes_{method_name}.pdf")
-    plt.close()
-
-    # Plotting saliency with bounding boxes for each threshold
-    fig, axs = plt.subplots(1, len(thresholds), figsize=figsize)
-    for i, thresh in enumerate(thresholds):
-        binary_mask = saliency_map > thresh
-        labeled_mask = measure.label(binary_mask)
-        regions = measure.regionprops(labeled_mask)
-        ax = axs[i]
-        ax.imshow(saliency_map, cmap='hot')
-        ax.set_title(f'Threshold > {thresh:.2f}')
-        ood_decision = None
-        # Draw bounding boxes
-        draw_bounding_boxes_from_regions(regions, ax, color='blue', ood_decision=ood_decision)
-        ax.axis('off')
-    plt.tight_layout()
-    plt.savefig(folder_path / f"saliency_maps_with_boxes_separated_{method_name}.pdf")
-    plt.close()
-
-    # Plot the boxes for each threshold on the original image separately
-    fig, axs = plt.subplots(1, len(thresholds), figsize=(12, 6))
-    for i, thresh in enumerate(thresholds):
-        binary_mask = saliency_map > thresh
-        labeled_mask = measure.label(binary_mask)
-        regions = measure.regionprops(labeled_mask)
-        ax = axs[i]
-        ax.imshow(original_image)
-        ax.set_title(f'Threshold > {thresh:.2f}')
-        ood_decision = None
-        # Draw bounding boxes
-        draw_bounding_boxes_from_regions(regions, ax, color='blue', padding=padding, stride=stride)
-        ax.axis('off')
-    plt.tight_layout()
-    plt.savefig(folder_path / f"bboxes_on_original_separated_{method_name}.pdf")
-    plt.close()
-
-
-def generate_image_with_bboxes(saliency_map, folder_path, original_image, padding, option, ftmaps=None, ood_method=None):
-
-    # Apply recursive Otsu thresholding to find multiple thresholds
-    num_classes = 4  # For example, dividing the image into 4 classes
-    thresholds = recursive_otsu(saliency_map, num_classes)
-    # Figsize for the plots with multiple subplots (when thresholds are used)
-    figsize = (len(thresholds)*4, 6)
-
-    # Define the stride
-    stride = 8
-    if option == "various_thr_methods":
-        # recursive_otsu
-        basic_plots_for_one_set_of_thrs(saliency_map, thresholds, folder_path, original_image, padding, stride, f"recursive_otsu_{num_classes}_classes")
-
-        # Multi-level Otsu's Thresholding
-        thresholds = multi_threshold_otsu(saliency_map, num_classes)
-        basic_plots_for_one_set_of_thrs(saliency_map, thresholds, folder_path, original_image, padding, stride, f"multi_level_otsu_{num_classes}_classes")
-
-        # K-means clustering
-        thresholds = k_means_thresholding(saliency_map, num_classes)
-        basic_plots_for_one_set_of_thrs(saliency_map, thresholds, folder_path, original_image, padding, stride, f"k_means_clustering_{num_classes}_clusters")
-
-        # Quartile thresholding
-        thresholds = [np.quantile(saliency_map, 0.25), np.quantile(saliency_map, 0.5), np.quantile(saliency_map, 0.75), np.quantile(saliency_map, 0.85), np.quantile(saliency_map, 0.95)]
-        basic_plots_for_one_set_of_thrs(saliency_map, thresholds, folder_path, original_image, padding, stride, "quartile_thresholding")
+        processed_heatmaps.append(torch.tensor(processed_heatmap_one_image, dtype=torch.float32))
+        
+    return processed_heatmaps
     
-    elif option == "all_images":
-
-        # Boxes on ORIGINAL SIZED FEATURE MAP
-        # Use the thresholds to create binary masks
-        fig, axs = plt.subplots(1, len(thresholds), figsize=figsize)
-        for i, thresh in enumerate(thresholds):
-            mask = saliency_map > thresh
-            axs[i].imshow(mask, cmap='gray')
-            axs[i].set_title(f'Threshold > {thresh:.2f}')
-            axs[i].axis('off')
-        plt.tight_layout()
-        plt.savefig(folder_path / f"thresholds.pdf")
-        plt.close()
-
-        # Plotting thresholded images with bounding boxes for each threshold
-        fig, axs = plt.subplots(1, len(thresholds), figsize=figsize)
-        for i, thresh in enumerate(thresholds):
-            binary_mask = saliency_map > thresh
-            labeled_mask = measure.label(binary_mask)
-            regions = measure.regionprops(labeled_mask)
-            ax = axs[i]
-            ax.imshow(binary_mask, cmap='hot')
-            ax.set_title(f'Threshold > {thresh:.2f}')
-            # Draw bounding boxes
-            draw_bounding_boxes_from_regions(regions, ax, color='blue')
-            ax.axis('off')
-        plt.tight_layout()
-        plt.savefig(folder_path / f"thresholds_with_bboxes.pdf")
-        plt.close()
-
-        # Boxes on RESHAPED SALIENCY MAP
-        # Resized the saliency map to the original image size
-        resized_saliency_map = resize(saliency_map, (saliency_map.shape[0]*8, saliency_map.shape[1]*8))
-        resized_thresholds = recursive_otsu(resized_saliency_map, num_classes)
-        fig, axs = plt.subplots(1, len(resized_thresholds), figsize=figsize)
-        for i, thresh in enumerate(resized_thresholds):
-            mask = resized_saliency_map > thresh
-            axs[i].imshow(mask, cmap='gray')
-            axs[i].set_title(f'Threshold > {thresh:.2f}')
-            axs[i].axis('off')
-        plt.tight_layout()
-        plt.savefig(folder_path / f"resized_thresholds.pdf")
-        plt.close()
-
-        # Plotting saliency with bounding boxes for each threshold
-        fig, axs = plt.subplots(1, len(resized_thresholds), figsize=figsize)
-        for i, thresh in enumerate(resized_thresholds):
-            binary_mask = resized_saliency_map > thresh
-            labeled_mask = measure.label(binary_mask)
-            regions = measure.regionprops(labeled_mask)
-
-            ax = axs[i]
-            ax.imshow(resized_saliency_map, cmap='hot')
-            ax.set_title(f'Threshold > {thresh:.2f}')
-
-            # Draw bounding boxes
-            draw_bounding_boxes_from_regions(regions, ax, color='blue')
-            ax.axis('off')
-        plt.tight_layout()
-        plt.savefig(folder_path / f"resized_bboxes.pdf")
-        plt.close()
-
-        # Plot all boxes in the original image taking into account that the boxes are generated
-        # based on a reduced and non-padded image
-        fig, ax = plt.subplots(1, 1, figsize=(12, 12))
-        ax.imshow(original_image)
-        for i, thresh in enumerate(thresholds):
-            binary_mask = saliency_map > thresh
-            labeled_mask = measure.label(binary_mask)
-            regions = measure.regionprops(labeled_mask)
-
-            # Draw bounding boxes
-            draw_bounding_boxes_from_regions(regions, ax, color='blue', padding=padding, stride=stride)
-        ax.axis('off')
-        plt.savefig(folder_path / f"bboxes_on_original.pdf")
-        plt.close()
-
-        # Plot the boxes for each threshold on the original image separately
-        fig, axs = plt.subplots(1, len(thresholds), figsize=(12, 6))
-        for i, thresh in enumerate(thresholds):
-            binary_mask = saliency_map > thresh
-            labeled_mask = measure.label(binary_mask)
-            regions = measure.regionprops(labeled_mask)
-            ax = axs[i]
-            ax.imshow(original_image)
-            ax.set_title(f'Threshold > {thresh:.2f}')
-
-            # Draw bounding boxes
-            draw_bounding_boxes_from_regions(regions, ax, color='blue', padding=padding, stride=stride)
-            ax.axis('off')
-        plt.tight_layout()
-        plt.savefig(folder_path / f"bboxes_on_original_separated.pdf")
-        plt.close()
-
-        # Plot the original image with saliency map on top (transparent)
-        fig, ax = plt.subplots(1, 1, figsize=(12, 12))
-        ax.imshow(original_image)
-        # First add padding to the saliency map and then resize it to the original image size
-        padded_saliency_map = np.pad(saliency_map, ((padding[0], padding[0]), (padding[1], padding[1])), 'constant', constant_values=(0, 0))
-        resized_saliency_map = resize(padded_saliency_map, (original_image.shape[1], original_image.shape[0]))
-        ax.imshow(resized_saliency_map, cmap='hot', alpha=0.5)
-        ax.axis('off')
-        plt.savefig(folder_path / f"original_with_saliency_map.pdf")
-        plt.close()
-
-        # Now the same but with also all the boxes on top
-        fig, ax = plt.subplots(1, 1, figsize=(12, 12))
-        ax.imshow(original_image)
-        ax.imshow(resized_saliency_map, cmap='hot', alpha=0.5)
-        # Draw bounding boxes
-        for i, thresh in enumerate(thresholds):
-            binary_mask = saliency_map > thresh
-            labeled_mask = measure.label(binary_mask)
-            regions = measure.regionprops(labeled_mask)
-
-            # Draw bounding boxes
-            draw_bounding_boxes_from_regions(regions, ax, color='blue', padding=padding, stride=stride)
-        ax.axis('off')
-        plt.savefig(folder_path / f"original_with_saliency_map_and_bboxes.pdf")
-        plt.close()
-
-        # Now the same but with also all the boxes on top
-        fig, ax = plt.subplots(1, 1, figsize=(12, 12))
-        ax.imshow(original_image)
-        ax.imshow(resized_saliency_map, cmap='hot', alpha=0.5)
-        # Draw bounding boxes
-        for i, thresh in enumerate(thresholds):
-            binary_mask = saliency_map > thresh
-            labeled_mask = measure.label(binary_mask)
-            regions = measure.regionprops(labeled_mask)
-
-            # Draw bounding boxes
-            draw_bounding_boxes_from_regions(regions, ax, color='blue', padding=padding, stride=stride)
-        ax.axis('off')
-        plt.savefig(folder_path / f"original_with_saliency_map_and_bboxes.pdf")
-        plt.close()
-
-    else:
-        raise ValueError("Option not recognized")
-
-################################################################################################
-# FINAL DE FUNCIONES QUE VAMOS A TENER QUE ELIMINAR
-
 
 #@dataclass(slots=True)
 class OODMethod(ABC):
@@ -615,6 +353,41 @@ class OODMethod(ABC):
         # # TODO: Activado para ejecutar los plots OOD con targets
         # if callable(getattr(self, "compute_ood_decision_with_ftmaps", None)):
         #     model.model.extraction_mode = 'all_ftmaps'
+
+        # TODO: Explainabilty
+        if USE_XAI:
+            if XAI_METHOD == 'D-RISE':
+                from yolo_drise.xai.drise import DRISE
+                import os
+                input_size = (640, 640)
+                gpu_batch = 64
+                number_of_masks = 6000
+                stride = 8
+                p1 = 0.5
+                expl_model = DRISE(model=model, 
+                                  input_size=input_size, 
+                                  device=device,
+                                  gpu_batch=gpu_batch)
+                
+                generate_new = False
+                mask_file = f"./yolo_drise/masks/masks_640x640.npy"
+                if generate_new or not os.path.isfile(mask_file):
+                    # explainer.generate_masks(N=5000, s=8, p1=0.1, savepath= mask_file)
+                    expl_model.generate_masks(N=number_of_masks, s=stride, p1=p1, savepath=mask_file)
+                else:
+                    expl_model.load_masks(mask_file)
+                    print('Masks are loaded.')
+            else:
+                # Set model
+                expl_model = yolov8_heatmap(
+                    yolo_model=model,
+                    method=XAI_METHOD,
+                    layer=XAI_TARGET_LAYERS,
+                    ratio=0.05,
+                    conf_threshold=self.min_conf_threshold,
+                    renormalize=XAI_RENORMALIZE,
+                    show_box=False,
+                )
 
         c = 0
         for idx_of_batch, data in enumerate(dataloader):
@@ -1365,7 +1138,51 @@ class OODMethod(ABC):
 
                 ### Añadir posibles cajas desconocidas a las predicciones ###
                 if self.enhanced_unk_localization:
-                    possible_unk_bboxes, ood_decision_on_unknown = self.compute_extra_possible_unkwnown_bboxes_and_decision(results, data, imgs)
+                    directory_name = f'{now}_{self.name}'
+                    imgs_folder_path = folder_path / directory_name
+                    imgs_folder_path.mkdir(exist_ok=True)
+                    if USE_XAI:
+                        # TODO: Aqui pruebo lo de la explicabilidad, que tiene que sacar un mapa de valores por imagen, siendo cada mapa una imagen de 80x80
+                        #   con los valores de la importancia de cada pixel, que luego se restaran al saliency map correspondiente, escalando los valores al rango
+                        #   del saliency map
+                        # Crear carpeta
+                        directory_name = f'{now}_{self.name}'
+                        imgs_folder_path = folder_path / directory_name
+                        imgs_folder_path.mkdir(exist_ok=True)
+                        delattr(model.model, 'which_layers_to_extract')
+                        delattr(model.model, 'extraction_mode')
+                        # Heatmaps in shape (M, H, W), M being the batch size an in form of a tensor in cpu
+                        # and in the range [0, 1]
+                        if XAI_METHOD == 'D-RISE':
+                            from skimage.transform import downscale_local_mean
+                            save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}.npy'
+                            if not os.path.exists(save_name):
+                                expl_heatmaps = expl_model(x=imgs, results=results, mode='object_detection')
+                                # Save the heatmaps
+                                np.save(save_name, expl_heatmaps.numpy())
+                            else:
+                                # Load the heatmaps and downscale them
+                                print('***** LOADING HEATMAPS *****')
+                                expl_heatmaps = torch.tensor(np.load(save_name), dtype=torch.float32)
+                            processed_heatmaps = downscale_local_mean(expl_heatmaps.numpy(), (1, 8, 8))
+                            processed_heatmaps = [torch.tensor(hm, dtype=torch.float32) for hm in processed_heatmaps]
+                        else:
+                            expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
+                            processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
+                        configure_extra_output_of_the_model(model, self)
+                    else:
+                        processed_heatmaps = None
+                    if RANK_BOXES:
+                        possible_unk_bboxes, ood_decision_on_unknown, distances_per_image = self.compute_extra_possible_unkwnown_bboxes_and_decision(
+                            results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
+                            folder_path=imgs_folder_path, origin_of_idx=idx_of_batch*dataloader.batch_size
+                        )
+                    else:
+                        distances_per_image = None
+                        possible_unk_bboxes, ood_decision_on_unknown = self.compute_extra_possible_unkwnown_bboxes_and_decision(
+                            results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
+                            folder_path=imgs_folder_path, origin_of_idx=idx_of_batch*dataloader.batch_size
+                        )
                 else:
                     possible_unk_bboxes = None
                     ood_decision_on_unknown = None
@@ -1384,7 +1201,8 @@ class OODMethod(ABC):
                     ood_method_name=self.name,
                     targets=targets,
                     possible_unk_boxes=possible_unk_bboxes,
-                    ood_decision_on_possible_unk_boxes=ood_decision_on_unknown
+                    ood_decision_on_possible_unk_boxes=ood_decision_on_unknown,
+                    distances_unk_prop_per_image=distances_per_image
                 )
             else:
                 raise ValueError("The mode to debug is not valid")
@@ -1407,6 +1225,19 @@ class OODMethod(ABC):
         class_names = list(dataloader.dataset.data['names'].values())[:dataloader.dataset.number_of_classes]
         class_names.append('unknown')
         known_classes_tensor = torch.tensor(known_classes, dtype=torch.float32)
+
+        # TODO: XAI
+        if USE_XAI:
+            expl_model = yolov8_heatmap(
+                yolo_model=model,
+                method=XAI_METHOD,
+                layer=XAI_TARGET_LAYERS,
+                ratio=0.05,
+                conf_threshold=self.min_conf_threshold,
+                renormalize=XAI_RENORMALIZE,
+                show_box=False,
+            )
+
         for idx_of_batch, data in enumerate(dataloader):
 
             if idx_of_batch % 50 == 0 or idx_of_batch == number_of_batches - 1:
@@ -1423,7 +1254,25 @@ class OODMethod(ABC):
 
             ### Añadir posibles cajas desconocidas a las predicciones ###
             if self.enhanced_unk_localization:
-                possible_unk_bboxes, ood_decision_on_possible_unk = self.compute_extra_possible_unkwnown_bboxes_and_decision(results, data)
+                if USE_XAI:
+                    delattr(model.model, 'which_layers_to_extract')
+                    delattr(model.model, 'extraction_mode')
+                    expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
+                    processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
+                    configure_extra_output_of_the_model(model, self)
+                else:
+                    processed_heatmaps = None
+                if RANK_BOXES:
+                        possible_unk_bboxes, ood_decision_on_unknown, distances_per_image = self.compute_extra_possible_unkwnown_bboxes_and_decision(
+                            results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
+                            folder_path=None, origin_of_idx=idx_of_batch*dataloader.batch_size
+                        )
+                else:
+                    distances_per_image = None
+                    possible_unk_bboxes, ood_decision_on_unknown = self.compute_extra_possible_unkwnown_bboxes_and_decision(
+                        results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
+                        folder_path=None, origin_of_idx=idx_of_batch*dataloader.batch_size
+                    )
 
             # Cada prediccion va a ser un diccionario con las siguientes claves:
             #   'img_idx': int -> Indice de la imagen
@@ -1448,7 +1297,7 @@ class OODMethod(ABC):
                 if self.enhanced_unk_localization:
                     # Add the possible unknown boxes to the predictions
                     bboxes_coords = torch.cat([bboxes_coords, possible_unk_bboxes[img_idx]], dim=0)
-                    one_image_ood_decision_on_possible_unk = torch.tensor(ood_decision_on_possible_unk[img_idx], dtype=torch.float32)
+                    one_image_ood_decision_on_possible_unk = torch.tensor(ood_decision_on_unknown[img_idx], dtype=torch.float32)
                     assert one_image_ood_decision_on_possible_unk.sum().item() == 0.0, "Uno de los posible unknowns es considerado como known, pero como no tenemos esa logica implementada es ERROR"
                     # TODO: Por el momento simplemente lo que hago es hacer un tensor con todo clase 80 (unk). Luego tendre que ver como gestiono el hacer que acaben siendo una clase
                     cls_unk_prop = torch.tensor(80, dtype=torch.float32).repeat(len(possible_unk_bboxes[img_idx]))
@@ -1562,7 +1411,15 @@ class OODMethod(ABC):
     
     ### Uknown localization methods ###
     
-    def compute_extra_possible_unkwnown_bboxes_and_decision(self, results_per_image: List[Results], data: Dict, img_batch=None) -> Tuple[List[Tensor], List[np.ndarray]]:
+    def compute_extra_possible_unkwnown_bboxes_and_decision(
+            self,
+            results_per_image: List[Results],
+            data: Dict,
+            ood_decision_of_results: List[List[int]],
+            explainalbility_heatmaps: Optional[List[Tensor]] = None,
+            folder_path: Optional[Path] = None,
+            origin_of_idx: Optional[int] = 0,
+        ) -> Tuple[List[Tensor], List[List[int]]]:
         """
         Compute the possible unknown bounding boxes using the feature maps of the model.
         STEPS:
@@ -1582,7 +1439,7 @@ class OODMethod(ABC):
         Returns:
             possible_unk_boxes_per_image: List[Tensor] -> List of Tensors with the possible unknown bounding boxes. Coordinates of the boxes are
                 in the size of the feature maps (feature maps are paded). Each position of the list represents an image and each tensor has the shape (n_boxes, 4).
-            ood_decision_on_unk_boxes_per_image: List[List] -> List of numpy arrays with the decision of the possible unknown bounding boxes. 
+            ood_decision_on_unk_boxes_per_image: List[List[int]] -> List of numpy arrays with the decision of the possible unknown bounding boxes. 
                 Each position of the list represents an image and each numpy array has the shape (n_boxes,)
         """
         assert self.which_internal_activations == 'ftmaps_and_strides', "The method needs the full feature maps and strides to compute the possible unknown bounding boxes"
@@ -1595,40 +1452,127 @@ class OODMethod(ABC):
         # Loop over images
         possible_unk_boxes_per_image = []
         ood_decision_on_unk_boxes_per_image = []
+        distances_per_image = []
         for img_idx, res in enumerate(results_per_image):
             
             #### Compute new possible unknown bounding boxes by binarizing the feature maps ####
             ### 1. Select the stride and remove padding from the feature maps
             ratio_pad = np.array(data['ratio_pad'][img_idx][1], dtype=float)  # Take the padding
             ftmaps, _ = res.extra_item
+            original_img_padding_x_y = ratio_pad
             # Compute the padding in the feature map space
             ratio_pad_for_ftmaps = ratio_pad / stride_ratio
             # Get the feature map of the selected stride and unpad it
-            paded_ftmaps_height, paded_ftmaps_width = ftmaps[selected_stride].shape[1:]
-            ftmaps_of_selected_stride, padding_x_y = self.select_stride_and_remove_padding_of_ftmaps(ftmaps, selected_stride, ratio_pad_for_ftmaps)
-            unpaded_ftmaps_height, unpaded_ftmaps_width = ftmaps_of_selected_stride.shape[1], ftmaps_of_selected_stride.shape[2]
+            paded_feature_maps_of_selected_stride = ftmaps[selected_stride].cpu()
+            paded_ftmaps_height, paded_ftmaps_width = paded_feature_maps_of_selected_stride.shape[1:]
+            unpaded_ftmaps_of_selected_stride, padding_x_y = self.select_stride_and_remove_padding_of_ftmaps(ftmaps, selected_stride, ratio_pad_for_ftmaps)
+            unpaded_ftmaps_height, unpaded_ftmaps_width = unpaded_ftmaps_of_selected_stride.shape[1], unpaded_ftmaps_of_selected_stride.shape[2]
 
             ### 2. Compute the saliency map out of the selected feature maps
-            saliency_map = self.compute_saliency_map_one_stride(ftmaps_of_selected_stride.cpu().numpy())
+            saliency_map = self.compute_saliency_map_one_stride(unpaded_ftmaps_of_selected_stride.cpu().numpy())
+
+            if folder_path:  # Save the saliency map over the original image
+                import matplotlib.pyplot as plt
+                saliency_map_plot = saliency_map - saliency_map.min()
+                saliency_map_plot = saliency_map_plot / saliency_map_plot.max()
+                saliency_map_plot = (saliency_map_plot * 255).astype(np.uint8)
+                #plt.imshow()
+                plt.imshow(saliency_map_plot, cmap='viridis')
+                plt.colorbar()
+                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map.pdf')
+                plt.close()
+
+            if explainalbility_heatmaps:
+                # Only use the heatmap if it is not 0
+                heatmap = explainalbility_heatmaps[img_idx]
+                if heatmap.sum() > 0: 
+                    # Remove padding from heatmaps
+                    x_padding, y_padding = padding_x_y
+                    htmap_h, htmap_w = heatmap.shape[0], heatmap.shape[1]
+                    heatmap = heatmap[y_padding:htmap_h-y_padding, x_padding:htmap_w-x_padding]
+                    heatmap_for_plot = heatmap.clone()
+                    # Scale the heatmap [0, 1] to the values of the saliency map
+                    heatmap = (saliency_map.max() - saliency_map.min()) * (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min()) + saliency_map.min()
+                    heatmap = heatmap.numpy()
+                    saliency_map = saliency_map - heatmap
+                    saliency_map = np.clip(saliency_map, 0, saliency_map.max())
+                    # Save the heatmap
+                    plt.imshow(heatmap, cmap='viridis')
+                    plt.colorbar()
+                    plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap.pdf')
+                    plt.close()
+                    # Save the heatmap over the image
+                    #[:, y_padding:ftmap_height-y_padding, x_padding:ftmap_width-x_padding]
+                    from skimage.transform import resize
+                    orig_h, orig_w = data['img'][img_idx].shape[1:]
+                    orig_pd_x, orig_pd_y = original_img_padding_x_y.astype(int)
+                    orig_img_no_pad = data['img'][img_idx][:, orig_pd_y:orig_h-orig_pd_y, orig_pd_x:orig_w-orig_pd_x]
+                    plt.imshow(orig_img_no_pad.permute(1, 2, 0).cpu().numpy()/ 255)
+                    plt.imshow(resize(heatmap_for_plot.numpy(), orig_img_no_pad.shape[1:]), cmap='viridis', alpha=0.5)
+                    plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_over_image.pdf')
+                    plt.close()
+                    # Save the saliency map
+                    plt.imshow(saliency_map, cmap='viridis')
+                    plt.colorbar()
+                    plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map_new.pdf')
+                    plt.close()
+                    # # Plot heatmap
+                    # import matplotlib.pyplot as plt
+                    # plt.imshow(heatmap, cmap='viridis')
+                    # plt.savefig('A_heatmap.pdf')
+                    # plt.close()
+                    # # Plot saliency map
+                    # plt.imshow(saliency_map, cmap='viridis')
+                    # plt.savefig('A_saliency_map.pdf')
+                    # plt.close()
+                    # # Plot new saliency map
+                    # # Subtract the heatmap from the saliency map
+                    # saliency_map = saliency_map - heatmap
+                    # saliency_map = np.clip(saliency_map, 0, saliency_map.max())
+                    # plt.imshow(saliency_map, cmap='viridis')
+                    # plt.colorbar()
+                    # plt.savefig('A_saliency_map_new.pdf')
+                    # plt.close()
 
             ### 3. Compute the thresholds to binarize the saliency map
             thresholds = self.compute_thresholds_out_of_saliency_map(saliency_map)
 
+            if folder_path:  # Save the thresholded images in one figure
+                fig, axs = plt.subplots(1, len(thresholds), figsize=(5*len(thresholds), 5))
+                for idx, thr in enumerate(thresholds):
+                    axs[idx].imshow(saliency_map > thr, cmap='gray')
+                    axs[idx].set_title(f'Thr: {thr:.2f}')
+                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map.pdf')
+                plt.close()
+                
             ### 4. Extract the bounding boxes from the saliency map using the thresholds
             possible_unk_boxes_per_thr = extract_bboxes_from_saliency_map_and_thresholds(saliency_map, thresholds)
 
             ### 5. Postprocess the bounding boxes. Add the padding again and then convert them to the size of the feature maps
             unpaded_bbox_preds = res.boxes.xyxy.to('cpu')
-            x_pad_orig, y_pad_orig = ratio_pad.astype(int)
-            unpaded_bbox_preds[:, 0] = unpaded_bbox_preds[:, 0] - x_pad_orig
-            unpaded_bbox_preds[:, 1] = unpaded_bbox_preds[:, 1] - y_pad_orig
-            unpaded_bbox_preds[:, 2] = unpaded_bbox_preds[:, 2] - x_pad_orig
-            unpaded_bbox_preds[:, 3] = unpaded_bbox_preds[:, 3] - y_pad_orig
+            # x_pad_orig, y_pad_orig = ratio_pad.astype(int)
+            # unpaded_bbox_preds[:, 0] = unpaded_bbox_preds[:, 0] - x_pad_orig
+            # unpaded_bbox_preds[:, 1] = unpaded_bbox_preds[:, 1] - y_pad_orig
+            # unpaded_bbox_preds[:, 2] = unpaded_bbox_preds[:, 2] - x_pad_orig
+            # unpaded_bbox_preds[:, 3] = unpaded_bbox_preds[:, 3] - y_pad_orig
             bbox_preds_in_ftmap_size = unpaded_bbox_preds / STRIDES_RATIO[selected_stride]  # The bounding boxes are in the original image size
-            possible_unk_boxes = self.postprocess_unk_bboxes(possible_unk_boxes_per_thr, padding_x_y, ftmaps_shape=(unpaded_ftmaps_height, unpaded_ftmaps_width), bbox_preds_in_ftmap_size=bbox_preds_in_ftmap_size)
+            # TODO: Mejorar esta forma de gestionar la opcion de rank boxes
+            fn_output = self.postprocess_unk_bboxes(
+                possible_unk_boxes_per_thr,
+                padding_x_y,
+                unpaded_ftmaps_shape=(unpaded_ftmaps_height, unpaded_ftmaps_width),
+                bbox_preds_in_ftmap_size=bbox_preds_in_ftmap_size,
+                ood_decision_of_results=ood_decision_of_results[img_idx],
+                paded_feature_maps=paded_feature_maps_of_selected_stride,
+                selected_stride=selected_stride
+            )
+            if RANK_BOXES:
+                possible_unk_boxes, distances_per_proposal = fn_output
+            else:
+                possible_unk_boxes = fn_output
 
             ### 6. Decide wheter the unknown boxes are OoD or not
-            ood_decision_on_unk_boxes = self.compute_ood_decision_on_possible_unk_boxes(possible_unk_boxes, ftmaps_of_selected_stride)
+            ood_decision_on_unk_boxes = self.compute_ood_decision_on_possible_unk_boxes(possible_unk_boxes, paded_feature_maps_of_selected_stride)
 
             ### 7. Convert the boxes to original image size
             possible_unk_boxes = possible_unk_boxes * STRIDES_RATIO[selected_stride]
@@ -1636,6 +1580,8 @@ class OODMethod(ABC):
             # Append the possible unknown bounding boxes and the decision to diferent lists
             possible_unk_boxes_per_image.append(possible_unk_boxes)
             ood_decision_on_unk_boxes_per_image.append(ood_decision_on_unk_boxes)
+            if RANK_BOXES:
+                distances_per_image.append(distances_per_proposal)
 
             # # # Plot the original image with the boxes (use draw_bounding_boxes from torch)
             # import matplotlib.pyplot as plt
@@ -1700,8 +1646,10 @@ class OODMethod(ABC):
             # plt.imshow(saliency_map_with_unk_boxes.permute(1,2,0).numpy())
             # plt.savefig('A_saliency_map_with_UNK_boxes.png')
             # plt.close()
-            
-        return possible_unk_boxes_per_image, ood_decision_on_unk_boxes_per_image
+        if RANK_BOXES:
+            return possible_unk_boxes_per_image, ood_decision_on_unk_boxes_per_image, distances_per_image
+        else:
+            return possible_unk_boxes_per_image, ood_decision_on_unk_boxes_per_image
     
     def select_stride_and_remove_padding_of_ftmaps(self, ftmaps: List[Tensor], selected_stride: int, ratio_pad_for_ftmaps: np.ndarray) -> Tuple[Tensor, Tuple[int]]:
         """
@@ -1780,8 +1728,9 @@ class OODMethod(ABC):
 
     #     return possible_unk_boxes
 
-    def postprocess_unk_bboxes(self, possible_unk_boxes_per_thr: List[Tensor], padding: Tuple[int],
-                               ftmaps_shape: Tuple[int], bbox_preds_in_ftmap_size: Tensor) -> Tensor:
+    def postprocess_unk_bboxes(self, possible_unk_boxes_per_thr: List[Tensor], padding: Tuple[int], unpaded_ftmaps_shape: Tuple[int],
+                               bbox_preds_in_ftmap_size: Tensor, ood_decision_of_results: List[int], paded_feature_maps: Tensor,
+                               selected_stride: int) -> Tensor:
         """
         Postprocess the possible unknown bounding boxes.
         Parameters:
@@ -1790,47 +1739,174 @@ class OODMethod(ABC):
                 x1, y1, x2, y2.
             padding: Tuple[int] -> The padding used to remove the LetterBox padding from the feature maps.
                 The first element is the padding in the x dimension and the second element is the padding in the y dimension.
-            ftmaps_shape: Tuple[int] -> The shape of the feature maps (height, width).
+            unpaded_ftmaps_shape: Tuple[int] -> The shape of the feature maps without padding (height, width).
             bbox_preds_in_ftmap_size: Tensor -> The bounding boxes in the size of the feature maps.
+            paded_feature_maps: Tensor -> The feature maps of the selected stride. The shape is (1, height, width).
+            selected_stride: int -> The selected stride to use for the unknown localization enhancement.
         Returns:
             possible_unk_boxes: Tensor -> The possible unknown bounding boxes. The shape is (num_boxes, 4)
         """
-        all_boxes = []
+        all_unk_prop = []
+        all_distances_per_proposal = []
         # TODO: Add this to constants.py
         # For small boxes removal
         min_box_size = MIN_BOX_SIZE
         # For big boxes removal
-        ftmap_height, ftmap_width = ftmaps_shape
+        unpaded_ftmap_height, unpaded_ftmap_width = unpaded_ftmaps_shape
         max_box_size_percent = MAX_BOX_SIZE_PERCENT  # The percentage of the feature map size that a box can take
         # IoU threshold for preds
         iou_thr = MAX_IOU_WITH_PREDS
-        for idx_thr, bboxes in enumerate(possible_unk_boxes_per_thr):
-            # Remove the boxes from the first stride?
+        for idx_thr in range(len(possible_unk_boxes_per_thr)):
+            # Remove the unk_proposals_one_thr from the first stride?
             if idx_thr == 0:
                 continue
-            # Add the padding to the bounding boxes
-            bboxes[:, 0] += padding[0]
-            bboxes[:, 1] += padding[1]
-            bboxes[:, 2] += padding[0]
-            bboxes[:, 3] += padding[1]
-            # Remove small boxes
-            w, h = bboxes[:, 2] - bboxes[:, 0], bboxes[:, 3] - bboxes[:, 1]
+            unk_proposals_one_thr = possible_unk_boxes_per_thr[idx_thr].clone()
+            # Add the padding to the bounding unk_proposals_one_thr
+            unk_proposals_one_thr[:, 0] += padding[0]
+            unk_proposals_one_thr[:, 1] += padding[1]
+            unk_proposals_one_thr[:, 2] += padding[0]
+            unk_proposals_one_thr[:, 3] += padding[1]
+            # Obtain the width and height of the unk_proposals_one_thr
+            w, h = unk_proposals_one_thr[:, 2] - unk_proposals_one_thr[:, 0], unk_proposals_one_thr[:, 3] - unk_proposals_one_thr[:, 1]
+            # 1º: Remove small unk_proposals_one_thr
             mask_small_boxes = (w >= min_box_size) & (h >= min_box_size)
-            mask_big_boxes = (w < int(max_box_size_percent * ftmap_width)) & (h < int(max_box_size_percent * ftmap_height))
+            # 2º: Remove big unk_proposals_one_thr
+            mask_big_boxes = (w < int(max_box_size_percent * unpaded_ftmap_width)) & (h < int(max_box_size_percent * unpaded_ftmap_height))
             mask = mask_small_boxes & mask_big_boxes
-            bboxes = bboxes[mask]
-            # Remove boxes with IoU > iou_thr with the predictions
+            unk_proposals_one_thr = unk_proposals_one_thr[mask]
+            # Use pred boxes to remove some unk_proposals_one_thr
             if len(bbox_preds_in_ftmap_size) > 0:
+                # 3º: Remove unk_proposals_one_thr with IoU > iou_thr with the predictions
                 # Compute the IoU with the predictions
-                ious = box_iou(bboxes, bbox_preds_in_ftmap_size)
-                # Remove the boxes with IoU > iou_thr
+                ious = box_iou(unk_proposals_one_thr, bbox_preds_in_ftmap_size)
+                # Remove the unk_proposals_one_thr with IoU > iou_thr
                 mask = ious.max(dim=1).values < iou_thr
-                bboxes = bboxes[mask]
-            # Append the boxes
-            all_boxes.append(bboxes)
+                unk_proposals_one_thr = unk_proposals_one_thr[mask]
 
+                # # Plot Unk prop (in yellow) and preds (in green) 
+                # import matplotlib.pyplot as plt
+                # from torchvision.utils import draw_bounding_boxes
+                # # Convert to tensor
+                # unk = unk_proposals_one_thr.to(torch.uint8)
+                # pred = bbox_preds_in_ftmap_size.to(torch.uint8)
+                # # Create the image
+                # img = torch.ones((3, ftmap_height + padding[1]*2, ftmap_width + padding[0]*2), dtype=torch.uint8)
+                # # Merge the bouding boxes and create the colors for each
+                # boxes = torch.cat([unk, pred], dim=0)
+                # colors = ["yellow"] * len(unk) + ["green"] * len(pred)
+                # # Draw the boxes
+                # img = draw_bounding_boxes(img, boxes, colors=colors)
+                # plt.imshow(img.permute(1, 2, 0).cpu().numpy())
+                # plt.savefig('AAA_unk_prop_and_preds.png')
+                # plt.close()
+
+                # 4º: Remove unk_proposals_one_thr that contain a correct prediction (no OoD) inside completely
+                # First filter which of the predictions are not OoD
+                bbox_preds_not_ood = bbox_preds_in_ftmap_size[np.array(ood_decision_of_results) == 1]
+                # Create a mask that is True if the unk_proposals_one_thr contain a prediction inside
+                contain_mask = ((bbox_preds_not_ood[:, None, 0] >= unk_proposals_one_thr[:, 0]) & 
+                                (bbox_preds_not_ood[:, None, 1] >= unk_proposals_one_thr[:, 1]) &
+                                (bbox_preds_not_ood[:, None, 2] <= unk_proposals_one_thr[:, 2]) &
+                                (bbox_preds_not_ood[:, None, 3] <= unk_proposals_one_thr[:, 3])).any(dim=0)
+                # Then select the images that do NOT (~) contain a prediction inside
+                unk_proposals_one_thr = unk_proposals_one_thr[~contain_mask]
+
+            
+            if RANK_BOXES:
+                if len(unk_proposals_one_thr) > 0:
+                    # 5º: Rank the unk_proposals_one_thr using their features (extracted from the feature maps) and comparing them
+                    #   to the centroids of every known class. Then, select the unk_proposals_one_thr that are far from the centroids
+                    if False:
+                        # OPT 1:
+                        features_per_proposal = []
+                        for box in unk_proposals_one_thr:
+                            x1, y1, x2, y2 = box
+                            # Extract the feature map region corresponding to the bounding box
+                            extracted_features = paded_feature_maps[:, y1:y2, x1:x2]
+                            # Optionally, you might want to apply some pooling or other operation to standardize the size
+                            extracted_features = F.adaptive_avg_pool2d(extracted_features, (1, 1))
+                            features_per_proposal.append(extracted_features)
+                        # Optionally convert list to a tensor
+                        features_per_proposal = torch.stack(features_per_proposal)
+                    else:
+                        # OPT 2: use roi align
+                        # Extract the RoI Aligned feature maps of the possible unknown bounding boxes
+                        features_per_proposal = t_ops.roi_align(
+                            input=paded_feature_maps.unsqueeze(0),
+                            boxes=[unk_proposals_one_thr.float()],
+                            output_size=(1,1),
+                            spatial_scale = 1.0,
+                            aligned=False,
+                        )
+                    # Compute the distance of the features to the centroids of all known clusters of selected stride
+                    distances_per_proposal = []
+                    for idx_cls, cluster in enumerate(self.clusters):
+                        if len(cluster[selected_stride]) > 0:
+                            distances_one_cls_per_bbox = self.compute_distance(
+                                cluster[selected_stride][None, :],
+                                self.activations_transformation(features_per_proposal)
+                                #self.activations_transformation(activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1))
+                                #activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1)  # Flatten the activations
+                            )
+                            distances_per_proposal.append(distances_one_cls_per_bbox)
+                    # Convert to array and make some operation
+                    distances_per_proposal = np.array(distances_per_proposal)
+                    if RANK_BOXES_OPERATION == 'mean':
+                        distances_per_proposal = distances_per_proposal.mean(axis=0)
+                    elif RANK_BOXES_OPERATION == 'max':
+                        distances_per_proposal = distances_per_proposal.max(axis=0)
+                    elif RANK_BOXES_OPERATION == 'sum':
+                        distances_per_proposal = distances_per_proposal.sum(axis=0)
+                    elif RANK_BOXES_OPERATION == 'min':
+                        distances_per_proposal = distances_per_proposal.min(axis=0) * 100  # To compensate the low values
+                    # Geometric mean
+                    elif RANK_BOXES_OPERATION == 'geometric_mean':
+                        from scipy.stats import gmean
+                        distances_per_proposal = gmean(distances_per_proposal, axis=0)
+            
+            # Append the unk_proposals_one_thr
+            all_unk_prop.append(unk_proposals_one_thr)
+            if RANK_BOXES:
+                if len(unk_proposals_one_thr) > 0:
+                    all_distances_per_proposal.append(distances_per_proposal)
+
+        # Concatenate all the unk_proposals from the different thresholds -> shape = (num_boxes, 4)
+        all_unk_prop = torch.cat(all_unk_prop, dim=0).float()
+
+        if RANK_BOXES:  # In case we want to rank the unk_proposal, we return the distances too
+            # Return a tensor with shape (num_boxes, 4) and the distances per proposal
+            if len(all_distances_per_proposal) > 0:
+                all_distances_per_proposal = np.concatenate(all_distances_per_proposal)
+            else:
+                all_distances_per_proposal = np.array([])
+
+            if MAX_NUM_UNK_BOXES_PER_IMAGE > 0 and len(all_distances_per_proposal) > 0:
+                # Select the MAX_NUM_UNK_BOXES_PER_IMAGE unk_proposals_one_thr with the highest distance
+                if GET_BOXES_WITH_GREATER_RANK:
+                    idx_sorted = np.argsort(all_distances_per_proposal)[::-1].copy()  # Order from greater to lower
+                else:
+                    idx_sorted = np.argsort(all_distances_per_proposal)  # Order from lower to greater
+                all_distances_per_proposal = all_distances_per_proposal[idx_sorted[:MAX_NUM_UNK_BOXES_PER_IMAGE]]
+                all_unk_prop = all_unk_prop[idx_sorted[:MAX_NUM_UNK_BOXES_PER_IMAGE]]
+            
+            return all_unk_prop, all_distances_per_proposal
+        
         # Return a tensor with shape (num_boxes, 4)
-        return torch.cat(all_boxes, dim=0).float()
+        return all_unk_prop
+
+    @abstractmethod
+    def activations_transformation(self, activations: np.array) -> np.array:
+        """
+        Transform the activations to the format needed to compute the distance to the centroids.
+        """
+        pass
+
+    @abstractmethod
+    def compute_distance(self, centroids: np.array, features: np.array) -> np.array:
+        """
+        Compute the distance between the centroids and the features. Only in DistanceMethods
+        """
+        pass
 
 
 #################################################################################
@@ -1879,6 +1955,12 @@ class LogitsMethod(OODMethod):
         Format the internal activations of the model. In this case, the activations are already well formatted.
         """
         pass
+
+    def activations_transformation(self, activations: np.array) -> np.array:
+        raise NotImplementedError("This method is not needed for methods using logits")
+
+    def compute_distance(self, centroids: np.array, features: np.array) -> np.array:
+        raise NotImplementedError("This method is not needed for methods using logits")
 
 
 class MSP(LogitsMethod):
@@ -2356,7 +2438,7 @@ class DistanceMethod(OODMethod):
         #     raise NotImplementedError("Not implemented yet")
 
     def _compute_ood_decision_for_one_result_from_roi_aligned_feature_maps(
-            self, idx_img: int, one_img_bboxes_cls_idx: Tensor, roi_aligned_ftmaps_one_img_per_stride, ood_decision: List,logger: Logger
+            self, idx_img: int, one_img_bboxes_cls_idx: Tensor, roi_aligned_ftmaps_one_img_per_stride, ood_decision: List, logger: Logger
         ):
         """
         Compute the OOD decision for one image using the in-distribution activations (usually feature maps).

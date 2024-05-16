@@ -211,7 +211,7 @@ class DetectionPredictor(BasePredictor):
 
         ### Execution for internal information extraction ###
         ood_info_retrieval_mode = hasattr(self.model.model, 'extraction_mode')
-        if ood_info_retrieval_mode:
+        if ood_info_retrieval_mode:  #in ['roi_aligned_ftmaps', 'logits', 'all_ftmaps', 'ftmaps_and_strides']:
             
             output_extra = preds[1]  # Los feature maps o logits
             preds = preds[0][0]  # Las predicciones

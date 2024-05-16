@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple, Union
 import cv2
 import numpy as np
 import torch
+from torch import Tensor
 from PIL import Image
 from pytorch_grad_cam import (EigenCAM, EigenGradCAM, GradCAM, GradCAMPlusPlus,
                               HiResCAM, LayerCAM, RandomCAM, XGradCAM)
@@ -12,6 +13,7 @@ from pytorch_grad_cam.activations_and_gradients import ActivationsAndGradients
 from pytorch_grad_cam.utils.image import scale_cam_image, show_cam_on_image
 from ultralytics.nn.tasks import attempt_load_weights
 from ultralytics.yolo.utils.ops import non_max_suppression, xywh2xyxy
+from ultralytics import YOLO
 
 from .utils import letterbox
 
@@ -164,7 +166,8 @@ class yolov8_heatmap:
 
     def __init__(
         self,
-        weight: str,
+        yolo_model: Optional[YOLO] = None,
+        weight: str = "",
         device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
         method="EigenGradCAM",
         layer=[12, 17, 21],
@@ -176,16 +179,21 @@ class yolov8_heatmap:
         """
         Initialize the YOLOv8 heatmap layer.
         """
-        device = device
-        backward_type = "all"
-        ckpt = torch.load(weight)
-        model_names = ckpt['model'].names
-        model = attempt_load_weights(weight, device)
-        model.info()
-        for p in model.parameters():
-            p.requires_grad_(True)
+        if weight != "":
+            device = device
+            ckpt = torch.load(weight)
+            model_names = ckpt['model'].names
+            model = attempt_load_weights(weight, device)
+            model.info()
+            for p in model.parameters():
+                p.requires_grad_(True)
+        elif yolo_model:
+            model = yolo_model.model
+            model_names = model.names
+            device = yolo_model.device
         model.eval()
 
+        backward_type = "all"        
         target = yolov8_target(backward_type, conf_threshold, ratio)
         target_layers = [model.model[l] for l in layer]
 
@@ -197,6 +205,19 @@ class yolov8_heatmap:
         colors = np.random.uniform(
             0, 255, size=(len(model_names), 3)).astype(int)
         self.__dict__.update(locals())
+
+        self.renormalize = renormalize
+
+    def set_explainability_mode(self, mode: str) -> None:
+        if mode == "on":
+            for p in self.method.model.parameters():
+                p.requires_grad_(True)
+        elif mode == "off":
+            for p in self.method.model.parameters():
+                p.requires_grad_(False)
+        else:
+            raise ValueError("mode must be either 'on' or 'off'")
+        self.method.model.eval()
 
     def post_process(self, result):
         """
@@ -237,6 +258,7 @@ class yolov8_heatmap:
         boxes: np.ndarray,  # type: ignore
         image_float_np: np.ndarray,  # type: ignore
         grayscale_cam: np.ndarray,  # type: ignore
+        show_image: bool = True,
     ) -> np.ndarray:
         """
         Normalize the CAM to be in the range [0, 1]
@@ -258,8 +280,11 @@ class yolov8_heatmap:
             renormalized_cam[y1:y2, x1:x2] = scale_cam_image(
                 grayscale_cam[y1:y2, x1:x2].copy())
         renormalized_cam = scale_cam_image(renormalized_cam)
-        eigencam_image_renormalized = show_cam_on_image(
-            image_float_np, renormalized_cam, use_rgb=True)
+        if show_image:        
+            eigencam_image_renormalized = show_cam_on_image(
+                image_float_np, renormalized_cam, use_rgb=True)
+        else:
+            eigencam_image_renormalized = renormalized_cam
         return eigencam_image_renormalized
 
     def renormalize_cam(self, boxes, image_float_np, grayscale_cam):
@@ -270,7 +295,7 @@ class yolov8_heatmap:
             image_float_np, renormalized_cam, use_rgb=True)
         return eigencam_image_renormalized
 
-    def process(self, img_path):
+    def process(self, image: Union[str, np.ndarray, Tensor], return_type: str, show_image: bool) -> Union[Image.Image, Tensor, np.ndarray]:
         """Process the input image and generate CAM visualization.
 
         Args:
@@ -280,17 +305,27 @@ class yolov8_heatmap:
         Returns:
             None
         """
-        img = cv2.imread(img_path)
-        img = letterbox(img, auto=False)[0]
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = np.float32(img) / 255.0  # type: ignore
+        # Load image
+        if isinstance(image, str):
+            img = cv2.imread(image)
+            img = letterbox(img, auto=False)[0]
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = np.float32(img) / 255.0  # type: ignore
+            tensor = (
+                torch.from_numpy(np.transpose(img, axes=[2, 0, 1]))
+                .unsqueeze(0)
+                .to(self.device)
+            )
+        elif isinstance(image, np.ndarray):
+            raise NotImplementedError
+        elif isinstance(image, Tensor):
+            tensor = image
+            tensor = tensor.float() / 255.0
+        else:
+            raise ValueError("img_path must be a string or a numpy array")
 
-        tensor = (
-            torch.from_numpy(np.transpose(img, axes=[2, 0, 1]))
-            .unsqueeze(0)
-            .to(self.device)
-        )
-
+        # TODO: CAM map is not resized to original input size, as pytorch gradcam is changed by me
+        # Create CAM map
         try:
             grayscale_cam = self.method(tensor, [self.target])
         except AttributeError as e:
@@ -298,16 +333,33 @@ class yolov8_heatmap:
             return
         grayscale_cam = grayscale_cam[0, :]
 
-        pred1 = self.model(tensor)[0]
-        pred = self.post_process(pred1)
-        if self.renormalize:
-            cam_image = self.renormalize_cam(
-                pred[:, :4].cpu().detach().numpy().astype(
-                    np.int32), img, grayscale_cam
-            )
+        # Generate CAM visualization
+        if return_type == "Tensor":
+            cam_image = grayscale_cam
+            
         else:
-            cam_image = show_cam_on_image(
-                img, grayscale_cam, use_rgb=True)  # type: ignore
+            pred1 = self.model(tensor)[0]
+            pred = self.post_process(pred1)
+
+            if self.renormalize:
+                # cam_image = self.renormalize_cam(
+                #     pred[:, :4].cpu().detach().numpy().astype(
+                #         np.int32), img, grayscale_cam
+                # )
+                cam_image = self.renormalize_cam_in_bounding_boxes(
+                    pred[:, :4].cpu().detach().numpy().astype(np.int32),
+                    img,
+                    grayscale_cam,
+                    show_image=show_image,
+                )
+            else:
+                if show_image:
+                    cam_image = show_cam_on_image(
+                        img, grayscale_cam, use_rgb=True)  # type: ignore
+                else:
+                    # Convert image to numpy array of uint8 as the show_cam_on_image function 
+                    # does it internally
+                    cam_image = np.uint8(255 * grayscale_cam)
         if self.show_box:
             for data in pred:
                 data = data.cpu().detach().numpy()
@@ -327,10 +379,19 @@ class yolov8_heatmap:
                     cam_image,
                 )
 
-        cam_image = Image.fromarray(cam_image)
+        # Define return type
+        if return_type == 'Image':
+            cam_image = Image.fromarray(cam_image)
+        elif return_type == 'Tensor':
+            cam_image = torch.from_numpy(cam_image)
+        elif return_type == 'Numpy':
+            cam_image = cam_image
+        else:
+            raise ValueError("return_type must be either 'Image', 'Tensor' or 'Numpy'")
+        
         return cam_image
 
-    def __call__(self, img_path):
+    def __call__(self, images: Union[str, List[str], List[np.ndarray], Tensor], return_type='Image', show_image=True) -> List[Union[Image.Image, Tensor, np.ndarray]]:
         """Generate CAM visualizations for one or more images.
 
         Args:
@@ -339,18 +400,22 @@ class yolov8_heatmap:
         Returns:
             None
         """
-        if isinstance(img_path, str):
+        if isinstance(images, str):
+            img_path = images
             if os.path.isdir(img_path):
                 image_list = []
                 for img_path_ in os.listdir(img_path):
-                    img_pil = self.process(f"{img_path}/{img_path_}")
+                    img_pil = self.process(f"{img_path}/{img_path_}", return_type, show_image)
                     image_list.append(img_pil)
                 return image_list
             else:
-                return [self.process(img_path)]
+                return [self.process(img_path, return_type, show_image)]
             
-        elif isinstance(img_path, list):
-            return [self.process(img_path_) for img_path_ in img_path]
+        elif isinstance(images, list):
+            return [self.process(img_path_, return_type, show_image) for img_path_ in images]
+        
+        elif isinstance(images, Tensor):
+            return [self.process(img.unsqueeze(0), return_type, show_image) for img in images]
         
         else:
             raise ValueError("img_path must be a string or a list of strings")

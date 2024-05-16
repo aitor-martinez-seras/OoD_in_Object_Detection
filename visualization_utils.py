@@ -176,7 +176,8 @@ def create_folder(folder_path: Path, now: str, ood_method_name: str = '') -> Pat
 
 def prepare_bboxes_and_labels(
         results: Results, class_names: List[str], ood_decision: Optional[List[int]], targets: Optional[Dict[str, Tensor]],
-        img_idx: int, valid_preds_only: bool, possible_unk_boxes: Optional[List[Tensor]] = None, ood_decision_on_possible_unk_boxes: Optional[List[List[int]]] = None):
+        img_idx: int, valid_preds_only: bool, possible_unk_boxes: Optional[List[Tensor]] = None, ood_decision_on_possible_unk_boxes: Optional[List[List[int]]] = None,
+        distances_unk_prop_per_image: Optional[List[np.ndarray]] = None):
     """Prepare bounding boxes and labels for plotting."""
     if valid_preds_only and hasattr(results, 'valid_preds'):
         # Filter bounding boxes and labels based on valid predictions
@@ -217,11 +218,21 @@ def prepare_bboxes_and_labels(
         bboxes = torch.cat((bboxes, one_img_possible_unk_boxes), dim=0)
         # If the OoD decision is provided, use the decision for the string and color the possible unknown boxes
         if one_img_ood_decision_on_possible_unk_boxes:
-                labels_str.extend([f'PROP - UNK' if one_img_ood_decision_on_possible_unk_boxes[_box_idx] == 0 else f'PROP - IN-DIST' for _box_idx in range(len(one_img_possible_unk_boxes))])
-                colors.extend(['yellow' if one_img_ood_decision_on_possible_unk_boxes[_box_idx] == 0 else 'orange' for _box_idx in range(len(one_img_possible_unk_boxes))])
+            if distances_unk_prop_per_image:
+                # Append the distance to the string
+                #labels_str.extend([f'PROP - UNK - {dist:.2f}' if one_img_ood_decision_on_possible_unk_boxes[_box_idx] == 0 else f'PROP - IN-DIST - {dist:.2f}' for _box_idx, dist in zip(range(len(one_img_possible_unk_boxes)), distances_unk_prop_per_image[img_idx])])
+                labels_str.extend([f'{dist:.2f}' if one_img_ood_decision_on_possible_unk_boxes[_box_idx] == 0 else f'PROP - IN-DIST - {dist:.2f}' for _box_idx, dist in zip(range(len(one_img_possible_unk_boxes)), distances_unk_prop_per_image[img_idx])])
+            else:
+                labels_str.extend([f'UNK' if one_img_ood_decision_on_possible_unk_boxes[_box_idx] == 0 else f'PROP - IN-DIST' for _box_idx in range(len(one_img_possible_unk_boxes))])
+            colors.extend(['yellow' if one_img_ood_decision_on_possible_unk_boxes[_box_idx] == 0 else 'orange' for _box_idx in range(len(one_img_possible_unk_boxes))])
         else:
-            labels_str.extend([f'PROP'] * len(one_img_possible_unk_boxes))
-            colors.extend(['yellow'] * len(one_img_possible_unk_boxes))   
+            # Append the distance to the string if available
+            if distances_unk_prop_per_image:
+                #labels_str.extend([f'PROP - {dist:.2f}' for dist in distances_unk_prop_per_image[img_idx]])
+                labels_str.extend([f'{dist:.2f}' for dist in distances_unk_prop_per_image[img_idx]])
+            else:
+                labels_str.extend([f'PROP'] * len(one_img_possible_unk_boxes))
+            colors.extend(['yellow'] * len(one_img_possible_unk_boxes))
 
         # for i, boxes in enumerate(one_img_possible_unk_boxes):
         #     bboxes = torch.cat((bboxes, boxes), dim=0)
@@ -265,7 +276,8 @@ def plot_results(
         ood_method_name: str = '',
         targets: Optional[Dict[str, Tensor]] = None,
         possible_unk_boxes: Optional[List[Tensor]] = None,
-        ood_decision_on_possible_unk_boxes: Optional[List[List[int]]] = None, 
+        ood_decision_on_possible_unk_boxes: Optional[List[List[int]]] = None,
+        distances_unk_prop_per_image: Optional[List[np.ndarray]] = None
     ):
     """Main function to plot results."""
     width = 2
@@ -279,7 +291,15 @@ def plot_results(
     for img_idx, res in enumerate(results):
 
         bboxes, labels_str, colors = prepare_bboxes_and_labels(
-            res, class_names, ood_decision, targets, img_idx, valid_preds_only, possible_unk_boxes, ood_decision_on_possible_unk_boxes
+            res,
+            class_names,
+            ood_decision,
+            targets,
+            img_idx,
+            valid_preds_only,
+            possible_unk_boxes,
+            ood_decision_on_possible_unk_boxes,
+            distances_unk_prop_per_image
         )
 
         image_path = output_folder / f'{(origin_of_idx + img_idx):03}.{image_format}'

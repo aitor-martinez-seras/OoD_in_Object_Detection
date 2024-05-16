@@ -244,7 +244,7 @@ def main(args: SimpleArgumentParser):
         gpu_number = str(args.device)
         os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
         logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
-        device = 'cuda:0'
+        device = f'cuda:0'
 
     # In the case of GradNorm, the batch size must be 1 to enable the method
     if args.ood_method == 'GradNorm':
@@ -271,11 +271,12 @@ def main(args: SimpleArgumentParser):
     if args.model_path:
         model_weights_path = ROOT / args.model_path
         logger.info(f"Loading model from {args.model_path} in {args.device}")
-        model = YOLO(model_weights_path, task='detect')        
+        model = YOLO(model_weights_path, task='detect')
     else:
         model_to_load = f'yolov8{args.model}.pt'
         logger.info(f"Loading model {model_to_load} in {args.device}")
-        model = YOLO(model_to_load) 
+        model = YOLO(model_to_load)
+    model.to(device)
 
     logger.info(f"IoU threshold set to {IOU_THRESHOLD}")
 

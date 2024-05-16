@@ -39,5 +39,17 @@ STRIDES_RATIO = [8, 16, 32]  # The ratio between each level of the FPN and the o
 
 # For Unknown Localization Enhancement
 MAX_IOU_WITH_PREDS = 0.5  # The maximum IOU between an UNK proposal bbox and a predicted bbox. If over the threshold, the UNK proposal is discarded
-MIN_BOX_SIZE = 3  # The minimum size of a box in the feature map space
+MIN_BOX_SIZE = 3  # The minimum size of a box in the feature map space. 3*8 = 24 pixels in the original image if the stride is 8.
 MAX_BOX_SIZE_PERCENT = 0.9  # The percentage of the feature map size that a box can take
+USE_XAI = False  # If True, the XAI method will be used to enhance the localization of the UNK proposals
+RANK_BOXES = True  # If True, the boxes will be ranked using the OOD method
+
+# For XAI
+XAI_METHOD = "D-RISE"  # GradCAM, HiResCAM, LayerCAM, D-RISE
+XAI_TARGET_LAYERS = [15, 18, 21]
+XAI_RENORMALIZE = False
+
+# For Ranking boxes
+RANK_BOXES_OPERATION = "min"  # mean, max, min, median, sum, geometric_mean, harmonic_mean
+MAX_NUM_UNK_BOXES_PER_IMAGE = 5  # The maximum number of UNK proposals that will be considered for the ranking
+GET_BOXES_WITH_GREATER_RANK = True  # If True, the boxes with the greater rank will be selected. If False, the boxes with the lower rank will be selected

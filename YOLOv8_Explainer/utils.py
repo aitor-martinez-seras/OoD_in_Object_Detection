@@ -100,4 +100,6 @@ def save_images(imgs, folder="explainability_images", name="image.png"):
         else:
             raise ValueError("Input should be a numpy array or a PIL Image.")
         # save image
-        detections_image.save((folder_path / (img_names.stem + f'_{i}.png')).as_posix())
+        if detections_image.mode != 'RGB':
+            detections_image = detections_image.convert('RGB')
+        detections_image.save((folder_path / (img_names.stem + f'_{i}.jpg')).as_posix())
