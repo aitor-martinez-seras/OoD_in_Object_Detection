@@ -15,6 +15,9 @@ from ultralytics import YOLO
 from YOLOv8_Explainer import yolov8_heatmap
 from YOLOv8_Explainer.utils import save_images
 
+print('---------------------------------')
+print('Explainability YOLOv8 Explainer')
+print('---------------------------------')
 
 # GPU
 gpu_number = str(2)
@@ -22,14 +25,21 @@ os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
 device = 'cuda:0'
 
 # Set model
-expl_method = "EigenCAM"
-targ_layers = [15, 18, 21]
-#targ_layers = [15]
+expl_method = "ScoreCAM"  # GradCAM , HiResCAM, GradCAMPlusPlus, XGradCAM , LayerCAM, EigenGradCAM and EigenCAM
+#targ_layers = [15, 18, 21]
+targ_layers = [15]
+renormalize = False
+show_box = True
+show_image = False
+if show_box:
+    show_image = True
 model = yolov8_heatmap(
     weight="runs_OWOD/20240313_1407_owod_t1_yolov8l_from_scratch/weights/best.pt",
     method=expl_method,
     layer=targ_layers,
-    ratio=0.05
+    ratio=0.05,
+    renormalize=renormalize,
+    show_box=show_box,
 )
 
 # Load image
@@ -54,10 +64,13 @@ img_paths = [
 "/groups/tri110414/datasets/coco/images/val2017/000000544519.jpg",
 "/groups/tri110414/datasets/coco/images/val2017/000000213086.jpg"
 ]
-imagelist = model(img_path=img_paths)
+imagelist = model(images=img_paths, return_type='Image', show_image=show_image)
 
 layers_str = "_".join([str(i) for i in targ_layers])
-save_images(imagelist, folder='explainability_images', name=f"D_yolov8_explainer_{expl_method}_{layers_str}.png")
+if renormalize:
+    save_images(imagelist, folder='explainability_images', name=f"D_yolov8_explainer_{expl_method}_{layers_str}_renormalized.jpg")
+else:
+    save_images(imagelist, folder='explainability_images', name=f"D_yolov8_explainer_{expl_method}_{layers_str}.jpg")
 print()
 # display_images(imagelist)
 

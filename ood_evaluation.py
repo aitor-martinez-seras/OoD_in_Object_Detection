@@ -7,6 +7,8 @@ from logging import Logger
 
 from tap import Tap
 
+#os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -23,7 +25,8 @@ from ood_utils import get_measures, configure_extra_output_of_the_model, OODMeth
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride
 from data_utils import read_json, write_json, load_dataset_and_dataloader
 from unknown_localization_utils import ftmap_minus_mean_of_ftmaps_then_abs_sum, recursive_otsu
-from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, IOU_THRESHOLD, OOD_METHOD_CHOICES, CONF_THRS_FOR_BENCHMARK
+from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, OOD_METHOD_CHOICES, CONF_THRS_FOR_BENCHMARK
+from custom_hyperparams import CUSTOM_HYP
 
 
 NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -89,7 +92,7 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
     Select the OOD method to use for the evaluation.
     """
     common_kwargs = {
-        'iou_threshold_for_matching': IOU_THRESHOLD,
+        'iou_threshold_for_matching': CUSTOM_HYP.IOU_THRESHOLD,
         'min_conf_threshold': args.conf_thr
     }
     distance_methods_kwargs = {
@@ -234,6 +237,10 @@ def main(args: SimpleArgumentParser):
     logger = log.setup_logger(args)
     print('-----------------------------------------------------------------------')
 
+    print('** Custom Hyperparameters:')
+    print(CUSTOM_HYP)
+    print('************************')
+
     # TODO: This is for reproducibility 
     # torch.backends.cudnn.benchmark = True
 
@@ -241,10 +248,12 @@ def main(args: SimpleArgumentParser):
     if args.device == -1:
         device = 'cpu'
     else:
+        
         gpu_number = str(args.device)
-        os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
-        logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
-        device = f'cuda:0'
+        # os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
+        # logger.warning(f'CUDA_VISIBLE_DEVICES = {gpu_number}')
+        # device = f'cuda:0'
+        device = f'cuda:{gpu_number}'
 
     # In the case of GradNorm, the batch size must be 1 to enable the method
     if args.ood_method == 'GradNorm':
@@ -278,7 +287,7 @@ def main(args: SimpleArgumentParser):
         model = YOLO(model_to_load)
     model.to(device)
 
-    logger.info(f"IoU threshold set to {IOU_THRESHOLD}")
+    logger.info(f"IoU threshold set to {CUSTOM_HYP.IOU_THRESHOLD}")
 
     # Load the OOD detection method
     ood_method = select_ood_detection_method(args)
@@ -321,6 +330,7 @@ def main(args: SimpleArgumentParser):
                 results_one_run['Conf_threshold'] = conf_threshold
                 results_one_run["tpr_thr"] = args.tpr_thr
                 results_one_run['Model'] = args.model_path if args.model_path else model_to_load
+                
                 final_results.append(results_one_run)
                 print("-"*50, '\n')
             # Save the results

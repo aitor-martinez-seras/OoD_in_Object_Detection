@@ -5,6 +5,7 @@ from pathlib import Path
 from logging import Logger
 import json
 import inspect
+import os
 
 import numpy as np
 # import sklearn.metrics as sk
@@ -26,9 +27,11 @@ from datasets_utils.owod.owod_evaluation_protocol import compute_metrics
 from unknown_localization_utils import extract_bboxes_from_saliency_map_and_thresholds
 from constants import IND_INFO_CREATION_OPTIONS, AVAILABLE_CLUSTERING_METHODS, \
     AVAILABLE_CLUSTER_OPTIMIZATION_METRICS, INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS, \
-    FTMAPS_RELATED_OPTIONS, LOGITS_RELATED_OPTIONS, STRIDES_RATIO, MAX_IOU_WITH_PREDS, \
-    MIN_BOX_SIZE, MAX_BOX_SIZE_PERCENT, XAI_METHOD, XAI_TARGET_LAYERS, XAI_RENORMALIZE, USE_XAI, \
-    RANK_BOXES, RANK_BOXES_OPERATION, MAX_NUM_UNK_BOXES_PER_IMAGE, GET_BOXES_WITH_GREATER_RANK
+    FTMAPS_RELATED_OPTIONS, LOGITS_RELATED_OPTIONS, STRIDES_RATIO
+    # MAX_IOU_WITH_PREDS, \
+    # MIN_BOX_SIZE, MAX_BOX_SIZE_PERCENT, XAI_METHOD, XAI_TARGET_LAYERS, XAI_RENORMALIZE, USE_XAI, \
+    # RANK_BOXES, RANK_BOXES_OPERATION, MAX_NUM_UNK_BOXES_PER_IMAGE, GET_BOXES_WITH_GREATER_RANK
+from custom_hyperparams import CUSTOM_HYP
 
 from YOLOv8_Explainer import yolov8_heatmap
 def compute_pixels_to_ignore_per_image(explainability_model: yolov8_heatmap, images_batch: Tensor) -> List[Tensor]:
@@ -305,7 +308,7 @@ class OODMethod(ABC):
             imgs, targets = self.prepare_data_for_model(data, device)
 
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
-            results = model.predict(imgs, save=False, verbose=False)
+            results = model.predict(imgs, save=False, verbose=False, device=device)
 
             ### Match the predicted boxes to the ground truth boxes ###
             self.match_predicted_boxes_to_targets(results, targets, self.iou_threshold_for_matching)
@@ -355,8 +358,8 @@ class OODMethod(ABC):
         #     model.model.extraction_mode = 'all_ftmaps'
 
         # TODO: Explainabilty
-        if USE_XAI:
-            if XAI_METHOD == 'D-RISE':
+        if CUSTOM_HYP.unk.xai.USE_XAI:
+            if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
                 from yolo_drise.xai.drise import DRISE
                 import os
                 input_size = (640, 640)
@@ -381,11 +384,11 @@ class OODMethod(ABC):
                 # Set model
                 expl_model = yolov8_heatmap(
                     yolo_model=model,
-                    method=XAI_METHOD,
-                    layer=XAI_TARGET_LAYERS,
+                    method=CUSTOM_HYP.unk.xai.XAI_METHOD,
+                    layer=CUSTOM_HYP.unk.xai.XAI_TARGET_LAYERS,
                     ratio=0.05,
                     conf_threshold=self.min_conf_threshold,
-                    renormalize=XAI_RENORMALIZE,
+                    renormalize=CUSTOM_HYP.unk.xai.XAI_RENORMALIZE,
                     show_box=False,
                 )
 
@@ -398,7 +401,7 @@ class OODMethod(ABC):
             imgs, targets = self.prepare_data_for_model(data, device)
             
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
-            results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold)
+            results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold, device=device)
             
             # TODO: Activado para ejecutar los plots OOD con targets
             if debugeando_en_modo == "clasificacion":
@@ -1141,7 +1144,7 @@ class OODMethod(ABC):
                     directory_name = f'{now}_{self.name}'
                     imgs_folder_path = folder_path / directory_name
                     imgs_folder_path.mkdir(exist_ok=True)
-                    if USE_XAI:
+                    if CUSTOM_HYP.unk.xai.USE_XAI:
                         # TODO: Aqui pruebo lo de la explicabilidad, que tiene que sacar un mapa de valores por imagen, siendo cada mapa una imagen de 80x80
                         #   con los valores de la importancia de cada pixel, que luego se restaran al saliency map correspondiente, escalando los valores al rango
                         #   del saliency map
@@ -1153,7 +1156,7 @@ class OODMethod(ABC):
                         delattr(model.model, 'extraction_mode')
                         # Heatmaps in shape (M, H, W), M being the batch size an in form of a tensor in cpu
                         # and in the range [0, 1]
-                        if XAI_METHOD == 'D-RISE':
+                        if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
                             from skimage.transform import downscale_local_mean
                             save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}.npy'
                             if not os.path.exists(save_name):
@@ -1172,7 +1175,7 @@ class OODMethod(ABC):
                         configure_extra_output_of_the_model(model, self)
                     else:
                         processed_heatmaps = None
-                    if RANK_BOXES:
+                    if CUSTOM_HYP.unk.rank.RANK_BOXES:
                         possible_unk_bboxes, ood_decision_on_unknown, distances_per_image = self.compute_extra_possible_unkwnown_bboxes_and_decision(
                             results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
                             folder_path=imgs_folder_path, origin_of_idx=idx_of_batch*dataloader.batch_size
@@ -1227,18 +1230,42 @@ class OODMethod(ABC):
         known_classes_tensor = torch.tensor(known_classes, dtype=torch.float32)
 
         # TODO: XAI
-        if USE_XAI:
-            expl_model = yolov8_heatmap(
-                yolo_model=model,
-                method=XAI_METHOD,
-                layer=XAI_TARGET_LAYERS,
-                ratio=0.05,
-                conf_threshold=self.min_conf_threshold,
-                renormalize=XAI_RENORMALIZE,
-                show_box=False,
-            )
-
+        if CUSTOM_HYP.unk.xai.USE_XAI:
+            if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
+                from yolo_drise.xai.drise import DRISE
+                import os
+                input_size = (640, 640)
+                gpu_batch = 64
+                number_of_masks = 6000
+                stride = 8
+                p1 = 0.5
+                expl_model = DRISE(model=model, 
+                                  input_size=input_size, 
+                                  device=device,
+                                  gpu_batch=gpu_batch)
+                
+                generate_new = False
+                mask_file = f"./yolo_drise/masks/masks_640x640.npy"
+                if generate_new or not os.path.isfile(mask_file):
+                    # explainer.generate_masks(N=5000, s=8, p1=0.1, savepath= mask_file)
+                    expl_model.generate_masks(N=number_of_masks, s=stride, p1=p1, savepath=mask_file)
+                else:
+                    expl_model.load_masks(mask_file)
+                    print('Masks are loaded.')
+            else:
+                expl_model = yolov8_heatmap(
+                    yolo_model=model,
+                    method=CUSTOM_HYP.unk.xai.XAI_METHOD,
+                    layer=CUSTOM_HYP.unk.xai.XAI_TARGET_LAYERS,
+                    ratio=0.05,
+                    conf_threshold=self.min_conf_threshold,
+                    renormalize=CUSTOM_HYP.unk.xai.XAI_RENORMALIZE,
+                    show_box=False,
+                )
+        number_of_images_saved = 0
+        count_of_images = 0
         for idx_of_batch, data in enumerate(dataloader):
+            count_of_images += len(data['im_file'])
 
             if idx_of_batch % 50 == 0 or idx_of_batch == number_of_batches - 1:
                 logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch+1} of {number_of_batches}") 
@@ -1247,22 +1274,51 @@ class OODMethod(ABC):
             imgs, targets = self.prepare_data_for_model(data, device)
             
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
-            results = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold)
+            results = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold, device=device)
 
             ### Comprobar si las cajas predichas son OoD ###
             ood_decision = self.compute_ood_decision_on_results(results, logger)
 
             ### Añadir posibles cajas desconocidas a las predicciones ###
             if self.enhanced_unk_localization:
-                if USE_XAI:
+                if CUSTOM_HYP.unk.xai.USE_XAI:
+                    # TODO: Aqui pruebo lo de la explicabilidad, que tiene que sacar un mapa de valores por imagen, siendo cada mapa una imagen de 80x80
+                    #   con los valores de la importancia de cada pixel, que luego se restaran al saliency map correspondiente, escalando los valores al rango
+                    #   del saliency map
+                    # Crear carpeta
+                    # directory_name = f'{now}_{self.name}'
+                    # imgs_folder_path = folder_path / directory_name
+                    # imgs_folder_path.mkdir(exist_ok=True)
                     delattr(model.model, 'which_layers_to_extract')
                     delattr(model.model, 'extraction_mode')
-                    expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
-                    processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
+                    # Heatmaps in shape (M, H, W), M being the batch size an in form of a tensor in cpu
+                    # and in the range [0, 1]
+                    if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
+                        from skimage.transform import downscale_local_mean
+                        save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}.npy'
+                        if not os.path.exists(save_name):
+                            expl_heatmaps = expl_model(x=imgs, results=results, mode='object_detection')
+                            # Save the heatmaps
+                            np.save(save_name, expl_heatmaps.numpy())
+                        else:
+                            # Load the heatmaps and downscale them
+                            print('***** LOADING HEATMAPS *****')
+                            expl_heatmaps = torch.tensor(np.load(save_name), dtype=torch.float32)
+                        processed_heatmaps = downscale_local_mean(expl_heatmaps.numpy(), (1, 8, 8))
+                        processed_heatmaps = [torch.tensor(hm, dtype=torch.float32) for hm in processed_heatmaps]
+                    else:
+                        expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
+                        processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
                     configure_extra_output_of_the_model(model, self)
+                    
+                    # delattr(model.model, 'which_layers_to_extract')
+                    # delattr(model.model, 'extraction_mode')
+                    # expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
+                    # processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
+                    # configure_extra_output_of_the_model(model, self)
                 else:
                     processed_heatmaps = None
-                if RANK_BOXES:
+                if CUSTOM_HYP.unk.rank.RANK_BOXES:
                         possible_unk_bboxes, ood_decision_on_unknown, distances_per_image = self.compute_extra_possible_unkwnown_bboxes_and_decision(
                             results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
                             folder_path=None, origin_of_idx=idx_of_batch*dataloader.batch_size
@@ -1302,7 +1358,7 @@ class OODMethod(ABC):
                     # TODO: Por el momento simplemente lo que hago es hacer un tensor con todo clase 80 (unk). Luego tendre que ver como gestiono el hacer que acaben siendo una clase
                     cls_unk_prop = torch.tensor(80, dtype=torch.float32).repeat(len(possible_unk_bboxes[img_idx]))
                     bboxes_cls = torch.cat([bboxes_cls, cls_unk_prop], dim=0)
-                    conf_unk_prop = torch.ones(len(possible_unk_bboxes[img_idx])) * 0.15  # TODO: Pongo 0.15 de confianza para las propuestas de unknown
+                    conf_unk_prop = torch.ones(len(possible_unk_bboxes[img_idx])) * 0.150001  # TODO: Pongo 0.150001 de confianza para las propuestas de unknown
                     bboxes_conf = torch.cat([bboxes_conf, conf_unk_prop], dim=0)
                 all_preds.append({
                     'img_idx': number_of_images_processed + img_idx,
@@ -1339,6 +1395,7 @@ class OODMethod(ABC):
             #     #ood_decision=ood_decision,
             #     targets=targets,
             # )
+            number_of_images_saved += len(data['im_file'])
 
         # All predictions collected, now compute metrics
         results_dict = compute_metrics(all_preds, all_targets, class_names, known_classes, logger)
@@ -1496,43 +1553,44 @@ class OODMethod(ABC):
                     heatmap = heatmap.numpy()
                     saliency_map = saliency_map - heatmap
                     saliency_map = np.clip(saliency_map, 0, saliency_map.max())
-                    # Save the heatmap
-                    plt.imshow(heatmap, cmap='viridis')
-                    plt.colorbar()
-                    plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap.pdf')
-                    plt.close()
-                    # Save the heatmap over the image
-                    #[:, y_padding:ftmap_height-y_padding, x_padding:ftmap_width-x_padding]
-                    from skimage.transform import resize
-                    orig_h, orig_w = data['img'][img_idx].shape[1:]
-                    orig_pd_x, orig_pd_y = original_img_padding_x_y.astype(int)
-                    orig_img_no_pad = data['img'][img_idx][:, orig_pd_y:orig_h-orig_pd_y, orig_pd_x:orig_w-orig_pd_x]
-                    plt.imshow(orig_img_no_pad.permute(1, 2, 0).cpu().numpy()/ 255)
-                    plt.imshow(resize(heatmap_for_plot.numpy(), orig_img_no_pad.shape[1:]), cmap='viridis', alpha=0.5)
-                    plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_over_image.pdf')
-                    plt.close()
-                    # Save the saliency map
-                    plt.imshow(saliency_map, cmap='viridis')
-                    plt.colorbar()
-                    plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map_new.pdf')
-                    plt.close()
-                    # # Plot heatmap
-                    # import matplotlib.pyplot as plt
-                    # plt.imshow(heatmap, cmap='viridis')
-                    # plt.savefig('A_heatmap.pdf')
-                    # plt.close()
-                    # # Plot saliency map
-                    # plt.imshow(saliency_map, cmap='viridis')
-                    # plt.savefig('A_saliency_map.pdf')
-                    # plt.close()
-                    # # Plot new saliency map
-                    # # Subtract the heatmap from the saliency map
-                    # saliency_map = saliency_map - heatmap
-                    # saliency_map = np.clip(saliency_map, 0, saliency_map.max())
-                    # plt.imshow(saliency_map, cmap='viridis')
-                    # plt.colorbar()
-                    # plt.savefig('A_saliency_map_new.pdf')
-                    # plt.close()
+                    if folder_path:
+                        # Save the heatmap
+                        plt.imshow(heatmap, cmap='viridis')
+                        plt.colorbar()
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap.pdf')
+                        plt.close()
+                        # Save the heatmap over the image
+                        #[:, y_padding:ftmap_height-y_padding, x_padding:ftmap_width-x_padding]
+                        from skimage.transform import resize
+                        orig_h, orig_w = data['img'][img_idx].shape[1:]
+                        orig_pd_x, orig_pd_y = original_img_padding_x_y.astype(int)
+                        orig_img_no_pad = data['img'][img_idx][:, orig_pd_y:orig_h-orig_pd_y, orig_pd_x:orig_w-orig_pd_x]
+                        plt.imshow(orig_img_no_pad.permute(1, 2, 0).cpu().numpy()/ 255)
+                        plt.imshow(resize(heatmap_for_plot.numpy(), orig_img_no_pad.shape[1:]), cmap='viridis', alpha=0.5)
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_over_image.pdf')
+                        plt.close()
+                        # Save the saliency map
+                        plt.imshow(saliency_map, cmap='viridis')
+                        plt.colorbar()
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map_new.pdf')
+                        plt.close()
+                        # # Plot heatmap
+                        # import matplotlib.pyplot as plt
+                        # plt.imshow(heatmap, cmap='viridis')
+                        # plt.savefig('A_heatmap.pdf')
+                        # plt.close()
+                        # # Plot saliency map
+                        # plt.imshow(saliency_map, cmap='viridis')
+                        # plt.savefig('A_saliency_map.pdf')
+                        # plt.close()
+                        # # Plot new saliency map
+                        # # Subtract the heatmap from the saliency map
+                        # saliency_map = saliency_map - heatmap
+                        # saliency_map = np.clip(saliency_map, 0, saliency_map.max())
+                        # plt.imshow(saliency_map, cmap='viridis')
+                        # plt.colorbar()
+                        # plt.savefig('A_saliency_map_new.pdf')
+                        # plt.close()
 
             ### 3. Compute the thresholds to binarize the saliency map
             thresholds = self.compute_thresholds_out_of_saliency_map(saliency_map)
@@ -1566,7 +1624,7 @@ class OODMethod(ABC):
                 paded_feature_maps=paded_feature_maps_of_selected_stride,
                 selected_stride=selected_stride
             )
-            if RANK_BOXES:
+            if CUSTOM_HYP.unk.rank.RANK_BOXES and CUSTOM_HYP.unk.USE_HEURISTICS:
                 possible_unk_boxes, distances_per_proposal = fn_output
             else:
                 possible_unk_boxes = fn_output
@@ -1580,7 +1638,7 @@ class OODMethod(ABC):
             # Append the possible unknown bounding boxes and the decision to diferent lists
             possible_unk_boxes_per_image.append(possible_unk_boxes)
             ood_decision_on_unk_boxes_per_image.append(ood_decision_on_unk_boxes)
-            if RANK_BOXES:
+            if CUSTOM_HYP.unk.rank.RANK_BOXES and CUSTOM_HYP.unk.USE_HEURISTICS:
                 distances_per_image.append(distances_per_proposal)
 
             # # # Plot the original image with the boxes (use draw_bounding_boxes from torch)
@@ -1646,7 +1704,7 @@ class OODMethod(ABC):
             # plt.imshow(saliency_map_with_unk_boxes.permute(1,2,0).numpy())
             # plt.savefig('A_saliency_map_with_UNK_boxes.png')
             # plt.close()
-        if RANK_BOXES:
+        if CUSTOM_HYP.unk.rank.RANK_BOXES:
             return possible_unk_boxes_per_image, ood_decision_on_unk_boxes_per_image, distances_per_image
         else:
             return possible_unk_boxes_per_image, ood_decision_on_unk_boxes_per_image
@@ -1750,16 +1808,13 @@ class OODMethod(ABC):
         all_distances_per_proposal = []
         # TODO: Add this to constants.py
         # For small boxes removal
-        min_box_size = MIN_BOX_SIZE
+        min_box_size = CUSTOM_HYP.unk.MIN_BOX_SIZE
         # For big boxes removal
         unpaded_ftmap_height, unpaded_ftmap_width = unpaded_ftmaps_shape
-        max_box_size_percent = MAX_BOX_SIZE_PERCENT  # The percentage of the feature map size that a box can take
+        max_box_size_percent = CUSTOM_HYP.unk.MAX_BOX_SIZE_PERCENT  # The percentage of the feature map size that a box can take
         # IoU threshold for preds
-        iou_thr = MAX_IOU_WITH_PREDS
+        iou_thr = CUSTOM_HYP.unk.MAX_IOU_WITH_PREDS
         for idx_thr in range(len(possible_unk_boxes_per_thr)):
-            # Remove the unk_proposals_one_thr from the first stride?
-            if idx_thr == 0:
-                continue
             unk_proposals_one_thr = possible_unk_boxes_per_thr[idx_thr].clone()
             # Add the padding to the bounding unk_proposals_one_thr
             unk_proposals_one_thr[:, 0] += padding[0]
@@ -1768,6 +1823,16 @@ class OODMethod(ABC):
             unk_proposals_one_thr[:, 3] += padding[1]
             # Obtain the width and height of the unk_proposals_one_thr
             w, h = unk_proposals_one_thr[:, 2] - unk_proposals_one_thr[:, 0], unk_proposals_one_thr[:, 3] - unk_proposals_one_thr[:, 1]
+            
+            # Do we want to remove proposals using some heuristics?
+            if not CUSTOM_HYP.unk.USE_HEURISTICS:  # In case we don't want to use heuristics ro remove UNK proposals
+                # Just add the boxes to the list
+                all_unk_prop.append(unk_proposals_one_thr)
+                continue
+            # Yes
+            # 0: Remove the unk_proposals_one_thr from the first stride?
+            if idx_thr == 0 and not CUSTOM_HYP.unk.REMOVE_FIRST_THRESHOLD:
+                continue
             # 1º: Remove small unk_proposals_one_thr
             mask_small_boxes = (w >= min_box_size) & (h >= min_box_size)
             # 2º: Remove big unk_proposals_one_thr
@@ -1812,7 +1877,7 @@ class OODMethod(ABC):
                 unk_proposals_one_thr = unk_proposals_one_thr[~contain_mask]
 
             
-            if RANK_BOXES:
+            if CUSTOM_HYP.unk.rank.RANK_BOXES:
                 if len(unk_proposals_one_thr) > 0:
                     # 5º: Rank the unk_proposals_one_thr using their features (extracted from the feature maps) and comparing them
                     #   to the centroids of every known class. Then, select the unk_proposals_one_thr that are far from the centroids
@@ -1851,43 +1916,44 @@ class OODMethod(ABC):
                             distances_per_proposal.append(distances_one_cls_per_bbox)
                     # Convert to array and make some operation
                     distances_per_proposal = np.array(distances_per_proposal)
-                    if RANK_BOXES_OPERATION == 'mean':
+                    if CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'mean':
                         distances_per_proposal = distances_per_proposal.mean(axis=0)
-                    elif RANK_BOXES_OPERATION == 'max':
+                    elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'max':
                         distances_per_proposal = distances_per_proposal.max(axis=0)
-                    elif RANK_BOXES_OPERATION == 'sum':
+                    elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'sum':
                         distances_per_proposal = distances_per_proposal.sum(axis=0)
-                    elif RANK_BOXES_OPERATION == 'min':
+                    elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'min':
                         distances_per_proposal = distances_per_proposal.min(axis=0) * 100  # To compensate the low values
                     # Geometric mean
-                    elif RANK_BOXES_OPERATION == 'geometric_mean':
+                    elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'geometric_mean':
                         from scipy.stats import gmean
-                        distances_per_proposal = gmean(distances_per_proposal, axis=0)
+                        distances_per_proposal = (gmean(distances_per_proposal, axis=0) - 0.02) * 1000
             
             # Append the unk_proposals_one_thr
             all_unk_prop.append(unk_proposals_one_thr)
-            if RANK_BOXES:
+            if CUSTOM_HYP.unk.rank.RANK_BOXES:
                 if len(unk_proposals_one_thr) > 0:
                     all_distances_per_proposal.append(distances_per_proposal)
 
         # Concatenate all the unk_proposals from the different thresholds -> shape = (num_boxes, 4)
         all_unk_prop = torch.cat(all_unk_prop, dim=0).float()
 
-        if RANK_BOXES:  # In case we want to rank the unk_proposal, we return the distances too
-            # Return a tensor with shape (num_boxes, 4) and the distances per proposal
-            if len(all_distances_per_proposal) > 0:
-                all_distances_per_proposal = np.concatenate(all_distances_per_proposal)
-            else:
-                all_distances_per_proposal = np.array([])
-
-            if MAX_NUM_UNK_BOXES_PER_IMAGE > 0 and len(all_distances_per_proposal) > 0:
-                # Select the MAX_NUM_UNK_BOXES_PER_IMAGE unk_proposals_one_thr with the highest distance
-                if GET_BOXES_WITH_GREATER_RANK:
-                    idx_sorted = np.argsort(all_distances_per_proposal)[::-1].copy()  # Order from greater to lower
+        if CUSTOM_HYP.unk.USE_HEURISTICS:  # In case we want to use heuristics to remove unk_proposals
+            if CUSTOM_HYP.unk.rank.RANK_BOXES:  # In case we want to rank the unk_proposal, we return the distances too
+                # Return a tensor with shape (num_boxes, 4) and the distances per proposal
+                if len(all_distances_per_proposal) > 0:
+                    all_distances_per_proposal = np.concatenate(all_distances_per_proposal)
                 else:
-                    idx_sorted = np.argsort(all_distances_per_proposal)  # Order from lower to greater
-                all_distances_per_proposal = all_distances_per_proposal[idx_sorted[:MAX_NUM_UNK_BOXES_PER_IMAGE]]
-                all_unk_prop = all_unk_prop[idx_sorted[:MAX_NUM_UNK_BOXES_PER_IMAGE]]
+                    all_distances_per_proposal = np.array([])
+
+                if CUSTOM_HYP.unk.rank.MAX_NUM_UNK_BOXES_PER_IMAGE > 0 and len(all_distances_per_proposal) > 0:
+                    # Select the MAX_NUM_UNK_BOXES_PER_IMAGE unk_proposals_one_thr with the highest distance
+                    if CUSTOM_HYP.unk.rank.GET_BOXES_WITH_GREATER_RANK:
+                        idx_sorted = np.argsort(all_distances_per_proposal)[::-1].copy()  # Order from greater to lower
+                    else:
+                        idx_sorted = np.argsort(all_distances_per_proposal)  # Order from lower to greater
+                    all_distances_per_proposal = all_distances_per_proposal[idx_sorted[:CUSTOM_HYP.unk.rank.MAX_NUM_UNK_BOXES_PER_IMAGE]]
+                    all_unk_prop = all_unk_prop[idx_sorted[:CUSTOM_HYP.unk.rank.MAX_NUM_UNK_BOXES_PER_IMAGE]]
             
             return all_unk_prop, all_distances_per_proposal
         
@@ -2786,7 +2852,7 @@ class ActivationsExtractor(DistanceMethod):
             imgs, targets = self.prepare_data_for_model(data, device)
 
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
-            results = model.predict(imgs, save=False, verbose=False)
+            results = model.predict(imgs, save=False, verbose=False, device=device)
 
             ### Match the predicted boxes to the ground truth boxes ###
             self.match_predicted_boxes_to_targets(results, targets, self.iou_threshold_for_matching)
@@ -2864,7 +2930,7 @@ class FeaturemapExtractor(DistanceMethod):
             imgs, targets = self.prepare_data_for_model(data, device)
 
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
-            results = model.predict(imgs, save=False, verbose=False)
+            results = model.predict(imgs, save=False, verbose=False, device=device)
 
             ### Match the predicted boxes to the ground truth boxes ###
             self.match_predicted_boxes_to_targets(results, targets, self.iou_threshold_for_matching)
