@@ -25,7 +25,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = gpu_number
 device = 'cuda:0'
 
 # Set model
-expl_method = "ScoreCAM"  # GradCAM , HiResCAM, GradCAMPlusPlus, XGradCAM , LayerCAM, EigenGradCAM and EigenCAM
+expl_method = "LayerCAM"  # GradCAM , HiResCAM, GradCAMPlusPlus, XGradCAM , LayerCAM, EigenGradCAM and EigenCAM
 #targ_layers = [15, 18, 21]
 targ_layers = [15]
 renormalize = False

@@ -176,6 +176,7 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
         fp_os = defaultdict(list)
 
         # For each class, compute some metrics
+        n_clases_wout_preds = 0
         for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
             # Get the predictions with this class as predicted class
             one_class_preds = {
@@ -192,10 +193,13 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
                 one_class_preds["bboxes"].extend(one_img_preds['bboxes'][current_cls_preds_mask].tolist())
             one_class_preds["confs"] = np.array(one_class_preds["confs"], dtype=np.float32)
             one_class_preds["bboxes"] = np.array(one_class_preds["bboxes"], dtype=np.float32)
-
+            
 
             # for thresh in range(50, 100, 5):
             thresh = 50  # IoU threshold
+            if one_class_preds["confs"].shape[0] == 0:
+                logger.info(f"No predictions for class {cls_name}")
+                continue
             rec, prec, ap, unk_det_as_known, num_unk, tp_plus_fp_closed_set, fp_open_set = voc_eval(
                 current_class_predictions=one_class_preds,
                 all_targets=all_targets,
@@ -220,9 +224,41 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
             except:
                 recs[thresh].append(0)
                 precs[thresh].append(0)
-            logger.info(f"Class: {cls_name}, AP: {ap * 100:.2f}, Recall: {rec[-1] * 100:.2f}, Precision: {prec[-1] * 100:.2f}")
-
+            logger.info(f"Class: {cls_name}, AP: {ap * 100:.2f}, Recall: {rec[-1] * 100:.2f}, Precision: {prec[-1] * 100:.2f}")       
+    
+    # Check if we are in coco_ood, where ONLY the unknown class is present. If is the case, we need to compute the metrics for the unknown class ONLY
+    for t in all_targets:
+        number_of_known_targets = torch.sum(t['cls'] != UNKNOWN_CLASS_INDEX)
+        if number_of_known_targets > 0:
+            break
+    if number_of_known_targets == 0:
+        detections_unksniffer = {}
+        for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
+            one_class_preds ={}
+            if cls_name == 'unknown':
+                cls_id = UNKNOWN_CLASS_INDEX
+            for one_img_preds in all_predictions:
+                current_cls_preds_mask = one_img_preds['cls'] == cls_id
+                # Obtain an array of shape [N,5], where N is the number of predictions for this class
+                # and 5 is the format [x1, y1, x2, y2, conf]
+                one_class_preds[one_img_preds['img_name']] = np.concatenate([one_img_preds['bboxes'][current_cls_preds_mask], one_img_preds['conf'][current_cls_preds_mask][:, None]], axis=1)
+            detections_unksniffer[cls_id] = one_class_preds
+        # annotations =  dict[image_file] = numpy.array([[x1,y1,x2,y2, cl_id], [...],...])
+        annotations_unksniffer = {}
+        for one_img_targets in all_targets:
+            annotations_unksniffer[one_img_targets['img_name']] = np.concatenate([one_img_targets['bboxes'], one_img_targets['cls'][:, None]], axis=1)
+        
+        # Compute metrics for UNK
+        recall, precision, ap, rec, prec, state, det_image_files = voc_evaluate_as_unksniffer(
+                detections=detections_unksniffer,
+                annotations=annotations_unksniffer,
+                cid=UNKNOWN_CLASS_INDEX,
+            )
+        logger.info(f"Class: UNK from UnkSniffer, AP: {ap * 100:.2f}, Recall: {recall * 100:.2f}, Precision: {precision * 100:.2f}")
+        return {}
+    
     # WI is calculated for all_test?? Or only for WI split?
+    #if n_clases_wout_preds < 19:
     wi = compute_WI_at_many_recall_level(all_recs, tp_plus_fp_cs, fp_os, known_classes=known_classes)
     logger.info('Wilderness Impact: ' + str(wi))
     logger.info('Wilderness Impact Recall 0.8: ' + str(wi[0.8]))
@@ -232,7 +268,7 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     ret = OrderedDict()
     mAP = {iou: np.mean(x) for iou, x in aps.items()}
     ret["bbox"] = {"AP": np.mean(list(mAP.values())), "AP50": mAP[50]}
-
+    
     total_num_unk_det_as_known = {iou: np.sum(x) for iou, x in unk_det_as_knowns.items()}
     total_num_unk = num_unks[50][0]
     logger.info('Absolute OSE (total_num_unk_det_as_known): ' + str(total_num_unk_det_as_known))
@@ -335,6 +371,44 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     # logger.info('A-OSE: ' + str(total_num_unk_det_as_known))
     # logger.info('Wilderness Impact Recall 0.8 [%]: ' + str(wi[0.8]))
     # logger.info('-----------------')
+
+    # Now adapt the data to the UnkSniffer evaluation code
+    # detections = dict[cid][image_file] = numpy.array([[x1,y1,x2,y2,score], [...],...])
+    detections_unksniffer = {}
+    for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
+        one_class_preds ={}
+        if cls_name == 'unknown':
+            cls_id = UNKNOWN_CLASS_INDEX
+        for one_img_preds in all_predictions:
+            current_cls_preds_mask = one_img_preds['cls'] == cls_id
+            # Obtain an array of shape [N,5], where N is the number of predictions for this class
+            # and 5 is the format [x1, y1, x2, y2, conf]
+            one_class_preds[one_img_preds['img_name']] = np.concatenate([one_img_preds['bboxes'][current_cls_preds_mask], one_img_preds['conf'][current_cls_preds_mask][:, None]], axis=1)
+        detections_unksniffer[cls_id] = one_class_preds
+    # annotations =  dict[image_file] = numpy.array([[x1,y1,x2,y2, cl_id], [...],...])
+    annotations_unksniffer = {}
+    for one_img_targets in all_targets:
+        annotations_unksniffer[one_img_targets['img_name']] = np.concatenate([one_img_targets['bboxes'], one_img_targets['cls'][:, None]], axis=1)
+    
+    # Compute metrics for UNK
+    recall, precision, ap, rec, prec, state, det_image_files = voc_evaluate_as_unksniffer(
+            detections=detections_unksniffer,
+            annotations=annotations_unksniffer,
+            cid=UNKNOWN_CLASS_INDEX,
+        )
+    logger.info(f"Class: UNK, AP: {ap * 100:.2f}, Recall: {recall * 100:.2f}, Precision: {precision * 100:.2f}")
+    # for idx_cls in range(len(class_names)):
+    #     if idx_cls == 20:
+    #         idx_cls = UNKNOWN_CLASS_INDEX
+        # recall, precision, ap, rec, prec, state, det_image_files = voc_evaluate_as_unksniffer(
+        #     detections=detections_unksniffer,
+        #     annotations=annotations_unksniffer,
+        #     cid=idx_cls,
+        # )
+    #     if idx_cls == UNKNOWN_CLASS_INDEX:
+    #         idx_cls = 20
+    #     logger.info(f"Class: {class_names[idx_cls]}, AP: {ap * 100:.2f}, Recall: {recall * 100:.2f}, Precision: {precision * 100:.2f}")
+
     return results_dict
 
 
@@ -496,8 +570,8 @@ def voc_eval(current_class_predictions: Dict[str, List], all_targets: List[Dict]
     # for imagename in imagenames:
     #     R = [obj for obj in recs[imagename] if obj["name"] == classname]  # De cada imagen, cogemos los objetos de la clase classname
     #     bbox = np.array([x["bbox"] for x in R])
-    #     difficult = np.array([x["difficult"] for x in R]).astype(np.bool)
-    #     # difficult = np.array([False for x in R]).astype(np.bool)  # treat all "difficult" as GT
+    #     difficult = np.array([x["difficult"] for x in R]).astype(np.bool_)
+    #     # difficult = np.array([False for x in R]).astype(np.bool_)  # treat all "difficult" as GT
     #     det = [False] * len(R)
     #     npos = npos + sum(~difficult)
     #     class_recs[imagename] = {"bbox": bbox, "difficult": difficult, "det": det}
@@ -628,7 +702,7 @@ def voc_eval(current_class_predictions: Dict[str, List], all_targets: List[Dict]
     # for imagename in imagenames:
     #     R = [obj for obj in recs[imagename] if obj["name"] == 'unknown']
     #     bbox = np.array([x["bbox"] for x in R])
-    #     difficult = np.array([x["difficult"] for x in R]).astype(np.bool)
+    #     difficult = np.array([x["difficult"] for x in R]).astype(np.bool_)
     #     det = [False] * len(R)
     #     n_unk = n_unk + sum(~difficult)
     #     unknown_class_recs[imagename] = {"bbox": bbox, "difficult": difficult, "det": det}
@@ -708,3 +782,120 @@ def plot_pr_curve(precision, recall, filename, base_path='/home/fk1/workspace/OW
 
     # print(precision)
     # print(recall)
+
+
+def voc_evaluate_as_unksniffer(detections, annotations, cid, ovthresh=0.5, use_07_metric=True):
+    """
+    Top level function that does the PASCAL VOC evaluation.
+    :param detections: Bounding box detections dictionary, keyed on class id (cid) and image_file,
+                       dict[cid][image_file] = numpy.array([[x1,y1,x2,y2,score], [...],...])
+    :param annotations: Ground truth annotations, keyed on image_file,
+                       dict[image_file] = numpy.array([[x1,y1,x2,y2,score], [...],...])
+    :param cid: Class ID (0 is typically reserved for background, but this function does not care about the value)
+    :param ovthresh: Intersection over union overlap threshold, above which detection is considered as correct,
+                       if it matches to a ground truth bounding box along with its class label (cid)
+    :param use_07_metric: Whether to use VOC 2007 metric
+    :return: recall, precision, ap (average precision)
+    """
+    # detections {81: [np, np, np...]}, np = numpy.array([[x1,y1,x2,y2,score], [...],...])
+    # annotations [np, np, np], np = numpy.array([[x1,y1,x2,y2,class_id], [...],...])
+    # cid = 81
+    import copy
+
+    # extract ground truth objects from the annotations for this class
+    class_gt_bboxes = {}
+    npos = 0  # number of ground truth bboxes having label cid
+    # annotations keyed on image file names or paths or anything that is unique for each image
+    #for image_name in annotations:
+    for image_name in annotations.keys():
+        # for each image list of objects: [[x1,y1, x2,y2, cid], [], ...]
+        R = [obj[:4] for obj in annotations[image_name] if int(obj[-1]) == cid]
+        bbox = np.array(R)
+        # difficult is not stored: take it as 0/false
+        difficult = np.array([0] * len(R)).astype(np.bool_)
+        det = [False] * len(R)
+        npos = npos + sum(~difficult)
+        class_gt_bboxes[image_name] = {'bbox': bbox, 'difficult': difficult, 'det': det}
+
+    # detections' image file names/paths
+    det_image_files = []
+    confidences = []
+    det_bboxes = []
+    # detections should be keyed on class_id (cid)
+    class_dict = detections[cid]
+    #for image_file in class_dict:
+    for image_file in class_dict.keys():
+        dets = class_dict[image_file]
+        for k in range(dets.shape[0]):
+            det_image_files.append(image_file)
+            det_bboxes.append(dets[k, 0:4])
+            confidences.append(dets[k, -1])
+    det_bboxes = np.array(det_bboxes)
+    confidences = np.array(confidences)
+
+    # number of detections
+    num_dets = len(det_image_files)
+    tp = np.zeros(num_dets)
+    fp = np.zeros(num_dets)
+
+    if det_bboxes.shape[0] == 0:
+        return 0., 0., 0.
+
+    # sort detections by confidence
+    sorted_ind = np.argsort(-confidences)
+    det_bboxes = det_bboxes[sorted_ind, :]
+    det_image_files = [det_image_files[x] for x in sorted_ind]
+
+    # go down dets and mark TPs and FPs
+    for d in range(num_dets):
+        R = class_gt_bboxes[det_image_files[d]]
+        bb = det_bboxes[d, :].astype(float)
+        ovmax = -np.inf
+        BBGT = R['bbox'].astype(float)
+
+        if BBGT.size > 0:
+            ## compute overlaps
+            # intersection
+            ixmin = np.maximum(BBGT[:, 0], bb[0])
+            iymin = np.maximum(BBGT[:, 1], bb[1])
+            ixmax = np.minimum(BBGT[:, 2], bb[2])
+            iymax = np.minimum(BBGT[:, 3], bb[3])
+            iw = np.maximum(ixmax - ixmin + 1., 0.)
+            ih = np.maximum(iymax - iymin + 1., 0.)
+            inters = iw * ih
+
+            # union
+            uni = ((bb[2] - bb[0] + 1.) * (bb[3] - bb[1] + 1.) +
+                   (BBGT[:, 2] - BBGT[:, 0] + 1.) *
+                   (BBGT[:, 3] - BBGT[:, 1] + 1.) - inters)
+
+            # IoU
+            overlaps = inters / uni
+            ovmax = np.max(overlaps)
+            jmax = np.argmax(overlaps)
+
+        if ovmax > ovthresh:
+            if not R['difficult'][jmax]:
+                if not R['det'][jmax]:
+                    tp[d] = 1.
+                    R['det'][jmax] = 1
+                else:
+                    fp[d] = 1.
+        else:
+            fp[d] = 1.
+
+    state = [copy.deepcopy(tp), copy.deepcopy(fp)]
+    # compute precision recall
+    stp = sum(tp)
+    recall = stp / npos
+    precision = stp / (stp + sum(fp))
+
+    # compute average precision
+    fp = np.cumsum(fp)
+    tp = np.cumsum(tp)
+    rec = tp / float(npos)
+    # avoid divide by zero in case the first detection matches a difficult ground truth
+    prec = tp / np.maximum(tp + fp, np.finfo(np.float64).eps)
+    ap = voc_ap(rec, prec, use_07_metric)
+
+    return recall, precision, ap, rec, prec, state, det_image_files

@@ -110,15 +110,15 @@ input_size = (640, 640)
 gpu_batch = 64
 number_of_masks = 6000
 stride = 8
-p1 = 0.5
+p1 = 0.8
 explainer = DRISE(model=model, 
                   input_size=input_size, 
                   device=device,
                   gpu_batch=gpu_batch)
 
 # Generate masks for RISE or use the saved ones.
-generate_new = False
-mask_file = f"./yolo_drise/masks/masks_640x640.npy"
+generate_new = True
+mask_file = f"./yolo_drise/masks/masks_640x640_{p1:.2f}.npy"
 
 if generate_new or not os.path.isfile(mask_file):
     # explainer.generate_masks(N=5000, s=8, p1=0.1, savepath= mask_file)

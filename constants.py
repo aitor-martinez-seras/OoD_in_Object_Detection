@@ -33,6 +33,9 @@ CONF_THRS_FOR_BENCHMARK = [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001
 
 STRIDES_RATIO = [8, 16, 32]  # The ratio between each level of the FPN and the original image size ((orig_img_size / feature_map_size) = ratio)
 
+# For PLOTS
+IMAGE_FORMAT = 'jpg'
+
 ### Hyperparameters ###
 
 # # For YOLO

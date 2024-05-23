@@ -166,8 +166,7 @@ class yolov8_heatmap:
 
     def __init__(
         self,
-        yolo_model: Optional[YOLO] = None,
-        weight: str = "",
+        weight: Union[str, YOLO] = "",
         device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
         method="EigenGradCAM",
         layer=[12, 17, 21],
@@ -179,18 +178,27 @@ class yolov8_heatmap:
         """
         Initialize the YOLOv8 heatmap layer.
         """
-        if weight != "":
-            device = device
-            ckpt = torch.load(weight)
-            model_names = ckpt['model'].names
-            model = attempt_load_weights(weight, device)
-            model.info()
+        if isinstance(weight, str):
+            if weight != "":
+                device = device
+                ckpt = torch.load(weight)
+                model_names = ckpt['model'].names
+                model = attempt_load_weights(weight, device)
+                model.info()
+                for p in model.parameters():
+                    p.requires_grad_(True)
+            else:
+                raise ValueError("weight must be a path to the checkpoint file")
+        elif weight:
+            # ckpt_path = yolo_model.ckpt
+            # ckpt = torch.load()
+            # model_names = ckpt['model'].names
+            # model = attempt_load_weights(weight, device)
+            model = weight.model
+            model_names = model.names
+            device = weight.device
             for p in model.parameters():
                 p.requires_grad_(True)
-        elif yolo_model:
-            model = yolo_model.model
-            model_names = model.names
-            device = yolo_model.device
         model.eval()
 
         backward_type = "all"        
@@ -319,8 +327,12 @@ class yolov8_heatmap:
         elif isinstance(image, np.ndarray):
             raise NotImplementedError
         elif isinstance(image, Tensor):
-            tensor = image
-            tensor = tensor.float() / 255.0
+            # Create a new tensor out of the image tensor
+            tensor = image.data
+            tensor = tensor.float() / 255
+            # if torch.requires_grad_(tensor) == False:
+            #     tensor = torch.autograd.Variable(tensor, requires_grad=True)
+            
         else:
             raise ValueError("img_path must be a string or a numpy array")
 
