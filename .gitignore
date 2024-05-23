@@ -17,6 +17,7 @@ nohup.out
 /*.jpg
 al_expl_imgs
 explainability_images
+predicted_dataset
 
 # C extensions
 *.so
