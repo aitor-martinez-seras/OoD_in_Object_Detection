@@ -89,10 +89,12 @@ def select_device(device='', batch=0, newline=False, verbose=True):
             p = torch.cuda.get_device_properties(i)
             s += f"{'' if i == 0 else space}CUDA:{d} ({p.name}, {p.total_memory / (1 << 20):.0f}MiB)\n"  # bytes to MB
         # TODO: Introducido por AMS
-        if n > 1:
-            arg = 'cuda:0'  # Antes solo estaba esto y acababa haciendo que todo fuera a la GPU 0
-        else:
-            arg = f'cuda:{devices[0]}'
+        # if n > 1:
+        #     arg = 'cuda:0'  # Antes solo estaba esto y acababa haciendo que todo fuera a la GPU 0
+        # else:
+        #     print(f"Using CUDA:{devices[0]}")
+        #     arg = f'cuda:{devices[0]}'
+        arg = 'cuda:0'  # Antes solo estaba esto y acababa haciendo que todo fuera a la GPU 0
     elif mps and getattr(torch, 'has_mps', False) and torch.backends.mps.is_available() and TORCH_2_0:
         # Prefer MPS if available
         s += 'MPS\n'

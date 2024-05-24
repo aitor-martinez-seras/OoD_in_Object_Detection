@@ -25,7 +25,7 @@ from ood_utils import get_measures, configure_extra_output_of_the_model, OODMeth
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride
 from data_utils import read_json, write_json, load_dataset_and_dataloader
 from unknown_localization_utils import select_ftmaps_summarization_method, select_thresholding_method
-from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, OOD_METHOD_CHOICES, CONF_THRS_FOR_BENCHMARK
+from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, OOD_METHOD_CHOICES, CONF_THRS_FOR_BENCHMARK, TARGETS_RELATED_OPTIONS
 from custom_hyperparams import CUSTOM_HYP
 
 
@@ -146,6 +146,11 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
     activations_path = STORAGE_PATH / f'{ood_method.which_internal_activations}_{model.ckpt["train_args"]["name"]}_activations.pt'
     clusters_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_clusters.pt'
 
+    if args.ind_info_creation_option in TARGETS_RELATED_OPTIONS:
+        thresholds_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_thresholds_{args.ind_info_creation_option}.json'
+        activations_path = STORAGE_PATH / f'{ood_method.which_internal_activations}_{model.ckpt["train_args"]["name"]}_activations_{args.ind_info_creation_option}.pt'
+        clusters_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_clusters_{args.ind_info_creation_option}.pt'
+
     ### Load the thresholds ###
     if args.load_thresholds:
         # Load thresholds from disk
@@ -175,6 +180,8 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
             logger.info("In-distribution data processed")
             logger.info("Saving in-distribution activations...")
             # Save activations
+            if args.ind_info_creation_option in TARGETS_RELATED_OPTIONS:
+                torch.save(ind_activations, STORAGE_PATH / f'{ood_method.which_internal_activations}_{model.ckpt["train_args"]["name"]}_activations_{args.ind_info_creation_option}.pt', pickle_protocol=5)
             torch.save(ind_activations, STORAGE_PATH / f'{ood_method.which_internal_activations}_{model.ckpt["train_args"]["name"]}_activations.pt', pickle_protocol=5)
             logger.info(f"In-distribution activations succesfully saved in {activations_path}")
 
@@ -200,10 +207,10 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
             logger.info("Generating in-distribution scores...")
             ind_scores = ood_method.compute_scores_from_activations(ind_activations, logger)
 
-            # if unk_prop_thr:
-            #     logger.info("Generating scores to evaluate UNK proposals...")
-            #     scores_for_unk_prop = ood_method.compute_scores_from_activations_for_unk_prop(ind_activations, logger)
-            #     logger.info("Saving UNK proposals...")
+            if CUSTOM_HYP.unk.rank.USE_UNK_PROPOSALS_THR:
+                logger.info("Generating scores to evaluate UNK proposals...")
+                scores_for_unk_prop = ood_method.compute_scores_from_activations_for_unk_proposals(ind_activations, logger)
+                logger.info("Saving UNK proposals...")
         
         # For the rest of the methods activations are the scores themselves
         else:
@@ -213,10 +220,10 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
         # Finally generate and save the thresholds
         logger.info("Generating thresholds...")
         ood_method.thresholds = ood_method.generate_thresholds(ind_scores, tpr=args.tpr_thr, logger=logger)
-        # if unk_prop_thr:
-            #     logger.info("Generating scores to evaluate UNK proposals...")
-            #     scores_for_unk_prop = ood_method.genera(ind_activations, logger)
-            #     logger.info("Saving UNK proposals...")
+        if CUSTOM_HYP.unk.rank.USE_UNK_PROPOSALS_THR:
+                logger.info("Generating scores to evaluate UNK proposals...")
+                scores_for_unk_prop = ood_method.generate_unk_prop_thr(scores_for_unk_prop, tpr=args.tpr_thr)
+                logger.info("Saving UNK proposals...")
         logger.info("Saving thresholds...")
         write_json(ood_method.thresholds, thresholds_path)
 

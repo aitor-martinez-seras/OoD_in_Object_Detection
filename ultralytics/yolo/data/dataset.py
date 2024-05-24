@@ -328,6 +328,10 @@ class FilteredYOLODataset(YOLODataset):
             
             # 3. Create the labels using the annotations
             self.labels = self.create_labels_using_coco_ood_json_annotations(annotations)
+            # 3.1: In case we want to use only a limited set of images
+            from custom_hyperparams import CUSTOM_HYP
+            if CUSTOM_HYP.USE_ONLY_SUBSET_OF_IMAGES:
+                self.select_subset_of_images(images_to_select=CUSTOM_HYP.IMAGES_TO_SELECT)
             # 4: Update the attributes related with the labels (im_files, ni, npy_files, ...)
             self.update_attributes_to_new_labels()
             assert len(self.labels) == len(self.im_files), 'Number of labels and images must be equal'
@@ -393,6 +397,16 @@ class FilteredYOLODataset(YOLODataset):
         if self.fraction < 1:
             im_files = im_files[:round(len(im_files) * self.fraction)]
         return im_files
+    
+    def select_subset_of_images(self, images_to_select: List[str]):
+        """
+        Select a subset of images to use in the dataset. This method is used to select a subset of images
+        when we want to use only a limited set of images for training, validation or testing.
+        """
+        # Get the images that are part of the subset
+        subset_images = [im_path + '.jpg' for im_path in images_to_select]
+        # Filter the labels to include only the ones present in the subset
+        self.labels = [lb for lb in self.labels if lb['im_file'].split('/')[-1] in subset_images]
 
     def upate_labels_to_use_less_classes(self):
         """

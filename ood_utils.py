@@ -1146,6 +1146,10 @@ class OODMethod(ABC):
                         directory_name = f'{now}_{self.name}'
                         imgs_folder_path = folder_path / directory_name
                         imgs_folder_path.mkdir(exist_ok=True)
+                        # Save hyperparameters as dict
+                        from dataclasses import asdict
+                        with open(imgs_folder_path / 'hyperparameters.json', 'w') as f:
+                            json.dump(asdict(CUSTOM_HYP), f)
                         delattr(model.model, 'which_layers_to_extract')
                         delattr(model.model, 'extraction_mode')
                         # Heatmaps in shape (M, H, W), M being the batch size an in form of a tensor in cpu
@@ -1188,7 +1192,6 @@ class OODMethod(ABC):
                     
                 class_names = {k:v for k, v in model.names.items() if k < 20}
                 class_names.update({80: 'UNK'})
-                folder_path = Path("./predicted_dataset")
                 plot_results( 
                     class_names=class_names,
                     results=results,
@@ -1268,6 +1271,13 @@ class OODMethod(ABC):
 
             ### Preparar imagenes y targets ###
             imgs, targets = self.prepare_data_for_model(data, device)
+
+            # # Write the file names of the images alongside the number of the image
+            # with open(f'./imagenames.txt', 'a') as f:
+            #     for i, im_file in enumerate(data['im_file']):
+            #         f.write(f'{i+number_of_images_processed} - {im_file}\n')
+            # number_of_images_processed += len(data['im_file'])
+            # continue
             
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
             results = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold, device=device)
@@ -1347,6 +1357,8 @@ class OODMethod(ABC):
                 unknown_mask = ood_decision_one_image == 0
                 bboxes_coords = res.boxes.xyxy.cpu()
                 bboxes_cls = torch.where(unknown_mask, torch.tensor(80, dtype=torch.float32), res.boxes.cls.cpu())   
+                # Make all the preds to be the class 80 to known the max recall possible
+                #bboxes_cls = torch.tensor(80, dtype=torch.float32).repeat(len(res.boxes.cls))
                 bboxes_conf = res.boxes.conf.cpu()
                 # TODO: La logica de como ignorar ciertos unknowns la tenemos que idear, ya que por el momento no tiene 
                 #   sentido que las propuestas no sean unknowns
@@ -1571,44 +1583,45 @@ class OODMethod(ABC):
                         htmap_h, htmap_w = heatmap.shape[0], heatmap.shape[1]
                         heatmap = heatmap[y_padding:htmap_h-y_padding, x_padding:htmap_w-x_padding]
                         heatmap_for_plot = heatmap.clone().numpy()
-                        if CUSTOM_HYP.unk.xai.INFO_MERGING_METHOD == "scale_then_minus":
-                            # Scale the heatmap [0, 1] to the values of the saliency map
-                            heatmap = (saliency_map.max() - saliency_map.min()) * (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min()) + saliency_map.min()
-                            heatmap = heatmap.numpy()
-                            saliency_map = saliency_map - heatmap
-                            saliency_map = np.clip(saliency_map, 0, saliency_map.max())
-                        elif CUSTOM_HYP.unk.xai.INFO_MERGING_METHOD == "multiply":
-                            # Take the element-wise multiplication of the saliency map and the heatmap,
-                            # using the heatmap values as weights but inverted (1-htmap_value) * saliency_map
-                            heatmap_inverted = 1 - heatmap.numpy()
-                            saliency_map = saliency_map * heatmap_inverted
-                            if folder_path:
-                                plt.imshow(heatmap_inverted, cmap='viridis')
-                                plt.colorbar()
-                                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_inverted.{IMAGE_FORMAT}')
-                                plt.close()
-                        elif CUSTOM_HYP.unk.xai.INFO_MERGING_METHOD == "turn_off_pixels":
-                            # Put a threshold on the heatmap and turn off the pixels that are above the threshold
-                            threshold = 0.5
-                            heatmap_thresholded = heatmap.numpy() < threshold  # Turn off the pixels above the threshold
-                            heatmap_thresholded = heatmap_thresholded.astype(int)
-                            saliency_map = heatmap_thresholded * saliency_map
-                            if folder_path:
-                                plt.imshow(heatmap_thresholded, cmap='gray')
-                                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_thresholded.{IMAGE_FORMAT}')
-                                plt.close()
-                        elif CUSTOM_HYP.unk.xai.INFO_MERGING_METHOD == "sigmoid":
-                            # Use the heatmap as a mask for the saliency map
-                            heatmap = torch.sigmoid((heatmap - CUSTOM_HYP.unk.xai.SIGMOID_INTERCEPT) * CUSTOM_HYP.unk.xai.SIGMOID_SLOPE)
-                            heatmap = 1 - heatmap.numpy()  # Invert the values
-                            saliency_map = heatmap * saliency_map
-                            if folder_path:
-                                plt.imshow(heatmap, cmap='viridis')
-                                plt.colorbar()
-                                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_sigmoid.{IMAGE_FORMAT}')
-                                plt.close()
-                        else:
-                            raise ValueError("The method to merge the saliency map and the heatmap is not valid")
+                        if CUSTOM_HYP.unk.USE_XAI_TO_MODIFY_SALIENCY:
+                            if CUSTOM_HYP.unk.xai.INFO_MERGING_METHOD == "scale_then_minus":
+                                # Scale the heatmap [0, 1] to the values of the saliency map
+                                heatmap = (saliency_map.max() - saliency_map.min()) * (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min()) + saliency_map.min()
+                                heatmap = heatmap.numpy()
+                                saliency_map = saliency_map - heatmap
+                                saliency_map = np.clip(saliency_map, 0, saliency_map.max())
+                            elif CUSTOM_HYP.unk.xai.INFO_MERGING_METHOD == "multiply":
+                                # Take the element-wise multiplication of the saliency map and the heatmap,
+                                # using the heatmap values as weights but inverted (1-htmap_value) * saliency_map
+                                heatmap_inverted = 1 - heatmap.numpy()
+                                saliency_map = saliency_map * heatmap_inverted
+                                if folder_path:
+                                    plt.imshow(heatmap_inverted, cmap='viridis')
+                                    plt.colorbar()
+                                    plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_inverted.{IMAGE_FORMAT}')
+                                    plt.close()
+                            elif CUSTOM_HYP.unk.xai.INFO_MERGING_METHOD == "turn_off_pixels":
+                                # Put a threshold on the heatmap and turn off the pixels that are above the threshold
+                                threshold = 0.5
+                                heatmap_thresholded = heatmap.numpy() < threshold  # Turn off the pixels above the threshold
+                                heatmap_thresholded = heatmap_thresholded.astype(int)
+                                saliency_map = heatmap_thresholded * saliency_map
+                                if folder_path:
+                                    plt.imshow(heatmap_thresholded, cmap='gray')
+                                    plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_thresholded.{IMAGE_FORMAT}')
+                                    plt.close()
+                            elif CUSTOM_HYP.unk.xai.INFO_MERGING_METHOD == "sigmoid":
+                                # Use the heatmap as a mask for the saliency map
+                                heatmap = torch.sigmoid((heatmap - CUSTOM_HYP.unk.xai.SIGMOID_INTERCEPT) * CUSTOM_HYP.unk.xai.SIGMOID_SLOPE)
+                                heatmap = 1 - heatmap.numpy()  # Invert the values
+                                saliency_map = heatmap * saliency_map
+                                if folder_path:
+                                    plt.imshow(heatmap, cmap='viridis')
+                                    plt.colorbar()
+                                    plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_sigmoid.{IMAGE_FORMAT}')
+                                    plt.close()
+                            else:
+                                raise ValueError("The method to merge the saliency map and the heatmap is not valid")
                         # Plots
                         if folder_path:
                             # Save the heatmap
@@ -1625,11 +1638,12 @@ class OODMethod(ABC):
                             plt.imshow(resize(heatmap_for_plot, orig_img_no_pad.shape[1:]), cmap='viridis', alpha=0.5)
                             plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_original_over_image.{IMAGE_FORMAT}')
                             plt.close()
-                            # Save the saliency map
-                            plt.imshow(saliency_map, cmap='viridis')
-                            plt.colorbar()
-                            plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map_new.{IMAGE_FORMAT}')
-                            plt.close()
+                            if CUSTOM_HYP.unk.USE_XAI_TO_MODIFY_SALIENCY:
+                                # Save the saliency map
+                                plt.imshow(saliency_map, cmap='viridis')
+                                plt.colorbar()
+                                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map_new.{IMAGE_FORMAT}')
+                                plt.close()
 
             ### 3. Compute the thresholds to binarize the saliency map
             thresholds = self.compute_thresholds_out_of_saliency_map(saliency_map)
@@ -1644,6 +1658,11 @@ class OODMethod(ABC):
                 
             ### 4. Extract the bounding boxes from the saliency map using the thresholds
             possible_unk_boxes_per_thr = extract_bboxes_from_saliency_map_and_thresholds(saliency_map, thresholds)
+
+            if CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
+                # Make the same process of obtaining boxes with the heatmap
+                thresholds_heatmap = self.compute_thresholds_out_of_saliency_map(heatmap)
+                possible_unk_boxes_per_thr_heatmap = extract_bboxes_from_saliency_map_and_thresholds(heatmap, thresholds_heatmap)
 
             ### 5. Postprocess the bounding boxes. Add the padding again and then convert them to the size of the feature maps
             unpaded_bbox_preds = res.boxes.xyxy.to('cpu')
@@ -1660,7 +1679,8 @@ class OODMethod(ABC):
                 bbox_preds_in_ftmap_size=bbox_preds_in_ftmap_size,
                 ood_decision_of_results=ood_decision_of_results[img_idx],
                 paded_feature_maps=paded_feature_maps_of_selected_stride,
-                selected_stride=selected_stride
+                selected_stride=selected_stride,
+                xai_boxes=possible_unk_boxes_per_thr_heatmap if CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS else None
             )
             if CUSTOM_HYP.unk.RANK_BOXES and CUSTOM_HYP.unk.USE_HEURISTICS:
                 possible_unk_boxes, distances_per_proposal = fn_output
@@ -1851,8 +1871,9 @@ class OODMethod(ABC):
         # For big boxes removal
         unpaded_ftmap_height, unpaded_ftmap_width = unpaded_ftmaps_shape
         max_box_size_percent = CUSTOM_HYP.unk.MAX_BOX_SIZE_PERCENT  # The percentage of the feature map size that a box can take
-        # IoU threshold for preds
-        iou_thr = CUSTOM_HYP.unk.MAX_IOU_WITH_PREDS
+        #####
+        # Start loop of THRs
+        ####
         for idx_thr in range(len(possible_unk_boxes_per_thr)):
             unk_proposals_one_thr = possible_unk_boxes_per_thr[idx_thr].clone()
             # Add the padding to the bounding unk_proposals_one_thr
@@ -1863,6 +1884,7 @@ class OODMethod(ABC):
             # Obtain the width and height of the unk_proposals_one_thr
             w, h = unk_proposals_one_thr[:, 2] - unk_proposals_one_thr[:, 0], unk_proposals_one_thr[:, 3] - unk_proposals_one_thr[:, 1]
             
+            #### Heuristics to remove proposals ####
             # Do we want to remove proposals using some heuristics?
             if not CUSTOM_HYP.unk.USE_HEURISTICS:  # In case we don't want to use heuristics to remove UNK proposals
                 # Just add the boxes to the list
@@ -1881,12 +1903,13 @@ class OODMethod(ABC):
             unk_proposals_one_thr = unk_proposals_one_thr[mask]
             # Use pred boxes to remove some unk_proposals_one_thr
             if len(bbox_preds_in_ftmap_size) > 0:
-                # 3º: Remove unk_proposals_one_thr with IoU > iou_thr with the predictions
-                # Compute the IoU with the predictions
-                ious = box_iou(unk_proposals_one_thr, bbox_preds_in_ftmap_size)
-                # Remove the unk_proposals_one_thr with IoU > iou_thr
-                mask = ious.max(dim=1).values < iou_thr
-                unk_proposals_one_thr = unk_proposals_one_thr[mask]
+                if CUSTOM_HYP.unk.MAX_IOU_WITH_PREDS > 0:
+                    # 3º: Remove unk_proposals_one_thr with IoU > iou_thr with the predictions
+                    # Compute the IoU with the predictions
+                    ious = box_iou(unk_proposals_one_thr, bbox_preds_in_ftmap_size)
+                    # Remove the unk_proposals_one_thr with IoU > iou_thr
+                    mask = ious.max(dim=1).values < CUSTOM_HYP.unk.MAX_IOU_WITH_PREDS
+                    unk_proposals_one_thr = unk_proposals_one_thr[mask]
 
                 # # Plot Unk prop (in yellow) and preds (in green) 
                 # import matplotlib.pyplot as plt
@@ -1905,19 +1928,26 @@ class OODMethod(ABC):
                 # plt.savefig('AAA_unk_prop_and_preds.png')
                 # plt.close()
 
-                # 4º: Remove unk_proposals_one_thr that contain a correct prediction (no OoD) inside completely
-                if CUSTOM_HYP.unk.REMOVE_PROPS_CONTAINING_PREDS:
-                    print('Remove props with preds inside')
-                    # First filter which of the predictions are not OoD
-                    bbox_preds_not_ood = bbox_preds_in_ftmap_size[np.array(ood_decision_of_results) == 1]
-                    # Create a mask that is True if the unk_proposals_one_thr contain a prediction inside
-                    contain_mask = ((bbox_preds_not_ood[:, None, 0] >= unk_proposals_one_thr[:, 0]) & 
-                                    (bbox_preds_not_ood[:, None, 1] >= unk_proposals_one_thr[:, 1]) &
-                                    (bbox_preds_not_ood[:, None, 2] <= unk_proposals_one_thr[:, 2]) &
-                                    (bbox_preds_not_ood[:, None, 3] <= unk_proposals_one_thr[:, 3])).any(dim=0)
-                    # Then select the images that do NOT (~) contain a prediction inside
-                    unk_proposals_one_thr = unk_proposals_one_thr[~contain_mask]
+                # 4º: Remove unk_proposals_one_thr that have a ratio of intersection w.r.t a prediction greater than a thr
+                if CUSTOM_HYP.unk.MAX_INTERSECTION_W_PREDS:
+                    if len(unk_proposals_one_thr) > 0:
+                        # Calculate the intersection areas
+                        inter_x1 = torch.max(unk_proposals_one_thr[:, None, 0], bbox_preds_in_ftmap_size[:, 0])
+                        inter_y1 = torch.max(unk_proposals_one_thr[:, None, 1], bbox_preds_in_ftmap_size[:, 1])
+                        inter_x2 = torch.min(unk_proposals_one_thr[:, None, 2], bbox_preds_in_ftmap_size[:, 2])
+                        inter_y2 = torch.min(unk_proposals_one_thr[:, None, 3], bbox_preds_in_ftmap_size[:, 3])
+                        inter_area = (inter_x2 - inter_x1).clamp(min=0) * (inter_y2 - inter_y1).clamp(min=0)
+                        # Calculate the areas of the prediction boxes
+                        pred_areas = (bbox_preds_in_ftmap_size[:, 2] - bbox_preds_in_ftmap_size[:, 0]) * \
+                                    (bbox_preds_in_ftmap_size[:, 3] - bbox_preds_in_ftmap_size[:, 1])
+                        # Calculate the intersection ratios
+                        intersection_ratios = inter_area / pred_areas
+                        # Find the max intersection ratio for each unknown proposal
+                        max_intersection_ratios, _ = intersection_ratios.max(dim=1)
+                        # Remove the proposals with max intersection ratio greater than 0.9. Do that by keeping the ones that are less or equal
+                        unk_proposals_one_thr = unk_proposals_one_thr[max_intersection_ratios <= CUSTOM_HYP.unk.MAX_INTERSECTION_W_PREDS]
 
+            #### Ranking boxes using diferent methods ####
             if CUSTOM_HYP.unk.RANK_BOXES:
                 if len(unk_proposals_one_thr) > 0:
                     # 5º: Rank the unk_proposals_one_thr using their features (extracted from the feature maps) and comparing them
@@ -1975,7 +2005,18 @@ class OODMethod(ABC):
                     # Geometric mean
                     elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'geometric_mean':
                         from scipy.stats import gmean
-                        distances_per_proposal = (gmean(distances_per_proposal, axis=0) - 0.02) * 1000
+                        #if CUSTOM_HYP.unk.rank.USE_OOD_THR_TO_REMOVE_PROPS:
+                        distances_per_proposal = gmean(distances_per_proposal, axis=0)
+                        #distances_per_proposal = (gmean(distances_per_proposal, axis=0) - 0.02) * 1000
+                    elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'entropy':
+                        # First make the distances be a probability distribution
+                        distances_per_proposal = distances_per_proposal / distances_per_proposal.sum(axis=0)
+                        # Compute the entropy using scipy
+                        from scipy.stats import entropy
+                        distances_per_proposal = entropy(distances_per_proposal, axis=0)
+                        #distances_per_proposal = -np.sum(distances_per_proposal * np.log2(distances_per_proposal), axis=0)
+                    else:
+                        raise NotImplementedError("This operation is not implemented yet")                        
             
             # Append the unk_proposals_one_thr
             all_unk_prop.append(unk_proposals_one_thr)
@@ -1984,10 +2025,16 @@ class OODMethod(ABC):
                     all_distances_per_proposal.append(distances_per_proposal)
                     if CUSTOM_HYP.unk.rank.USE_OOD_THR_TO_REMOVE_PROPS:
                         all_closes_cluster_per_proposal.append(idx_of_closest_cluster)
+        #####
+        # End loop of THRs
+        ####
 
         # Concatenate all the unk_proposals from the different thresholds -> shape = (num_boxes, 4)
         all_unk_prop = torch.cat(all_unk_prop, dim=0).float()
 
+        #####
+        # Modify proposals based on RANK
+        #####
         if CUSTOM_HYP.unk.USE_HEURISTICS and CUSTOM_HYP.unk.RANK_BOXES:
             # In case we want to rank the unk proposals, we return the distances as well
             # Return a tensor with shape (num_boxes, 4) and the distances per proposal
@@ -2025,13 +2072,20 @@ class OODMethod(ABC):
                     # all_distances_per_proposal = all_distances_per_proposal[idx_sorted[:CUSTOM_HYP.unk.rank.MAX_NUM_UNK_BOXES_PER_IMAGE]]
                     # all_unk_prop = all_unk_prop[idx_sorted[:CUSTOM_HYP.unk.rank.MAX_NUM_UNK_BOXES_PER_IMAGE]]
                 
-                if CUSTOM_HYP.unk.rank.USE_OOD_THR_TO_REMOVE_PROPS:
-                    closes_cluster_per_proposal = np.concatenate(all_closes_cluster_per_proposal)[idx_sorted]
-                    # In case we want to remove the unk proposals that are close to a known class
-                    # We want to known if the distance is lower than the threshold
-                    # If the distance is lower than the threshold, we remove the proposal
-                    array_thrs = np.array(self.thresholds[:20])  # The thresholds of the known classes
-                    keep_thr = all_distances_per_proposal < array_thrs[closes_cluster_per_proposal, 0]
+                if CUSTOM_HYP.unk.rank.USE_OOD_THR_TO_REMOVE_PROPS or CUSTOM_HYP.unk.rank.USE_UNK_PROPOSALS_THR:
+                    if CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'min':
+                        closes_cluster_per_proposal = np.concatenate(all_closes_cluster_per_proposal)[idx_sorted]
+                        # In case we want to remove the unk proposals that are close to a known class
+                        # We want to known if the distance is lower than the threshold
+                        # If the distance is lower than the threshold, we remove the proposal
+                        array_thrs = np.array(self.thresholds[:20])  # The thresholds of the known classes
+                        keep_thr = all_distances_per_proposal < array_thrs[closes_cluster_per_proposal, 0]
+                    # elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'mean':
+                    #     keep_thr = all_distances_per_proposal < self.thresholds[80][0]
+                    # elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'geometric_mean':
+                    #     keep_thr = all_distances_per_proposal < self.thresholds[80][0]
+                    else:
+                        keep_thr = all_distances_per_proposal < self.thresholds[80][0]
                     if isinstance(keep_thr, np.bool_):  # In case there is only one unk proposal
                         keep_thr = torch.tensor([keep_thr])
                     else:
@@ -2044,8 +2098,13 @@ class OODMethod(ABC):
                     all_distances_per_proposal = all_distances_per_proposal[:CUSTOM_HYP.unk.rank.MAX_NUM_UNK_BOXES_PER_IMAGE]
                     all_unk_prop = all_unk_prop[:CUSTOM_HYP.unk.rank.MAX_NUM_UNK_BOXES_PER_IMAGE]
 
+            #####
+            # End ranking boxes
+            #####
             return all_unk_prop, all_distances_per_proposal
-        
+        ####
+        # Standar return whitout ranking the unk proposals
+        ####
         # Return a tensor with shape (num_boxes, 4) in case we don't want to rank the unk proposals 
         return all_unk_prop
 
@@ -2430,58 +2489,94 @@ class DistanceMethod(OODMethod):
         
         return scores
 
-    # def compute_scores_from_activations_for_unk_proposals(self, activations: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger) -> List[float]:
-    #     """
-    #     Compute the scores for the unknown proposals using the in-distribution activations (usually feature maps). They come in form of a list of ndarrays when
-    #         per_class True and per_stride are False, where each position of the list refers to one class and the array is a tensor of shape [N, C, H, W]. 
-    #         When is per_class and per_stride, the first list refers to classes and the second to the strides, being the arrays of the same shape as presented.
-    #     """
-    #     scores = []
-    #     if self.per_class:
-    #         if self.per_stride:
-    #             if self.cluster_method == 'one':
-                    
-    #                 # Compute the scores for the unknown proposals
-    #                 for idx_cls, activations_one_cls in enumerate(activations):
-    #                     scores_one_class = []
-    #                     activations_one_cls_one_stride = activations_one_cls[0]
-    #                     #logger.info(f'Class {idx_cls:03} of {len(activations)}')
-    #                     if len(activations_one_cls_one_stride) > 0:
-    #                         if len(self.clusters[idx_cls][0]) > 0:
+    def compute_scores_from_activations_for_unk_proposals(self, activations: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger) -> List[float]:
+        """
+        Compute the scores for the unknown proposals using the in-distribution activations (usually feature maps). They come in form of a list of ndarrays when
+            per_class True and per_stride are False, where each position of the list refers to one class and the array is a tensor of shape [N, C, H, W]. 
+            When is per_class and per_stride, the first list refers to classes and the second to the strides, being the arrays of the same shape as presented.
+        """
+        scores = []
+        if self.per_class:
+            if self.per_stride:
+                if self.cluster_method == 'one':
+                    np.set_printoptions(threshold=20)
+                    # Compute the scores for the unknown proposals
+                    for idx_cls, activations_one_cls in enumerate(activations):
+                        scores_one_class = []
+                        activations_one_cls_one_stride = activations_one_cls[0]
+                        if len(activations_one_cls_one_stride) > 0:
+                            activations_one_cls_one_stride_transformed = self.activations_transformation(activations_one_cls_one_stride)
+                            #logger.info(f'Class {idx_cls:03} of {len(activations)}')
+                            for clusters_one_class in self.clusters:
+                                cluster_one_class_first_stride = clusters_one_class[0]
+                                if len(cluster_one_class_first_stride) > 0:
+                                    scores_one_class.append(self.compute_scores_one_class_one_stride(
+                                        cluster_one_class_first_stride[None, :], 
+                                        activations_one_cls_one_stride_transformed
+                                        # activations_one_cls_one_stride.reshape(activations_one_cls_one_stride.shape[0], -1)
+                                    ))
+                            if len(activations_one_cls_one_stride) < 50:
+                                if idx_cls < 20:
+                                    logger.warning(f'WARNING: Class {idx_cls:03}, Stride {0} -> Only {len(activations_one_cls_one_stride)} samples')
+                            # En funcion de los hyperparametros decidimos que reduccion hacer
+                            scores_one_class = np.array(scores_one_class)
+                            if CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'mean':
+                                scores_one_class = np.mean(scores_one_class, axis=0)
+                            elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'geometric_mean':
+                                from scipy.stats import gmean
+                                scores_one_class = gmean(scores_one_class, axis=0)
+                            elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'entropy':
+                                from scipy.stats import entropy
+                                scores_one_class = entropy(scores_one_class, axis=0)
+                            else:
+                                raise NotImplementedError("Not implemented yet")
+                            
+                            scores.append(scores_one_class)
 
-    #                             scores_one_class.append(self.compute_scores_one_class_one_stride(
-    #                                 self.clusters[idx_cls][0][None, :], 
-    #                                 self.activations_transformation(activations_one_cls_one_stride)
-    #                                 # activations_one_cls_one_stride.reshape(activations_one_cls_one_stride.shape[0], -1)
-    #                             ))
+                        else:
+                            if idx_cls < 20:
+                                logger.warning(f'SKIPPING Class {idx_cls:03}, Stride {0} -> NO SAMPLES')
 
-    #                         if len(activations_one_cls_one_stride) < 50:
-    #                             logger.warning(f'WARNING: Class {idx_cls:03}, Stride {0} -> Only {len(activations_one_cls_one_stride)} samples')
+                    scores = np.concatenate(scores)
 
-    #                     else:
-    #                         if idx_cls < 20:
-    #                             logger.warning(f'SKIPPING Class {idx_cls:03}, Stride {0} -> NO SAMPLES')
-    #                     # En funcion de los hyperparametros decidimos que reduccion hacer
-    #                     scores_one_class = np.array(scores_one_class)
-    #                     if CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'mean':
-    #                         scores_one_class = np.mean(scores_one_class, axis=0)
-    #                     elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'geometric_mean':
-    #                         from scipy.stats import gmean
-    #                         scores_one_class = gmean(scores_one_class, axis=0)
-    #                     else:
-    #                         raise NotImplementedError("Not implemented yet")
-                        
-    #                     scores.append(scores_one_class)
-    #                 scores = np.array(scores)
-
-    #             else:
-    #                 raise NotImplementedError("Not implemented yet")
-    #         else:
-    #             raise NotImplementedError("Not implemented yet")
-    #     else:
-    #         raise NotImplementedError("Not implemented yet")
+                else:
+                    raise NotImplementedError("Not implemented yet")
+            else:
+                raise NotImplementedError("Not implemented yet")
+        else:
+            raise NotImplementedError("Not implemented yet")
         
-    #     return scores
+        return scores
+    
+    def generate_unk_prop_thr(self, scores, tpr) -> None:
+        if self.distance_method:
+            # If the method measures distance, the higher the score, the more OOD. Therefore
+            # we need to get the upper bound, the tpr*100%
+            used_tpr = 100*tpr
+        else:            
+            # As the method is a similarity method, the higher the score, the more IND. Therefore
+            # we need to get the lower bound, the (1-tpr)*100%
+            used_tpr = (1 - tpr)*100
+
+        if self.per_class:
+            if self.per_stride:
+                if self.cluster_method == 'one':
+                    self.thresholds.append(
+                        [float(np.percentile(scores, used_tpr, method='lower')), [], []]
+                        )
+                    pass
+                    # # Plot histogram of scores
+                    # import matplotlib.pyplot as plt
+                    # plt.hist(scores, bins=100)
+                    # plt.savefig(f'histogram.png')
+                    # plt.close()
+                    # plt.axvline(self.thresholds[-1][0], color='r', linestyle='dashed', linewidth=2)
+                else:
+                    raise NotImplementedError("Not implemented yet")
+            else:
+                raise NotImplementedError("Not implemented yet")
+        else:
+            raise NotImplementedError("Not implemented yet")
     
     # TODO: Esta funcion seguramente se pueda generalizar
     def compute_scores_one_cluster_per_class_and_stride(self, activations: List[List[np.ndarray]], scores: List[List[np.ndarray]], logger):

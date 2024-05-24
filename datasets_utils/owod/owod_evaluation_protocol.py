@@ -227,11 +227,7 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
             logger.info(f"Class: {cls_name}, AP: {ap * 100:.2f}, Recall: {rec[-1] * 100:.2f}, Precision: {prec[-1] * 100:.2f}")       
     
     # Check if we are in coco_ood, where ONLY the unknown class is present. If is the case, we need to compute the metrics for the unknown class ONLY
-    for t in all_targets:
-        number_of_known_targets = torch.sum(t['cls'] != UNKNOWN_CLASS_INDEX)
-        if number_of_known_targets > 0:
-            break
-    if number_of_known_targets == 0:
+    if tp_plus_fp_cs[50] == [None] and fp_os[50] == [None]:
         detections_unksniffer = {}
         for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
             one_class_preds ={}
@@ -254,8 +250,15 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
                 annotations=annotations_unksniffer,
                 cid=UNKNOWN_CLASS_INDEX,
             )
-        logger.info(f"Class: UNK from UnkSniffer, AP: {ap * 100:.2f}, Recall: {recall * 100:.2f}, Precision: {precision * 100:.2f}")
-        return {}
+        print("---------------")
+        logger.info(f"Class: UNK from UnkSniffer\nU-AP: {ap * 100:.2f}\nU-F1': {2 * (precision * recall) / (precision + recall) * 100}\nU-PRE: {recall * 100:.2f}\nU-REC: {precision * 100:.2f}")
+        print("---------------")
+        return {
+            'U-AP': ap * 100,
+            'U-F1': 2 * (precision * recall) / (precision + recall) * 100,
+            'U-PRE': precision * 100,
+            'U-REC': recall * 100,
+        }
     
     # WI is calculated for all_test?? Or only for WI split?
     #if n_clases_wout_preds < 19:

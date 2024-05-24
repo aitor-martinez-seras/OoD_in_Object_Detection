@@ -52,8 +52,8 @@ def extract_roi_aligned_features_from_correct_stride(
         # Extract the boxes relevant for this stride
         if extract_all_strides:
             # All boxes are relevant
-            stride_mask = torch.full((relevant_boxes.shape[0],), stride_idx, dtype=torch.long, device=device)
             relevant_boxes = boxes_with_img_indices
+            stride_mask = torch.full((relevant_boxes.shape[0],), True, dtype=torch.bool, device=device)
         else:
             stride_mask = strides_cat == stride_idx
             relevant_boxes = boxes_with_img_indices[stride_mask]
