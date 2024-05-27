@@ -13,7 +13,7 @@ FTMAPS_RELATED_OPTIONS = ['roi_aligned_ftmaps','all_ftmaps', 'ftmaps_and_strides
 LOGITS_RELATED_OPTIONS = ['logits']
 INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS = FTMAPS_RELATED_OPTIONS + LOGITS_RELATED_OPTIONS
 
-AVAILABLE_CLUSTERING_METHODS = ['one','all','DBSCAN', 'KMeans', 'GMM', 'HDBSCAN', 'OPTICS', 'SpectralClustering', 'AgglomerativeClustering']
+AVAILABLE_CLUSTERING_METHODS = ['one','all','DBSCAN', 'KMeans', 'GMM', 'DBSCAN', 'OPTICS', 'SpectralClustering', 'AgglomerativeClustering']
 AVAILABLE_CLUSTER_OPTIMIZATION_METRICS = ['silhouette', 'calinski_harabasz', 'davies_bouldin']
 
 TARGETS_RELATED_OPTIONS = [

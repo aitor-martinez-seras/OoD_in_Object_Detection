@@ -10,6 +10,7 @@ from torch import Tensor
 from scipy.stats import median_abs_deviation
 from custom_hyperparams import CUSTOM_HYP
 
+
 NUM_THRS = CUSTOM_HYP.unk.NUM_THRESHOLDS + 1
 
 def extract_bboxes_from_saliency_map_and_thresholds(saliency_map: np.ndarray, thresholds: List[float]) -> List[Tensor]:
@@ -171,7 +172,7 @@ def select_ftmaps_summarization_method(option: str) -> Callable:
 ###############################
 # They always use the default parameters
 
-def recursive_otsu(image: np.ndarray, num_classes: int = NUM_THRS, current_depth: int = 1, thresholds=None) -> List[float]:
+def recursive_otsu(image: np.ndarray, num_classes: int = NUM_THRS, current_depth: int = 1, thresholds=None, first_call=True) -> List[float]:
     """
     Apply recursive Otsu thresholding to an image.        
     """
@@ -184,10 +185,15 @@ def recursive_otsu(image: np.ndarray, num_classes: int = NUM_THRS, current_depth
         lower_region = image[image <= thresh]
         upper_region = image[image > thresh]
 
-        recursive_otsu(lower_region, num_classes, current_depth + 1, thresholds)
-        recursive_otsu(upper_region, num_classes, current_depth + 1, thresholds)
+        recursive_otsu(lower_region, num_classes, current_depth + 1, thresholds, first_call=False)
+        recursive_otsu(upper_region, num_classes, current_depth + 1, thresholds, first_call=False)
+    
+    if CUSTOM_HYP.unk.OTSU_RECURSIVE_TRICK_FOR_4_THRS and first_call and num_classes == 5:
+        thresholds = sorted(set(thresholds))
+        thresholds = thresholds[2:-1]
 
     return sorted(set(thresholds))
+    
 
 
 def multi_threshold_otsu(image: np.ndarray, num_classes: int = NUM_THRS) -> List[float]:

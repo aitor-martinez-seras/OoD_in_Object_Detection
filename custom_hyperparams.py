@@ -35,7 +35,8 @@ class DRiseParams:
 @dataclass
 class XAIParams:
 
-    MAX_IOU_WITH_UNK_PROP_TO_REMOVE: float = 0.1  # The maximum IOU between an UNK proposal bbox and a predicted bbox. If over the threshold, the UNK proposal is discarded
+    MAX_IOU_WITH_XAI: float = 0.1  # The maximum IOU between an UNK proposal bbox and a predicted bbox. If over the threshold, the UNK proposal is discarded
+    assert MAX_IOU_WITH_XAI > 0 and MAX_IOU_WITH_XAI <= 1, "MAX_IOU_WITH_XAI must be between 0 and 1"
 
     XAI_METHOD: str = "LayerCAM"  # GradCAM, HiResCAM, LayerCAM, D-RISE
     XAI_TARGET_LAYERS: List[int] = (15, 18, 21)
@@ -55,10 +56,12 @@ class RankParams:
     MAX_NUM_UNK_BOXES_PER_IMAGE: int = 3  # The maximum number of UNK proposals that will be considered for the ranking
     GET_BOXES_WITH_GREATER_RANK: bool = False  # If True, the boxes with the greater rank will be selected. If False, the boxes with the lower rank will be selected
     NMS: float = 0.5  # If > 0, the NMS will be applied to the ranked boxes
-    USE_OOD_THR_TO_REMOVE_PROPS: bool = False  # If True, the boxes with a lower OOD score than the threshold will be removed
+    USE_OOD_THR_TO_REMOVE_PROPS: bool = False  # If True, the boxes with a lower OOD score than the threshold will be removed, 
     USE_UNK_PROPOSALS_THR: bool = True  # If True, the UNK proposals will be selected using a threshold
     if USE_UNK_PROPOSALS_THR or USE_OOD_THR_TO_REMOVE_PROPS:
         assert MAX_NUM_UNK_BOXES_PER_IMAGE > 0, "MAX_NUM_UNK_BOXES_PER_IMAGE must be greater than 0"
+    if USE_OOD_THR_TO_REMOVE_PROPS:
+        assert RANK_BOXES_OPERATION == "min", "RANK_BOXES_OPERATION must be 'min' when USE_OOD_THR_TO_REMOVE_PROPS is True"
 
 
 @dataclass
@@ -67,13 +70,13 @@ class UnkEnhancementParams:
     SUMMARIZATION_METHOD: str = "mean_absolute_deviation_of_ftmaps"
 
     # Thresholding method
-    THRESHOLDING_METHOD: str = "multithreshold_otsu"  # multithreshold_otsu, recursive_otsu, k_means, quantile, fast_otsu
-    NUM_THRESHOLDS: int = 4  # The number of thresholds to be used in the thresholding methods
-    OTSU_RECURSIVE_REMOVE_FIRST_THR_FROM_SALIENCY: bool = False  # If True, the first threshold's value will be removed from the saliency map
+    THRESHOLDING_METHOD: str = "recursive_otsu"  # multithreshold_otsu, recursive_otsu, k_means, quantile, fast_otsu
+    NUM_THRESHOLDS: int = 3  # The number of thresholds to be used in the thresholding methods
+    OTSU_RECURSIVE_TRICK_FOR_4_THRS: bool = True  # If True, the first threshold's value will be removed from the saliency map
 
     # Enable or disable the use of XAI
     USE_XAI_TO_MODIFY_SALIENCY: bool = False  # If True, the XAI method will be used to enhance the localization of the UNK proposals
-    USE_XAI_TO_REMOVE_PROPOSALS: bool = False  # If True, the XAI method will be used to remove the UNK proposals
+    USE_XAI_TO_REMOVE_PROPOSALS: bool = True  # If True, the XAI method will be used to remove the UNK proposals
     assert not (USE_XAI_TO_MODIFY_SALIENCY and USE_XAI_TO_REMOVE_PROPOSALS), "Only one of the XAI methods can be used"
 
     # Enable or disable the use of heuristics

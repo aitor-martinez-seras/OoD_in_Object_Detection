@@ -1660,10 +1660,28 @@ class OODMethod(ABC):
             possible_unk_boxes_per_thr = extract_bboxes_from_saliency_map_and_thresholds(saliency_map, thresholds)
 
             if CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
-                # Make the same process of obtaining boxes with the heatmap
-                thresholds_heatmap = self.compute_thresholds_out_of_saliency_map(heatmap)
-                possible_unk_boxes_per_thr_heatmap = extract_bboxes_from_saliency_map_and_thresholds(heatmap, thresholds_heatmap)
-
+                if heatmap is not None:
+                    # Make the same process of obtaining boxes with the heatmap
+                    thresholds_heatmap = self.compute_thresholds_out_of_saliency_map(heatmap.numpy())
+                    heatmap_boxes_per_thr = extract_bboxes_from_saliency_map_and_thresholds(heatmap, thresholds_heatmap)
+                    heatmap_boxes = torch.cat(heatmap_boxes_per_thr, dim=0)
+                    if folder_path:
+                        # Plot the heatmap with the boxes
+                        from torchvision.utils import draw_bounding_boxes
+                        im = draw_bounding_boxes(image=(heatmap*255).to(torch.uint8).unsqueeze(0), boxes=heatmap_boxes)
+                        plt.imshow(im.permute(1, 2, 0).cpu().numpy())
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_with_boxes.{IMAGE_FORMAT}')
+                        plt.close()
+                        # Plot the thresholded heatmap
+                        fig, axs = plt.subplots(1, len(thresholds_heatmap), figsize=(5*len(thresholds_heatmap), 5))
+                        for idx, thr in enumerate(thresholds_heatmap):
+                            axs[idx].imshow(heatmap > thr, cmap='gray')
+                            axs[idx].set_title(f'Thr: {thr:.2f}')
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_heatmap.{IMAGE_FORMAT}')
+                        plt.close()
+                else:
+                    print(f"Image {img_idx} has no heatmap")
+                    
             ### 5. Postprocess the bounding boxes. Add the padding again and then convert them to the size of the feature maps
             unpaded_bbox_preds = res.boxes.xyxy.to('cpu')
             # x_pad_orig, y_pad_orig = ratio_pad.astype(int)
@@ -1680,7 +1698,8 @@ class OODMethod(ABC):
                 ood_decision_of_results=ood_decision_of_results[img_idx],
                 paded_feature_maps=paded_feature_maps_of_selected_stride,
                 selected_stride=selected_stride,
-                xai_boxes=possible_unk_boxes_per_thr_heatmap if CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS else None
+                xai_boxes=heatmap_boxes if CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS else None,
+                folder_str=(folder_path / f'{(origin_of_idx + img_idx):03}').as_posix() if folder_path else None
             )
             if CUSTOM_HYP.unk.RANK_BOXES and CUSTOM_HYP.unk.USE_HEURISTICS:
                 possible_unk_boxes, distances_per_proposal = fn_output
@@ -1699,69 +1718,6 @@ class OODMethod(ABC):
             if CUSTOM_HYP.unk.RANK_BOXES and CUSTOM_HYP.unk.USE_HEURISTICS:
                 distances_per_image.append(distances_per_proposal)
 
-            # # # Plot the original image with the boxes (use draw_bounding_boxes from torch)
-            # import matplotlib.pyplot as plt
-            # from torchvision.utils import draw_bounding_boxes
-            # im = draw_bounding_boxes(image=img_batch[img_idx], boxes=possible_unk_boxes*8)
-            # plt.imshow(im.permute(1, 2, 0).cpu().numpy())
-            # plt.savefig('A_imagen_orig_paded_con_unk_boxes.png')
-            # plt.close()
-            # # saliency map PADED with unk boxes
-            # saliency_map_unpaded = np.ones((paded_ftmaps_height, paded_ftmaps_width), dtype=np.uint8) * 114/255  # Gray background
-            # saliency_map_unpaded[int(ratio_pad_for_ftmaps[1]):paded_ftmaps_height-int(ratio_pad_for_ftmaps[1]), int(ratio_pad_for_ftmaps[0]):paded_ftmaps_width-int(ratio_pad_for_ftmaps[0])] = saliency_map
-            # saliency_map_unpaded = (saliency_map_unpaded - saliency_map_unpaded.min()) / (saliency_map_unpaded.max() - saliency_map_unpaded.min()) * 255
-            # saliency_map_unpaded = torch.from_numpy(saliency_map_unpaded.astype(np.uint8)).unsqueeze(0)
-            # saliency_map_unpaded_with_unk_boxes = draw_bounding_boxes(image=saliency_map_unpaded, boxes=possible_unk_boxes)
-            # plt.imshow(saliency_map_unpaded_with_unk_boxes.permute(1, 2, 0).cpu().numpy())
-            # plt.savefig('A_saliency_map_paded_with_unk_boxes.png')
-            # plt.close()
-
-            # # CODE TO DEMONSTRATE THAT THE UNPAD IS MADE CORRECTLY
-            # # UNPAD ORIGINAL IMAGE
-            # # Unpad the original image
-            # img = img_batch[img_idx]
-            # x_pad_orig, y_pad_orig = ratio_pad.astype(int)
-            # image_orig_unpaded = img[:, y_pad_orig:img.shape[1]-y_pad_orig, x_pad_orig:img.shape[2]-x_pad_orig]
-            # plt.imshow(image_orig_unpaded.permute(1, 2, 0).cpu().numpy())
-            # plt.savefig('A_image_orig_unpaded.png')
-            # plt.close()
-            # unpaded_bbox_preds = res.boxes.xyxy.to('cpu')
-            # unpaded_bbox_preds[:, 0] = unpaded_bbox_preds[:, 0] - x_pad_orig
-            # unpaded_bbox_preds[:, 1] = unpaded_bbox_preds[:, 1] - y_pad_orig
-            # unpaded_bbox_preds[:, 2] = unpaded_bbox_preds[:, 2] - x_pad_orig
-            # unpaded_bbox_preds[:, 3] = unpaded_bbox_preds[:, 3] - y_pad_orig
-            # image_orig_unpaded_with_preds = draw_bounding_boxes(image=image_orig_unpaded, boxes=unpaded_bbox_preds)
-            # plt.imshow(image_orig_unpaded_with_preds.permute(1, 2, 0).cpu().numpy())
-            # plt.savefig('A_image_orig_unpaded_with_preds.png')
-            # plt.close()
-
-            # # Plot the saliency map with pred and unk boxes
-            # STRIDES_RATIO = [8, 16, 32]
-            # unpaded_bbox_preds = res.boxes.xyxy.to('cpu')
-            # x_pad_orig, y_pad_orig = ratio_pad.astype(int)
-            # unpaded_bbox_preds[:, 0] = unpaded_bbox_preds[:, 0] - x_pad_orig
-            # unpaded_bbox_preds[:, 1] = unpaded_bbox_preds[:, 1] - y_pad_orig
-            # unpaded_bbox_preds[:, 2] = unpaded_bbox_preds[:, 2] - x_pad_orig
-            # unpaded_bbox_preds[:, 3] = unpaded_bbox_preds[:, 3] - y_pad_orig
-            # bbox_preds_in_ftmap_size = unpaded_bbox_preds / STRIDES_RATIO[selected_stride]  # The bounding boxes are in the original image size
-            # # Convert saliency map to  [0, 255] in uint8
-            # saliency_map_uint8 = (saliency_map - saliency_map.min()) / (saliency_map.max() - saliency_map.min()) * 255
-            # saliency_map_uint8 = torch.from_numpy(saliency_map_uint8.astype(np.uint8)).unsqueeze(0)
-            # saliency_map_with_pred_boxes = draw_bounding_boxes(image=saliency_map_uint8, boxes=bbox_preds_in_ftmap_size)
-            # plt.imshow(saliency_map_with_pred_boxes.permute(1,2,0).numpy())
-            # plt.savefig('A_saliency_map_with_predicted_boxes.png')
-            # plt.close()
-            # # Now saliency map with unk boxes. First UNPAD the boxes and then plot
-            # padded_boxes = possible_unk_boxes.clone()
-            # x_pad, y_pad = padding_x_y
-            # padded_boxes[:, 0] = padded_boxes[:, 0] - x_pad
-            # padded_boxes[:, 1] = padded_boxes[:, 1] - y_pad
-            # padded_boxes[:, 2] = padded_boxes[:, 2] - x_pad
-            # padded_boxes[:, 3] = padded_boxes[:, 3] - y_pad
-            # saliency_map_with_unk_boxes = draw_bounding_boxes(image=saliency_map_uint8, boxes=padded_boxes)
-            # plt.imshow(saliency_map_with_unk_boxes.permute(1,2,0).numpy())
-            # plt.savefig('A_saliency_map_with_UNK_boxes.png')
-            # plt.close()
         if CUSTOM_HYP.unk.RANK_BOXES:
             return possible_unk_boxes_per_image, ood_decision_on_unk_boxes_per_image, distances_per_image
         else:
@@ -1807,46 +1763,9 @@ class OODMethod(ABC):
         #   como parametro tal y como lo hago con las que computan el mapa de saliencia o los thresholds
         return np.zeros(roi_aligned_features.shape[0], dtype=int)
         
-
-            
-    # def compute_unknonwn_boxes_for_one_image(self, ftmaps_one_stride: Tensor, ratio_pad: np.ndarray) -> Tensor:
-        
-    #     # # The strides of the feature maps. The first one is the one with the highest resolution
-    #     # # and the last one is the one with the lowest resolution. The ratio represents the shrink
-    #     # # of the feature maps with respect to the original image in that stride
-
-    #     # ### 1. Select the feature maps to use and remove padding from LetterBox augmentation
-    #     # # We use the first stride, the one with the highest resolution as it is the most detailed one
-    #     # # and therefore presumably better suited for the localization
-    #     # selected_stride = 0  
-    #     # ftmaps = feature_maps_per_stride[selected_stride]
-    #     # ratio_pad_for_ftmaps = ratio_pad / STRIDES_RATIO[selected_stride]
-    #     # x_padding = int(ratio_pad_for_ftmaps[0])  # The padding in the x dimension is the first element
-    #     # y_padding = int(ratio_pad_for_ftmaps[1])  # The padding in the y dimension is the second element
-    #     # ftmap_height, ftmap_width = ftmaps.shape[1], ftmaps.shape[2]
-    #     # ftmaps = ftmaps[:, y_padding:ftmap_height-y_padding, x_padding:ftmap_width-x_padding]
-
-    #     # Conver to numpy 
-    #     ftmaps_one_stride = ftmaps_one_stride.cpu().numpy()
-
-    #     ### 2. Compute a saliency map out of the feature maps
-    #     # It is a way of summarizing the info of the feature maps into a single image
-    #     saliency_map = self.compute_saliency_map_one_stride(ftmaps_one_stride)
-
-    #     ### 3. Compute the thresholds for the saliency map
-    #     thresholds = self.compute_thresholds_out_of_saliency_map(saliency_map)
-
-    #     ### 4. Extract the bounding boxes from the saliency map using the thresholds
-    #     possible_unk_boxes_per_thr = self.extract_bboxes_from_saliency_map_and_thresholds(saliency_map, thresholds)
-        
-    #     ### 5. Postprocess the bounding boxes
-    #     possible_unk_boxes = self.postprocess_unk_bboxes(possible_unk_boxes_per_thr, padding=(x_padding, y_padding), ftmaps_shape=(ftmap_height, ftmap_width))
-
-    #     return possible_unk_boxes
-
     def postprocess_unk_bboxes(self, possible_unk_boxes_per_thr: List[Tensor], padding: Tuple[int], unpaded_ftmaps_shape: Tuple[int],
                                bbox_preds_in_ftmap_size: Tensor, ood_decision_of_results: List[int], paded_feature_maps: Tensor,
-                               selected_stride: int) -> Tensor:
+                               selected_stride: int, xai_boxes: Optional[Tensor] = None, folder_str: Optional[str] = None) -> Tensor:
         """
         Postprocess the possible unknown bounding boxes.
         Parameters:
@@ -1871,12 +1790,21 @@ class OODMethod(ABC):
         # For big boxes removal
         unpaded_ftmap_height, unpaded_ftmap_width = unpaded_ftmaps_shape
         max_box_size_percent = CUSTOM_HYP.unk.MAX_BOX_SIZE_PERCENT  # The percentage of the feature map size that a box can take
+        # Add the padding to the XAI boxes if they are provided
+        if xai_boxes is not None:
+            xai_boxes[:, 0] += padding[0]
+            xai_boxes[:, 1] += padding[1]
+            xai_boxes[:, 2] += padding[0]
+            xai_boxes[:, 3] += padding[1]
         #####
         # Start loop of THRs
         ####
         for idx_thr in range(len(possible_unk_boxes_per_thr)):
             unk_proposals_one_thr = possible_unk_boxes_per_thr[idx_thr].clone()
-            # Add the padding to the bounding unk_proposals_one_thr
+            # If there are no unknown proposals, continue
+            if len(unk_proposals_one_thr) == 0:
+                continue
+            # Add the padding to the unknown proposals
             unk_proposals_one_thr[:, 0] += padding[0]
             unk_proposals_one_thr[:, 1] += padding[1]
             unk_proposals_one_thr[:, 2] += padding[0]
@@ -1886,6 +1814,7 @@ class OODMethod(ABC):
             
             #### Heuristics to remove proposals ####
             # Do we want to remove proposals using some heuristics?
+            # No
             if not CUSTOM_HYP.unk.USE_HEURISTICS:  # In case we don't want to use heuristics to remove UNK proposals
                 # Just add the boxes to the list
                 all_unk_prop.append(unk_proposals_one_thr)
@@ -1946,6 +1875,33 @@ class OODMethod(ABC):
                         max_intersection_ratios, _ = intersection_ratios.max(dim=1)
                         # Remove the proposals with max intersection ratio greater than 0.9. Do that by keeping the ones that are less or equal
                         unk_proposals_one_thr = unk_proposals_one_thr[max_intersection_ratios <= CUSTOM_HYP.unk.MAX_INTERSECTION_W_PREDS]
+                
+                if CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
+                    assert xai_boxes is not None, "You must provide the XAI boxes to remove the proposals"
+                    # 5º: Remove unk_proposals_one_thr that are close to the XAI boxes
+                    if len(unk_proposals_one_thr) > 0:
+                        # Compute the IoU with the XAI boxes
+                        ious = box_iou(unk_proposals_one_thr, xai_boxes)
+                        # Remove the unk_proposals_one_thr with IoU > iou_thr
+                        mask = ious.max(dim=1).values < CUSTOM_HYP.unk.xai.MAX_IOU_WITH_XAI
+                        # Plot the unk_proposals in yellow and the XAI boxes in red
+                        import matplotlib.pyplot as plt
+                        from torchvision.utils import draw_bounding_boxes
+                        # Convert to tensor
+                        unk = unk_proposals_one_thr.to(torch.uint8)
+                        xai = xai_boxes.to(torch.uint8)
+                        # Create the image
+                        img = torch.ones((1, unpaded_ftmap_height + padding[1]*2, unpaded_ftmap_width + padding[0]*2), dtype=torch.uint8)
+                        # Merge the bouding boxes and create the colors for each
+                        boxes = torch.cat([unk, xai], dim=0)
+                        colors = ["yellow"] * len(unk) + ["red"] * len(xai)
+                        # Draw the boxes
+                        img = draw_bounding_boxes(img, boxes, colors=colors)
+                        plt.imshow(img.permute(1, 2, 0).cpu().numpy())
+                        plt.savefig(f'{folder_str}_heatmap_and_proposals_thr{idx_thr}.png')
+                        plt.close()
+
+                        unk_proposals_one_thr = unk_proposals_one_thr[mask]
 
             #### Ranking boxes using diferent methods ####
             if CUSTOM_HYP.unk.RANK_BOXES:
@@ -2591,7 +2547,7 @@ class DistanceMethod(OODMethod):
                 if len(activations_one_cls_one_stride) > 0:
 
                     if len(self.clusters[idx_cls][idx_stride]) > 0:
-
+                        
                         scores[idx_cls][idx_stride] = self.compute_scores_one_class_one_stride(
                             self.clusters[idx_cls][idx_stride][None, :], 
                             self.activations_transformation(activations_one_cls_one_stride)
@@ -2881,15 +2837,15 @@ class DistanceMethod(OODMethod):
                 if self.cluster_method == 'one':
                     self.generate_one_cluster_per_class_and_stride(ind_tensors, clusters_per_class_and_stride, logger)
 
-                elif self.cluster_method in self.available_cluster_methods:
-                    raise NotImplementedError("Not implemented yet")
-
                 elif self.cluster_method == 'all':
                     raise NotImplementedError("As the amount of In-Distribution data is too big," \
                                             "ir would be intractable to treat each sample as a cluster")
 
+                elif self.cluster_method in AVAILABLE_CLUSTERING_METHODS:
+                    self.generate_multiple_cluster_per_class_per_stride(ind_tensors, clusters_per_class_and_stride, logger)
+
                 else:
-                    raise NameError(f"The clustering_opt must be one of the following: 'one', 'all', or one of {self.available_cluster_methods}." \
+                    raise NameError(f"The clustering_opt must be one of the following: 'one', 'all', or one of {AVAILABLE_CLUSTERING_METHODS}." \
                                     f"Current value: {self.cluster_method}")
                 
             else:
@@ -2911,9 +2867,33 @@ class DistanceMethod(OODMethod):
                     #ftmaps_one_cls_one_stride = ftmaps_one_cls_one_stride.reshape(ftmaps_one_cls_one_stride.shape[0], -1)
                     ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride)
                     clusters_per_class_and_stride[idx_cls][idx_stride] = self.agg_method(ftmaps_one_cls_one_stride, axis=0)
+                    #clusters_per_class_and_stride[idx_cls][idx_stride] = self.agg_method(ftmaps_one_cls_one_stride, axis=0)[None, :]
 
                     if len(ftmaps_one_cls_one_stride) < 50:
                         logger.warning(f'WARNING: Class {idx_cls:03}, Stride {idx_stride} -> Only {len(ftmaps_one_cls_one_stride)} samples')
+
+                else:
+                    if idx_cls < 20:
+                        logger.warning(f'SKIPPING Class {idx_cls:03}, Stride {idx_stride} -> NO SAMPLES')
+                    clusters_per_class_and_stride[idx_cls][idx_stride] = np.empty(0)
+
+    def generate_multiple_cluster_per_class_per_stride(self, ind_tensors: List[List[np.ndarray]], clusters_per_class_and_stride: List[List[np.ndarray]], logger):
+        for idx_cls, ftmaps_one_cls in enumerate(ind_tensors):
+            #logger.info(f'Class {idx_cls:03} of {len(ind_tensors)}')
+            for idx_stride, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
+                
+                if len(ftmaps_one_cls_one_stride) > 1:
+                    # Here i have to implement the method to search for the best number of clusters
+                    # and then apply the clustering method, to finally generate N number of centroids
+                    # 1. Find the optimal number of clusters
+                    n_clusters = find_optimal_number_of_clusters_one_class_one_stride(ftmaps_one_cls_one_stride, self.cluster_method, logger)
+                    # 2. Obtain the cluster labels
+                    clusters_labels = self.cluster_method(n_clusters).fit_predict(ftmaps_one_cls_one_stride)
+                    # 3. Aggregate the samples of each cluster using the agg method
+                    clusters = []
+                    for idx_cluster in range(n_clusters):
+                        clusters.append(self.agg_method(ftmaps_one_cls_one_stride[clusters_labels == idx_cluster], axis=0))
+                    clusters_per_class_and_stride[idx_cls][idx_stride] = np.array(clusters)
 
                 else:
                     if idx_cls < 20:
@@ -2989,10 +2969,10 @@ class CosineDistanceOneClusterPerStride(DistanceMethod):
             name = 'CosineDistancePerStride'
             per_class = True
             per_stride = True
-            cluster_method = 'one'
+            #cluster_method = 'one'
             cluster_optimization_metric = 'silhouette'
             #super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
-            super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
+            super().__init__(name, per_class, per_stride, cluster_optimization_metric=cluster_optimization_metric, **kwargs)
         
         def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
 
@@ -3002,7 +2982,8 @@ class CosineDistanceOneClusterPerStride(DistanceMethod):
                 metric='cosine'
                 )
 
-            return distances[0]
+            #return distances[0]
+            return distances.min(axis=0)
         
 
 class GAPL2DistanceOneClusterPerStride(DistanceMethod):

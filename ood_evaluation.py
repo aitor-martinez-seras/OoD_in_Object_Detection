@@ -58,6 +58,7 @@ class SimpleArgumentParser(Tap):
     owod_task_ood: Literal["", "t1", "t2", "t3", "t4", "all_task_test"] = ""  # OWOD task to use in the out-of-distribution dataset
     # OOD related
     ood_method: str
+    cluster_method: str = 'one'  # Clustering method to use for the distance methods
     ind_info_creation_option: str = 'valid_preds_one_stride'  # How to create the in-distribution information for the distance methods
     enhanced_unk_localization: bool = False  # Whether to use enhanced unknown localization
     which_internal_activations: str = 'roi_aligned_ftmaps'  # Which internal activations to use for the OoD detection
@@ -102,6 +103,7 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
         'which_internal_activations': args.which_internal_activations,
         'saliency_map_computation_function': select_ftmaps_summarization_method(CUSTOM_HYP.unk.SUMMARIZATION_METHOD),
         'thresholds_out_of_saliency_map_function': select_thresholding_method(CUSTOM_HYP.unk.THRESHOLDING_METHOD),
+        'cluster_method': args.cluster_method,
     }
     distance_methods_kwargs.update(common_kwargs)
 
