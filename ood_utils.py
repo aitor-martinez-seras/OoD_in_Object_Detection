@@ -30,6 +30,7 @@ from constants import IND_INFO_CREATION_OPTIONS, AVAILABLE_CLUSTERING_METHODS, \
     FTMAPS_RELATED_OPTIONS, LOGITS_RELATED_OPTIONS, STRIDES_RATIO, IMAGE_FORMAT
 from custom_hyperparams import CUSTOM_HYP
 from YOLOv8_Explainer import yolov8_heatmap
+from cluster_utils import find_optimal_number_of_clusters_one_class_one_stride_and_return_labels
 
 
 def limit_heatmaps_to_bounding_boxes(expl_heatmaps: List[Tensor], results: List[Results]) -> List[Tensor]:
@@ -1935,7 +1936,8 @@ class OODMethod(ABC):
                     for idx_cls, cluster in enumerate(self.clusters):
                         if len(cluster[selected_stride]) > 0:
                             distances_one_cls_per_bbox = self.compute_distance(
-                                cluster[selected_stride][None, :],
+                                #cluster[selected_stride][None, :],
+                                cluster[selected_stride],
                                 self.activations_transformation(features_per_proposal)
                                 #self.activations_transformation(activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1))
                                 #activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1)  # Flatten the activations
@@ -2197,25 +2199,21 @@ class DistanceMethod(OODMethod):
     clusters: Union[List[np.ndarray], List[List[np.ndarray]]]
     ind_info_creation_option: str
     enhanced_unk_localization: bool
+    metric: 'str'
 
     # name: str, distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float, min_conf_threshold: float
     # def __init__(self, name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str,
     #              cluster_optimization_metric: str, ind_info_creation_option: str, **kwargs):
-    def __init__(self, name: str, per_class: bool, per_stride: bool, cluster_method: str,
+    def __init__(self, name: str, per_class: bool, per_stride: bool, cluster_method: str, metric: str,
                  cluster_optimization_metric: str, agg_method: str, ind_info_creation_option: str, which_internal_activations: str, **kwargs):
         distance_method = True  # Always True for distance methods
         which_internal_activations = self.validate_correct_which_internal_activations_distance_methods(which_internal_activations)
         super().__init__(name, distance_method, per_class, per_stride, which_internal_activations=which_internal_activations, **kwargs)
+        self.metric = metric
         self.cluster_method = self.check_cluster_method_selected(cluster_method)
         self.cluster_optimization_metric = self.check_cluster_optimization_metric_selected(cluster_optimization_metric)
         self.agg_method = self.select_agg_method(agg_method)
         self.ind_info_creation_option = self.validate_correct_ind_info_creation_option(ind_info_creation_option)
-        # if agg_method == 'mean':
-        #     self.agg_method = np.mean
-        # elif agg_method == 'median':
-        #     self.agg_method = np.median
-        # else:
-        #     raise NameError(f"The agg_method argument must be one of the following: 'mean', 'median'. Current value: {agg_method}")
     
     def validate_correct_which_internal_activations_distance_methods(self, which_internal_activations: str) -> str:
         assert which_internal_activations in FTMAPS_RELATED_OPTIONS, f"which_internal_activations must be one of {FTMAPS_RELATED_OPTIONS}, but got {which_internal_activations}"
@@ -2431,11 +2429,8 @@ class DistanceMethod(OODMethod):
             if self.per_stride:
                     
                 scores = [[[] for _ in range(3)] for _ in range(len(activations))]
-
-                if self.cluster_method == 'one':
-                    self.compute_scores_one_cluster_per_class_and_stride(activations, scores, logger)
-                else:
-                    raise NotImplementedError("Not implemented yet")
+                #if self.cluster_method == 'one':
+                self.compute_scores_clusters_per_class_and_stride(activations, scores, logger)
                 
             else:
                 raise NotImplementedError("Not implemented yet")
@@ -2454,49 +2449,47 @@ class DistanceMethod(OODMethod):
         scores = []
         if self.per_class:
             if self.per_stride:
-                if self.cluster_method == 'one':
-                    np.set_printoptions(threshold=20)
-                    # Compute the scores for the unknown proposals
-                    for idx_cls, activations_one_cls in enumerate(activations):
-                        scores_one_class = []
-                        activations_one_cls_one_stride = activations_one_cls[0]
-                        if len(activations_one_cls_one_stride) > 0:
-                            activations_one_cls_one_stride_transformed = self.activations_transformation(activations_one_cls_one_stride)
-                            #logger.info(f'Class {idx_cls:03} of {len(activations)}')
-                            for clusters_one_class in self.clusters:
-                                cluster_one_class_first_stride = clusters_one_class[0]
-                                if len(cluster_one_class_first_stride) > 0:
-                                    scores_one_class.append(self.compute_scores_one_class_one_stride(
-                                        cluster_one_class_first_stride[None, :], 
-                                        activations_one_cls_one_stride_transformed
-                                        # activations_one_cls_one_stride.reshape(activations_one_cls_one_stride.shape[0], -1)
-                                    ))
-                            if len(activations_one_cls_one_stride) < 50:
-                                if idx_cls < 20:
-                                    logger.warning(f'WARNING: Class {idx_cls:03}, Stride {0} -> Only {len(activations_one_cls_one_stride)} samples')
-                            # En funcion de los hyperparametros decidimos que reduccion hacer
-                            scores_one_class = np.array(scores_one_class)
-                            if CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'mean':
-                                scores_one_class = np.mean(scores_one_class, axis=0)
-                            elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'geometric_mean':
-                                from scipy.stats import gmean
-                                scores_one_class = gmean(scores_one_class, axis=0)
-                            elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'entropy':
-                                from scipy.stats import entropy
-                                scores_one_class = entropy(scores_one_class, axis=0)
-                            else:
-                                raise NotImplementedError("Not implemented yet")
-                            
-                            scores.append(scores_one_class)
-
-                        else:
+                np.set_printoptions(threshold=20)
+                # Compute the scores for the unknown proposals
+                for idx_cls, activations_one_cls in enumerate(activations):
+                    scores_one_class = []
+                    activations_one_cls_one_stride = activations_one_cls[0]
+                    if len(activations_one_cls_one_stride) > 0:
+                        activations_one_cls_one_stride_transformed = self.activations_transformation(activations_one_cls_one_stride)
+                        #logger.info(f'Class {idx_cls:03} of {len(activations)}')
+                        for clusters_one_class in self.clusters:
+                            cluster_one_class_first_stride = clusters_one_class[0]
+                            if len(cluster_one_class_first_stride) > 0:
+                                scores_one_class.append(self.compute_scores_one_class_one_stride(
+                                    #cluster_one_class_first_stride[None, :],
+                                    cluster_one_class_first_stride,
+                                    activations_one_cls_one_stride_transformed
+                                    # activations_one_cls_one_stride.reshape(activations_one_cls_one_stride.shape[0], -1)
+                                ))
+                        if len(activations_one_cls_one_stride) < 50:
                             if idx_cls < 20:
-                                logger.warning(f'SKIPPING Class {idx_cls:03}, Stride {0} -> NO SAMPLES')
+                                logger.warning(f'WARNING: Class {idx_cls:03}, Stride {0} -> Only {len(activations_one_cls_one_stride)} samples')
+                        # En funcion de los hyperparametros decidimos que reduccion hacer
+                        scores_one_class = np.array(scores_one_class)
+                        if CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'mean':
+                            scores_one_class = np.mean(scores_one_class, axis=0)
+                        elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'geometric_mean':
+                            from scipy.stats import gmean
+                            scores_one_class = gmean(scores_one_class, axis=0)
+                        elif CUSTOM_HYP.unk.rank.RANK_BOXES_OPERATION == 'entropy':
+                            from scipy.stats import entropy
+                            scores_one_class = entropy(scores_one_class, axis=0)
+                        else:
+                            raise NotImplementedError("Not implemented yet")
+                        
+                        scores.append(scores_one_class)
 
-                    scores = np.concatenate(scores)
+                    else:
+                        if idx_cls < 20:
+                            logger.warning(f'SKIPPING Class {idx_cls:03}, Stride {0} -> NO SAMPLES')
 
-                else:
-                    raise NotImplementedError("Not implemented yet")
+                scores = np.concatenate(scores)
+
             else:
                 raise NotImplementedError("Not implemented yet")
         else:
@@ -2516,26 +2509,21 @@ class DistanceMethod(OODMethod):
 
         if self.per_class:
             if self.per_stride:
-                if self.cluster_method == 'one':
-                    self.thresholds.append(
-                        [float(np.percentile(scores, used_tpr, method='lower')), [], []]
-                        )
-                    pass
-                    # # Plot histogram of scores
-                    # import matplotlib.pyplot as plt
-                    # plt.hist(scores, bins=100)
-                    # plt.savefig(f'histogram.png')
-                    # plt.close()
-                    # plt.axvline(self.thresholds[-1][0], color='r', linestyle='dashed', linewidth=2)
-                else:
-                    raise NotImplementedError("Not implemented yet")
+                self.thresholds.append(
+                    [float(np.percentile(scores, used_tpr, method='lower')), [], []]
+                    )
+                # # Plot histogram of scores
+                # import matplotlib.pyplot as plt
+                # plt.hist(scores, bins=100)
+                # plt.savefig(f'histogram.png')
+                # plt.close()
+                # plt.axvline(self.thresholds[-1][0], color='r', linestyle='dashed', linewidth=2)
             else:
                 raise NotImplementedError("Not implemented yet")
         else:
             raise NotImplementedError("Not implemented yet")
     
-    # TODO: Esta funcion seguramente se pueda generalizar
-    def compute_scores_one_cluster_per_class_and_stride(self, activations: List[List[np.ndarray]], scores: List[List[np.ndarray]], logger):
+    def compute_scores_clusters_per_class_and_stride(self, activations: List[List[np.ndarray]], scores: List[List[np.ndarray]], logger):
         """
         This function has the logic of looping over the classes and strides to then call the function that computes the scores on one class and one stride.
         """
@@ -2549,7 +2537,8 @@ class DistanceMethod(OODMethod):
                     if len(self.clusters[idx_cls][idx_stride]) > 0:
                         
                         scores[idx_cls][idx_stride] = self.compute_scores_one_class_one_stride(
-                            self.clusters[idx_cls][idx_stride][None, :], 
+                            #self.clusters[idx_cls][idx_stride][None, :],
+                            self.clusters[idx_cls][idx_stride],
                             self.activations_transformation(activations_one_cls_one_stride)
                             # activations_one_cls_one_stride.reshape(activations_one_cls_one_stride.shape[0], -1)
                         )
@@ -2620,83 +2609,6 @@ class DistanceMethod(OODMethod):
 
         return ood_decision
 
-        ####
-        # if self.which_internal_activations == "ftmaps_and_strides":
-        #     for idx_img, res in enumerate(results):
-        #         ood_decision.append([])
-        #         ftmaps, strides = res.extra_item
-        #         roi_aligned_ftmaps_per_stride = extract_roi_aligned_features_from_correct_stride(
-        #             ftmaps=[ft[None, ...] for ft in ftmaps],
-        #             boxes=[res.boxes.xyxy],
-        #             strides=[strides],
-        #             img_shape=res.orig_img.shape[2:],
-        #             device=res.boxes.xyxy.device,
-        #             extract_all_strides=False,
-        #         )
-        #         self._compute_ood_decision_for_one_result_from_roi_aligned_feature_maps(
-        #             idx_img=idx_img,
-        #             one_img_bboxes_cls_idx=res.boxes.cls.cpu(),
-        #             roi_aligned_ftmaps_one_img_per_stride=roi_aligned_ftmaps_per_stride[0],  # As we are processing one image only
-        #             ood_decision=ood_decision,
-        #             logger=logger,
-        #         )                    
-
-        # elif self.which_internal_activations == 'roi_aligned_ftmaps':
-        #     for idx_img, res in enumerate(results):
-        #         ood_decision.append([])  # Every image has a list of decisions for each bbox
-        #         self._compute_ood_decision_for_one_result_from_roi_aligned_feature_maps(
-        #             idx_img=idx_img,
-        #             one_img_bboxes_cls_idx=res.boxes.cls.cpu(),
-        #             roi_aligned_ftmaps_one_img_per_stride=res.extra_item,
-        #             ood_decision=ood_decision,
-        #             logger=logger,
-        #         )
-
-        #         # ood_decision.append([])  # Every image has a decisions for each bbox
-        #         # for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(res.extra_item):
-
-        #         #     if len(bbox_idx_in_one_stride) > 0:  # Only enter if there are any predictions in this stride
-        #         #         # Each ftmap is from a bbox prediction
-        #         #         for idx, ftmap in enumerate(ftmaps):
-        #         #             bbox_idx = idx
-        #         #             cls_idx = int(res.boxes.cls[bbox_idx].cpu())
-        #         #             ftmap = ftmap.cpu().unsqueeze(0).numpy()  # To obtain a tensor of shape [1, C, H, W]
-        #         #             # ftmap = ftmap.cpu().flatten().unsqueeze(0).numpy()
-        #         #             # [None, :] is to do the same as unsqueeze(0) but with numpy
-        #         #             if len(self.clusters[cls_idx][stride_idx]) == 0:
-        #         #                 logger.warning(f'Image {idx_img}, bbox {bbox_idx} is viewed as an OOD.' \
-        #         #                                 'It cannot be compared as there is no cluster for class {cls_idx} and stride {stride_idx')
-        #         #                 distance = 1000
-        #         #             else:
-        #         #                 distance = self.compute_distance(
-        #         #                     self.clusters[cls_idx][stride_idx][None, :], 
-        #         #                     self.activations_transformation(ftmap)
-        #         #                 )[0]
-                            
-        #         #             # d = pairwise_distances(clusters[cls_idx][stride_idx][None,:], ftmap.cpu().numpy().reshape(1, -1), metric='l1')
-
-        #         #             # print('------------------------------')
-        #         #             # print('idx_img:\t', idx_of_batch*dataloader.batch_size + idx_img)
-        #         #             # print('bbox_idx:\t', bbox_idx)
-        #         #             # print('cls:\t\t', cls_idx)
-        #         #             # print('conf:\t\t', res.boxes.conf[bbox_idx])
-        #         #             # print('ftmap:\t\t',ftmap.shape)
-        #         #             # print('ftmap_reshape:\t', ftmap.cpu().numpy().reshape(1, -1).shape)
-        #         #             # print('distance:\t', distance)
-        #         #             # print('threshold:\t', self.thresholds[cls_idx][stride_idx])
-
-        #         #             if self.thresholds[cls_idx][stride_idx]:
-        #         #                 if distance < self.thresholds[cls_idx][stride_idx]:
-        #         #                     ood_decision[idx_img].append(1)  # InD
-        #         #                 else:
-        #         #                     ood_decision[idx_img].append(0)  # OOD
-        #         #             else:
-        #         #                 # logger.warning(f'WARNING: Class {cls_idx:03}, Stride {stride_idx} -> No threshold!')
-        #         #                 ood_decision[idx_img].append(0)  # OOD
-
-        # else:
-        #     raise NotImplementedError("Not implemented yet")
-
     def _compute_ood_decision_for_one_result_from_roi_aligned_feature_maps(
             self, idx_img: int, one_img_bboxes_cls_idx: Tensor, roi_aligned_ftmaps_one_img_per_stride, ood_decision: List, logger: Logger
         ):
@@ -2728,7 +2640,8 @@ class DistanceMethod(OODMethod):
                         distance = 1000
                     else:
                         distance = self.compute_distance(
-                            self.clusters[cls_idx][stride_idx][None, :], 
+                            #self.clusters[cls_idx][stride_idx][None, :],
+                            self.clusters[cls_idx][stride_idx],
                             self.activations_transformation(ftmap)
                         )[0]
 
@@ -2772,7 +2685,8 @@ class DistanceMethod(OODMethod):
                     for idx_cls, cluster in enumerate(self.clusters):
                         if len(cluster[idx_stride]) > 0:
                             distances_per_bbox = self.compute_distance(
-                                cluster[idx_stride][None, :],
+                                #cluster[idx_stride][None, :],
+                                cluster[idx_stride],
                                 #self.activations_transformation(activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1))
                                 activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1)  # Flatten the activations
                             )
@@ -2798,7 +2712,8 @@ class DistanceMethod(OODMethod):
                         if len(self.clusters[_cls_idx][idx_stride]) > 0:
                             # Calculo distancia si hay cluster
                             distance = self.compute_distance(
-                                self.clusters[_cls_idx][idx_stride][None, :],
+                                #self.clusters[_cls_idx][idx_stride][None, :],
+                                self.clusters[_cls_idx][idx_stride],
                                 activations_one_img_one_stride[_bbox_idx].reshape(1, -1)
                             )[0]
                             # Checkeo si la distancia es menor que el threshold, en ese caso es InD (0), sino OoD (1)
@@ -2863,11 +2778,9 @@ class DistanceMethod(OODMethod):
             for idx_stride, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
                 
                 if len(ftmaps_one_cls_one_stride) > 1:
-
-                    #ftmaps_one_cls_one_stride = ftmaps_one_cls_one_stride.reshape(ftmaps_one_cls_one_stride.shape[0], -1)
                     ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride)
-                    clusters_per_class_and_stride[idx_cls][idx_stride] = self.agg_method(ftmaps_one_cls_one_stride, axis=0)
-                    #clusters_per_class_and_stride[idx_cls][idx_stride] = self.agg_method(ftmaps_one_cls_one_stride, axis=0)[None, :]
+                    #clusters_per_class_and_stride[idx_cls][idx_stride] = self.agg_method(ftmaps_one_cls_one_stride, axis=0)
+                    clusters_per_class_and_stride[idx_cls][idx_stride] = self.agg_method(ftmaps_one_cls_one_stride, axis=0)[None, :]
 
                     if len(ftmaps_one_cls_one_stride) < 50:
                         logger.warning(f'WARNING: Class {idx_cls:03}, Stride {idx_stride} -> Only {len(ftmaps_one_cls_one_stride)} samples')
@@ -2878,21 +2791,28 @@ class DistanceMethod(OODMethod):
                     clusters_per_class_and_stride[idx_cls][idx_stride] = np.empty(0)
 
     def generate_multiple_cluster_per_class_per_stride(self, ind_tensors: List[List[np.ndarray]], clusters_per_class_and_stride: List[List[np.ndarray]], logger):
+        np.set_printoptions(threshold=20)
         for idx_cls, ftmaps_one_cls in enumerate(ind_tensors):
             #logger.info(f'Class {idx_cls:03} of {len(ind_tensors)}')
             for idx_stride, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
                 
                 if len(ftmaps_one_cls_one_stride) > 1:
+                    ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride)
                     # Here i have to implement the method to search for the best number of clusters
                     # and then apply the clustering method, to finally generate N number of centroids
-                    # 1. Find the optimal number of clusters
-                    n_clusters = find_optimal_number_of_clusters_one_class_one_stride(ftmaps_one_cls_one_stride, self.cluster_method, logger)
+                    # 1. Find the optimal number of clusters and obtain the labels
+                    cluster_labels = find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
+                        ftmaps_one_cls_one_stride,
+                        self.cluster_method,
+                        self.metric,
+                        logger,
+                    )
                     # 2. Obtain the cluster labels
-                    clusters_labels = self.cluster_method(n_clusters).fit_predict(ftmaps_one_cls_one_stride)
+                    #clusters_labels = self.cluster_method(n_clusters).fit_predict(ftmaps_one_cls_one_stride)
                     # 3. Aggregate the samples of each cluster using the agg method
                     clusters = []
-                    for idx_cluster in range(n_clusters):
-                        clusters.append(self.agg_method(ftmaps_one_cls_one_stride[clusters_labels == idx_cluster], axis=0))
+                    for idx_cluster in sorted(set(cluster_labels)):
+                        clusters.append(self.agg_method(ftmaps_one_cls_one_stride[cluster_labels == idx_cluster], axis=0))
                     clusters_per_class_and_stride[idx_cls][idx_stride] = np.array(clusters)
 
                 else:
@@ -2916,74 +2836,117 @@ class Mahalanobis(DistanceMethod):
     #     ]
     pass
 
+class _PairwiseDistanceClustersPerClassPerStride(DistanceMethod):
+    def __init__(self, name: str, metric: str, **kwargs):
+            AVAILABLE_PAIRWISE_METRICS = ['cosine', 'l1', 'l2']
+            per_class = True
+            per_stride = True
+            cluster_optimization_metric = 'silhouette'
+            super().__init__(name=name, metric=metric, per_class=per_class, per_stride=per_stride, cluster_optimization_metric=cluster_optimization_metric, **kwargs)
+            assert self.per_class and self.per_stride, "This method is only compatible with per_class and per_stride"
+            assert self.metric in AVAILABLE_PAIRWISE_METRICS, f"The metric must be one of {AVAILABLE_PAIRWISE_METRICS}. Current value: {self.metric}"
+        
+    def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
 
-class L1DistanceOneClusterPerStride(DistanceMethod):
-    
-        # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
-        def __init__(self, **kwargs):
+        distances = pairwise_distances(
+            cluster,
+            activations,
+            metric=self.metric
+            )
+
+        return distances.min(axis=0)
+
+class L1DistanceOneClusterPerStride(_PairwiseDistanceClustersPerClassPerStride):
+
+    def __init__(self, **kwargs):
+            metric = 'l1'
             name = 'L1DistancePerStride'
-            per_class = True
-            per_stride = True
-            cluster_method = 'one'
-            cluster_optimization_metric = 'silhouette'
-            super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
-        
-        def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
+            super().__init__(name, metric, **kwargs)
 
-            distances = pairwise_distances(
-                cluster,
-                activations,
-                metric='l1'
-                )
 
-            return distances[0]
-        
+class L2DistanceOneClusterPerStride(_PairwiseDistanceClustersPerClassPerStride):
 
-class L2DistanceOneClusterPerStride(DistanceMethod):
-    
-        # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
-        def __init__(self,  **kwargs):
+    def __init__(self, **kwargs):
+            metric = 'l2'
             name = 'L2DistancePerStride'
-            per_class = True
-            per_stride = True
-            cluster_method = 'one'
-            cluster_optimization_metric = 'silhouette'
-            super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
-        
-        def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
-
-            distances = pairwise_distances(
-                cluster,
-                activations,
-                metric='l2'
-                )
-
-            return distances[0]
+            super().__init__(name, metric, **kwargs)
 
 
-class CosineDistanceOneClusterPerStride(DistanceMethod):
-    
-        # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
-        #def __init__(self, agg_method, **kwargs):
-        def __init__(self, **kwargs):
+class CosineDistanceOneClusterPerStride(_PairwiseDistanceClustersPerClassPerStride):
+
+    def __init__(self, **kwargs):
+            metric = 'cosine'
             name = 'CosineDistancePerStride'
-            per_class = True
-            per_stride = True
-            #cluster_method = 'one'
-            cluster_optimization_metric = 'silhouette'
-            #super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
-            super().__init__(name, per_class, per_stride, cluster_optimization_metric=cluster_optimization_metric, **kwargs)
+            super().__init__(name, metric, **kwargs)
+
+
+# class L1DistanceOneClusterPerStride(DistanceMethod):
+    
+#         # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
+#         def __init__(self, **kwargs):
+#             name = 'L1DistancePerStride'
+#             per_class = True
+#             per_stride = True
+#             cluster_method = 'one'
+#             cluster_optimization_metric = 'silhouette'
+#             super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
         
-        def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
+#         def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
 
-            distances = pairwise_distances(
-                cluster,
-                activations,
-                metric='cosine'
-                )
+#             distances = pairwise_distances(
+#                 cluster,
+#                 activations,
+#                 metric='l1'
+#                 )
 
-            #return distances[0]
-            return distances.min(axis=0)
+#             #return distances[0]
+#             return distances.min(axis=0)
+        
+
+# class L2DistanceOneClusterPerStride(DistanceMethod):
+    
+#         # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
+#         def __init__(self,  **kwargs):
+#             name = 'L2DistancePerStride'
+#             per_class = True
+#             per_stride = True
+#             cluster_method = 'one'
+#             cluster_optimization_metric = 'silhouette'
+#             super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
+        
+#         def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
+
+#             distances = pairwise_distances(
+#                 cluster,
+#                 activations,
+#                 metric='l2'
+#                 )
+
+#             #return distances[0]
+#             return distances.min(axis=0)
+
+# class CosineDistanceOneClusterPerStride(DistanceMethod):
+    
+#         # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
+#         #def __init__(self, agg_method, **kwargs):
+#         def __init__(self, **kwargs):
+#             self.metric = 'cosine'
+#             name = 'CosineDistancePerStride'
+#             per_class = True
+#             per_stride = True
+#             #cluster_method = 'one'
+#             cluster_optimization_metric = 'silhouette'
+#             #super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
+#             super().__init__(name, per_class, per_stride, cluster_optimization_metric=cluster_optimization_metric, **kwargs)
+        
+#         def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
+#             distances = pairwise_distances(
+#                 cluster,
+#                 activations,
+#                 metric='cosine'
+#                 )
+#             #return distances[0]
+#             return distances.min(axis=0)
         
 
 class GAPL2DistanceOneClusterPerStride(DistanceMethod):
@@ -3005,7 +2968,8 @@ class GAPL2DistanceOneClusterPerStride(DistanceMethod):
                 metric='l2'
                 )
 
-            return distances[0]
+            #return distances[0]
+            return distances.min(axis=0)
         
         def activations_transformation(self, activations: np.array) -> np.array:
             """
@@ -3184,84 +3148,3 @@ def configure_extra_output_of_the_model(model: YOLO, ood_method: Type[OODMethod]
             raise ValueError(f"The option {ood_method.which_internal_activations} is not valid.")
         # 2. Select the extraction mode for the ultralytics/yolo/v8/detect/predict.py
         model.model.extraction_mode = ood_method.which_internal_activations  # This attribute is created in the DetectionModel class
-
-
-############################################################
-
-# Code below copied from https://github.com/KingJamesSong/RankFeat/blob/main/utils/test_utils.py
-
-############################################################
-
-def stable_cumsum(arr, rtol=1e-05, atol=1e-08):
-    """Use high precision for cumsum and check that final value matches sum
-    Parameters
-    ----------
-    arr : array-like
-        To be cumulatively summed as flat
-    rtol : float
-        Relative tolerance, see ``np.allclose``
-    atol : float
-        Absolute tolerance, see ``np.allclose``
-    """
-    out = np.cumsum(arr, dtype=np.float64)
-    expected = np.sum(arr, dtype=np.float64)
-    if not np.allclose(out[-1], expected, rtol=rtol, atol=atol):
-        raise RuntimeError('cumsum was found to be unstable: '
-                           'its last element does not correspond to sum')
-    return out
-
-
-def fpr_and_fdr_at_recall(y_true, y_score, recall_level, pos_label=1.):
-    # make y_true a boolean vector
-    y_true = (y_true == pos_label)
-
-    # sort scores and corresponding truth values
-    desc_score_indices = np.argsort(y_score, kind="mergesort")[::-1]
-    y_score = y_score[desc_score_indices]
-    y_true = y_true[desc_score_indices]
-
-    # y_score typically has many tied values. Here we extract
-    # the indices associated with the distinct values. We also
-    # concatenate a value for the end of the curve.
-    distinct_value_indices = np.where(np.diff(y_score))[0]
-    threshold_idxs = np.r_[distinct_value_indices, y_true.size - 1]
-
-    # accumulate the true positives with decreasing threshold
-    tps = stable_cumsum(y_true)[threshold_idxs]
-    fps = 1 + threshold_idxs - tps      # add one because of zero-based indexing
-
-    thresholds = y_score[threshold_idxs]
-
-    recall = tps / tps[-1]
-
-    last_ind = tps.searchsorted(tps[-1])
-    sl = slice(last_ind, None, -1)      # [last_ind::-1]
-    recall, fps, tps, thresholds = np.r_[recall[sl], 1], np.r_[fps[sl], 0], np.r_[tps[sl], 0], thresholds[sl]
-
-    cutoff = np.argmin(np.abs(recall - recall_level))
-
-    return fps[cutoff] / (np.sum(np.logical_not(y_true)))   # , fps[cutoff]/(fps[cutoff] + tps[cutoff])
-
-
-def get_measures(in_examples, out_examples):
-    num_in = in_examples.shape[0]
-    num_out = out_examples.shape[0]
-
-    # logger.info("# in example is: {}".format(num_in))
-    # logger.info("# out example is: {}".format(num_out))
-
-    labels = np.zeros(num_in + num_out, dtype=np.int32)
-    labels[:num_in] += 1
-
-    examples = np.squeeze(np.vstack((in_examples, out_examples)))
-    aupr_in = sk.average_precision_score(labels, examples)
-    auroc = sk.roc_auc_score(labels, examples)
-
-    recall_level = 0.95
-    fpr = fpr_and_fdr_at_recall(labels, examples, recall_level)
-
-    labels_rev = np.zeros(num_in + num_out, dtype=np.int32)
-    labels_rev[num_in:] += 1
-    examples = np.squeeze(-np.vstack((in_examples, out_examples)))
-    aupr_out = sk.average_precision_score(labels_rev, examples)
-    return auroc, aupr_in, aupr_out, fpr

@@ -21,7 +21,7 @@ from ultralytics.yolo.data import BaseDataset
 from ultralytics.yolo.data.build import InfiniteDataLoader
 
 
-from ood_utils import get_measures, configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, \
+from ood_utils import configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, \
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride
 from data_utils import read_json, write_json, load_dataset_and_dataloader
 from unknown_localization_utils import select_ftmaps_summarization_method, select_thresholding_method
@@ -98,12 +98,12 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
     }
     distance_methods_kwargs = {
         'agg_method': 'mean',
+        'cluster_method': args.cluster_method,
         'ind_info_creation_option': args.ind_info_creation_option,
         'enhanced_unk_localization': args.enhanced_unk_localization,
         'which_internal_activations': args.which_internal_activations,
         'saliency_map_computation_function': select_ftmaps_summarization_method(CUSTOM_HYP.unk.SUMMARIZATION_METHOD),
         'thresholds_out_of_saliency_map_function': select_thresholding_method(CUSTOM_HYP.unk.THRESHOLDING_METHOD),
-        'cluster_method': args.cluster_method,
     }
     distance_methods_kwargs.update(common_kwargs)
 
@@ -112,16 +112,12 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
     elif args.ood_method == 'Energy':
         return Energy(temper=args.temperature, per_class=True, per_stride=False, **common_kwargs)
     elif args.ood_method == 'L1_cl_stride':
-        #return L1DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
         return L1DistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'L2_cl_stride':
-        #return L2DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
         return L2DistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'GAP_L2_cl_stride':
-        #return GAPL2DistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
         return GAPL2DistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'Cosine_cl_stride':
-        #return CosineDistanceOneClusterPerStride(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=args.conf_thr)
         return CosineDistanceOneClusterPerStride(**distance_methods_kwargs)
     else:
         raise NotImplementedError("Not implemented yet")
