@@ -1661,7 +1661,8 @@ class OODMethod(ABC):
             possible_unk_boxes_per_thr = extract_bboxes_from_saliency_map_and_thresholds(saliency_map, thresholds)
 
             if CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
-                if heatmap is not None:
+                heatmap_boxes = None
+                if heatmap is not None and not heatmap.isnan().any():
                     # Make the same process of obtaining boxes with the heatmap
                     thresholds_heatmap = self.compute_thresholds_out_of_saliency_map(heatmap.numpy())
                     heatmap_boxes_per_thr = extract_bboxes_from_saliency_map_and_thresholds(heatmap, thresholds_heatmap)
@@ -1878,9 +1879,9 @@ class OODMethod(ABC):
                         unk_proposals_one_thr = unk_proposals_one_thr[max_intersection_ratios <= CUSTOM_HYP.unk.MAX_INTERSECTION_W_PREDS]
                 
                 if CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
-                    assert xai_boxes is not None, "You must provide the XAI boxes to remove the proposals"
+                    #assert xai_boxes is not None, "You must provide the XAI boxes to remove the proposals"
                     # 5º: Remove unk_proposals_one_thr that are close to the XAI boxes
-                    if len(unk_proposals_one_thr) > 0:
+                    if len(unk_proposals_one_thr) > 0 and xai_boxes is not None:
                         # Compute the IoU with the XAI boxes
                         ious = box_iou(unk_proposals_one_thr, xai_boxes)
                         # Remove the unk_proposals_one_thr with IoU > iou_thr
@@ -2095,7 +2096,7 @@ class LogitsMethod(OODMethod):
         enhanced_unk_localization = False  # By default not used with logits, as feature maps are needed.
         super().__init__(name, distance_method, per_class, per_stride, iou_threshold_for_matching, min_conf_threshold, which_internal_activations, enhanced_unk_localization)
 
-    def compute_ood_decision_on_results(self, results: Results, logger) -> List[List[int]]:
+    def compute_ood_decision_on_results(self, results: Results, logger: Logger) -> List[List[int]]:
         ood_decision = []  
         for idx_img, res in enumerate(results):
             ood_decision.append([])  # Every image has a list of decisions for each bbox
@@ -2145,21 +2146,6 @@ class MSP(LogitsMethod):
         logits = logits.numpy()
         assert cls_idx == logits.argmax(), "The max logit is not the one of the predicted class"
         return logits[cls_idx]
-
-    # def extract_internal_activations(self, results: Results, all_activations: List[float]):
-    #     """
-    #     The extracted activations will be stored in the list all_activations
-    #     """
-    #     for res in results:
-    #         # Loop over the valid predictions
-    #         for valid_idx_one_bbox in res.valid_preds:
-                
-    #             cls_idx_one_bbox = int(res.boxes.cls[valid_idx_one_bbox].cpu())
-
-    #             logits_one_bbox = res.extra_item[valid_idx_one_bbox][4:].cpu().numpy()
-
-    #             all_activations[cls_idx_one_bbox].append(logits_one_bbox.max())
-
     
 class Energy(LogitsMethod):
 
@@ -3142,7 +3128,7 @@ def configure_extra_output_of_the_model(model: YOLO, ood_method: Type[OODMethod]
         # 1. Select the layers to extract depending on the OOD method from ultralytics/nn/tasks.py
         if ood_method.which_internal_activations in FTMAPS_RELATED_OPTIONS:
             model.model.which_layers_to_extract = "convolutional_layers"
-        elif ood_method.which_internal_activations == LOGITS_RELATED_OPTIONS:
+        elif ood_method.which_internal_activations in LOGITS_RELATED_OPTIONS:
             model.model.which_layers_to_extract = "logits"
         else:
             raise ValueError(f"The option {ood_method.which_internal_activations} is not valid.")

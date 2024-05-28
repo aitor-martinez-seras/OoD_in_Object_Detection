@@ -25,7 +25,8 @@ from ood_utils import configure_extra_output_of_the_model, OODMethod, LogitsMeth
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride
 from data_utils import read_json, write_json, load_dataset_and_dataloader
 from unknown_localization_utils import select_ftmaps_summarization_method, select_thresholding_method
-from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, OOD_METHOD_CHOICES, CONF_THRS_FOR_BENCHMARK, TARGETS_RELATED_OPTIONS
+from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, OOD_METHOD_CHOICES, CONF_THRS_FOR_BENCHMARK, TARGETS_RELATED_OPTIONS, \
+    AVAILABLE_CLUSTERING_METHODS, DISTANCE_METHODS
 from custom_hyperparams import CUSTOM_HYP
 
 
@@ -46,6 +47,7 @@ class SimpleArgumentParser(Tap):
     name: str = 'prueba'  # Name of this run. Used for monitoring and checkpointing
     # Benchmarks
     benchmark_conf: bool = False  # Run confidence benchmark over confidence thresholds [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001]
+    benchmark_clusters: bool = False  # Run cluster benchmark over the different clustering methods
     # Hyperparameters
     conf_thr: float = 0.15  # Confidence threshold for the detections
     tpr_thr: float = 0.95  # TPR threshold for the OoD detection
@@ -140,14 +142,20 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
     logger.info("Obtaining thresholds...")
     logger.flush()
 
-    thresholds_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_thresholds.json'
-    activations_path = STORAGE_PATH / f'{ood_method.which_internal_activations}_{model.ckpt["train_args"]["name"]}_activations.pt'
-    clusters_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_clusters.pt'
-
     if args.ind_info_creation_option in TARGETS_RELATED_OPTIONS:
-        thresholds_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_thresholds_{args.ind_info_creation_option}.json'
         activations_path = STORAGE_PATH / f'{ood_method.which_internal_activations}_{model.ckpt["train_args"]["name"]}_activations_{args.ind_info_creation_option}.pt'
-        clusters_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_clusters_{args.ind_info_creation_option}.pt'
+        if args.ood_method in DISTANCE_METHODS:
+            clusters_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_clusters_{ood_method.cluster_method}_{args.ind_info_creation_option}.pt'
+            thresholds_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_thresholds_{ood_method.cluster_method}_{args.ind_info_creation_option}.json'
+        else:
+            thresholds_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_thresholds_{args.ind_info_creation_option}.json'
+    else:
+        activations_path = STORAGE_PATH / f'{ood_method.which_internal_activations}_{model.ckpt["train_args"]["name"]}_activations.pt'
+        if args.ood_method in DISTANCE_METHODS:
+            clusters_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_clusters_{ood_method.cluster_method}.pt'
+            thresholds_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_thresholds_{ood_method.cluster_method}.json'
+        else:
+            thresholds_path = STORAGE_PATH / f'{ood_method.name}_{model.ckpt["train_args"]["name"]}_thresholds.json'
 
     ### Load the thresholds ###
     if args.load_thresholds:
@@ -205,10 +213,11 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
             logger.info("Generating in-distribution scores...")
             ind_scores = ood_method.compute_scores_from_activations(ind_activations, logger)
 
-            if CUSTOM_HYP.unk.rank.USE_UNK_PROPOSALS_THR:
-                logger.info("Generating scores to evaluate UNK proposals...")
-                scores_for_unk_prop = ood_method.compute_scores_from_activations_for_unk_proposals(ind_activations, logger)
-                logger.info("Saving UNK proposals...")
+            if hasattr(CUSTOM_HYP.unk, 'rank'):
+                if CUSTOM_HYP.unk.rank.USE_UNK_PROPOSALS_THR:
+                    logger.info("Generating scores to evaluate UNK proposals...")
+                    scores_for_unk_prop = ood_method.compute_scores_from_activations_for_unk_proposals(ind_activations, logger)
+                    logger.info("Saving UNK proposals...")
         
         # For the rest of the methods activations are the scores themselves
         else:
@@ -218,7 +227,8 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
         # Finally generate and save the thresholds
         logger.info("Generating thresholds...")
         ood_method.thresholds = ood_method.generate_thresholds(ind_scores, tpr=args.tpr_thr, logger=logger)
-        if CUSTOM_HYP.unk.rank.USE_UNK_PROPOSALS_THR:
+        if hasattr(CUSTOM_HYP.unk, 'rank'):
+            if CUSTOM_HYP.unk.rank.USE_UNK_PROPOSALS_THR:
                 logger.info("Generating scores to evaluate UNK proposals...")
                 scores_for_unk_prop = ood_method.generate_unk_prop_thr(scores_for_unk_prop, tpr=args.tpr_thr)
                 logger.info("Saving UNK proposals...")
@@ -353,6 +363,36 @@ def main(args: SimpleArgumentParser):
             results_df.to_csv(RESULTS_PATH / f'{NOW}_{args.ood_method}.csv', index=False)
             results_df.to_excel(RESULTS_PATH / f'{NOW}_{args.ood_method}.xlsx', index=False)
 
+        elif args.benchmark_clusters:
+            logger.info(f"Running benchmark for clustering methods {AVAILABLE_CLUSTERING_METHODS}")
+            import pandas as pd
+            final_results = []
+            for cluster_method in AVAILABLE_CLUSTERING_METHODS:
+                print("-"*50)
+                logger.info(f" *** Clustering method: {cluster_method} ***")
+                ood_method.cluster_method = cluster_method
+                # Extract metrics
+                execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
+                results_one_run = run_eval(ood_method, model, device, ood_dataloader, known_classes, logger)
+                # Make data be in range [0, 1]
+                for key in results_one_run.keys():
+                    if key not in ["A-OSE", "WI-08"]:
+                        results_one_run[key] = results_one_run[key] / 100
+                res_columns = list(results_one_run.keys())
+                results_one_run['Method'] = args.ood_method
+                results_one_run['Conf_threshold'] = args.conf_thr
+                results_one_run["tpr_thr"] = args.tpr_thr
+                results_one_run['cluster_method'] = cluster_method
+                results_one_run['Model'] = args.model_path if args.model_path else model_to_load
+                
+                final_results.append(results_one_run)
+                print("-"*50, '\n')
+            # Save the results
+            results_df = pd.DataFrame(final_results)
+            results_df = results_df[['Method', 'Conf_threshold', 'tpr_thr', 'cluster_method'] + res_columns + ['Model']]
+            results_df.to_csv(RESULTS_PATH / f'{NOW}_{args.ood_method}_cluster_methods.csv', index=False)
+            results_df.to_excel(RESULTS_PATH / f'{NOW}_{args.ood_method}_cluster_methods.xlsx', index=False)
+
         ### Compute metrics for a single configuration ###
         else:
             # Run the normal evaluation to compute the metrics
@@ -362,7 +402,6 @@ def main(args: SimpleArgumentParser):
 
     logger.info("Total running time: {}".format(end_time - start_time))
     logger.info(CUSTOM_HYP)
-
 
 if __name__ == "__main__":
     main(SimpleArgumentParser().parse_args())

@@ -198,7 +198,7 @@ def recursive_otsu(image: np.ndarray, num_classes: int = NUM_THRS, current_depth
 
 def multi_threshold_otsu(image: np.ndarray, num_classes: int = NUM_THRS) -> List[float]:
     # Multi-level Otsu's Thresholding
-    thresholds = filters.threshold_multiotsu(image, classes=num_classes)
+    thresholds = filters.threshold_multiotsu(image, classes=num_classes, nbins=128)
     return sorted(set(thresholds))
 
 
