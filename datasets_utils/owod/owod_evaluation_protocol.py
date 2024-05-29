@@ -19,91 +19,19 @@ from logging import Logger
 from collections import OrderedDict, defaultdict
 from functools import lru_cache
 from pathlib import Path
+import json
 
 import matplotlib.pyplot as plt
 import torch
 from torch.distributions.weibull import Weibull
 from torch.distributions.transforms import AffineTransform
 from torch.distributions.transformed_distribution import TransformedDistribution
-# from fvcore.common.file_io import PathManager
 
-# from detectron2.data import MetadataCatalog
-# from detectron2.utils import comm
+from constants import UNKNOWN_CLASS_INDEX
 
-# from detectron2.evaluation.evaluator import DatasetEvaluator
-import json
-np.set_printoptions(threshold=sys.maxsize)
-
-
-# f = open('./datasets/t1/annotations/test.json', 'r')
-# ground_truth = json.load(f)
-# f.close()
-
-# mapping ={}
-# for each in ground_truth['images']:
-#     mapping[each['id']]=each['file_name'].split('.')[0]
 
 OWOD_FOLDER_PATH = Path(__file__).parent
-UNKNOWN_CLASS_INDEX = 80
 
-# class PascalVOCDetectionEvaluator(DatasetEvaluator):
-#     """
-#     Evaluate Pascal VOC style AP for Pascal VOC dataset.
-#     It contains a synchronization, therefore has to be called from all ranks.
-
-#     Note that the concept of AP can be implemented in different ways and may not
-#     produce identical results. This class mimics the implementation of the official
-#     Pascal VOC Matlab API, and should produce similar but not identical results to the
-#     official API.
-#     """
-
-#     def __init__(self, dataset_name, cfg=None):
-#         """
-#         Args:
-#             dataset_name (str): name of the dataset, e.g., "voc_2007_test"
-#         """
-#         self._dataset_name = dataset_name
-#         meta = MetadataCatalog.get(dataset_name)
-#         self._anno_file_template = os.path.join('./datasets', "Annotations", "{}.xml")
-#         self._image_set_path = os.path.join('./split', "all_task_test.txt")
-#         self._class_names = meta.thing_classes
-#         self._is_2007 = False
-#         # self._is_2007 = meta.year == 2007
-#         self._cpu_device = torch.device("cpu")
-#         logger = logging.getLogger(__name__)
-#         if cfg is not None:
-#             self.prev_intro_cls = cfg.TEST.PREV_INTRODUCED_CLS
-#             self.curr_intro_cls = cfg.TEST.CUR_INTRODUCED_CLS
-#             self.total_num_class = cfg.MODEL.RandBox.NUM_CLASSES
-#             self.unknown_class_index = self.total_num_class - 1
-#             self.num_seen_classes = self.prev_intro_cls + self.curr_intro_cls
-#             self.known_classes = self._class_names[:self.num_seen_classes]
-
-#     def reset(self):
-#         self._predictions = defaultdict(list)  # class name -> list of prediction strings
-
-
-
-#     def process(self, inputs, outputs):
-#         for input, output in zip(inputs, outputs):
-#             image_id = input["image_id"]
-#             instances = output["instances"].to(self._cpu_device)
-#             boxes = instances.pred_boxes.tensor.numpy()
-#             scores = instances.scores.tolist()
-#             classes = instances.pred_classes.tolist()
-#             threshold = 0.15
-#             for box, score, cls in zip(boxes, scores, classes):
-#                 if score < threshold:
-#                     continue
-#                 if cls == -100:
-#                     continue
-#                 xmin, ymin, xmax, ymax = box
-#                 # The inverse of data loading logic in `datasets/pascal_voc.py`
-#                 xmin += 1
-#                 ymin += 1
-#                 self._predictions[cls].append(
-#                     f"{image_id} {score:.3f} {xmin:.1f} {ymin:.1f} {xmax:.1f} {ymax:.1f}"
-#                 )
 
 def compute_avg_precision_at_many_recall_level_for_unk(precisions, recalls):
     precs = {}
@@ -112,6 +40,7 @@ def compute_avg_precision_at_many_recall_level_for_unk(precisions, recalls):
         p = compute_avg_precision_at_a_recall_level_for_unk(precisions, recalls, recall_level=r)
         precs[r] = p
     return precs
+
 
 def compute_avg_precision_at_a_recall_level_for_unk(precisions, recalls, recall_level=0.5):
     precs = {}
@@ -127,6 +56,7 @@ def compute_avg_precision_at_a_recall_level_for_unk(precisions, recalls, recall_
             precs[iou] = 0
     return precs
 
+
 def compute_WI_at_many_recall_level(recalls, tp_plus_fp_cs, fp_os, known_classes):
     wi_at_recall = {}
     for r in range(1, 10):
@@ -134,6 +64,7 @@ def compute_WI_at_many_recall_level(recalls, tp_plus_fp_cs, fp_os, known_classes
         wi = compute_WI_at_a_recall_level(recalls, tp_plus_fp_cs, fp_os, recall_level=r, known_classes=known_classes)
         wi_at_recall[r] = wi
     return wi_at_recall
+
 
 def compute_WI_at_a_recall_level(recalls, tp_plus_fp_cs, fp_os, recall_level=0.5, known_classes=None):
     wi_at_iou = {}
@@ -176,7 +107,6 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
         fp_os = defaultdict(list)
 
         # For each class, compute some metrics
-        n_clases_wout_preds = 0
         for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
             # Get the predictions with this class as predicted class
             one_class_preds = {
@@ -699,9 +629,6 @@ def plot_pr_curve(precision, recall, filename, base_path='/home/fk1/workspace/OW
     plt.ylim([0.0, 1.05])
     plt.xlim([0.0, 1.0])
     plt.savefig(base_path + filename)
-
-    # print(precision)
-    # print(recall)
 
 
 # Below code is obtained and modified from https://github.com/Went-Liang/UnSniffer 
