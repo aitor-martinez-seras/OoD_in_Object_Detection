@@ -244,13 +244,14 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
         annotations_unksniffer[one_img_targets['img_name']] = np.concatenate([one_img_targets['bboxes'], one_img_targets['cls'][:, None]], axis=1)
     
     # Compute metrics for UNK
-    recall, precision, ap, rec, prec, state, det_image_files = voc_evaluate_as_unksniffer(
+    recall_unksniff, precision_unksniff, ap_unksniff, rec, prec, state, det_image_files = voc_evaluate_as_unksniffer(
             detections=detections_unksniffer,
             annotations=annotations_unksniffer,
             cid=UNKNOWN_CLASS_INDEX,
         )
+    f1_unksniff = 2 * (precision_unksniff * recall_unksniff) / (precision_unksniff + recall_unksniff)
     print("---------------")
-    logger.info(f"Class: UNK from UnkSniffer\nU-AP: {ap * 100:.2f}\nU-F1': {2 * (precision * recall) / (precision + recall) * 100}\nU-PRE: {precision * 100:.2f}\nU-REC: {recall * 100:.2f}")
+    logger.info(f"Class: UNK from UnkSniffer\nU-AP:\t{ap_unksniff * 100:.3f}\nU-F1':\t{f1_unksniff * 100:.3f}\nU-PRE:\t{precision_unksniff * 100:.3f}\nU-REC:\t{recall_unksniff * 100:.3f}")
     print("---------------")
     # Check if we are in coco_ood, where ONLY the unknown class is present in the targets.
     # If is the case, we need to return the metrics for the unknown class ONLY
@@ -262,15 +263,16 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
             break
     if not cls_diff_from_unk_found:
         return {
-            'U-AP': ap * 100,
-            'U-F1': 2 * (precision * recall) / (precision + recall) * 100,
-            'U-PRE': precision * 100,
-            'U-REC': recall * 100,
+            'U-AP': ap_unksniff * 100,
+            'U-F1': f1_unksniff * 100,
+            'U-PRE': precision_unksniff * 100,
+            'U-REC': recall_unksniff * 100,
         }
     
     # WI is calculated for all_test?? Or only for WI split?
     #if n_clases_wout_preds < 19:
     wi = compute_WI_at_many_recall_level(all_recs, tp_plus_fp_cs, fp_os, known_classes=known_classes)
+    Logger.info('----------------- Calculations as per Towards Open World Object Detection paper -----------------')
     logger.info('Wilderness Impact: ' + str(wi))
     logger.info('Wilderness Impact Recall 0.8: ' + str(wi[0.8]))
 
@@ -292,61 +294,13 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     logger.info("Precisions50: " + str(['%.1f' % x for x in precs[50]]))
     logger.info("Recall50: " + str(['%.1f' % x for x in recs[50]]))
     # logger.info("AP75: " + str(['%.1f' % x for x in aps[75]]))
-    if False:
-        # TODO: Voy a tener que llevar un trackeo de las classes introducidas previamente y las actuales
-        if self.prev_intro_cls > 0:
-            # logger.info("\nPrev class AP__: " + str(np.mean(avg_precs[:self.prev_intro_cls])))
-            logger.info("Prev class AP50: " + str(np.mean(aps[50][:self.prev_intro_cls])))
-            logger.info("Prev class Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls])))
-            logger.info("Prev class Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls])))
-            print("Prev class AP50: " + str(np.mean(aps[50][:self.prev_intro_cls])))
-            print("Prev class Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls])))
-            print("Prev class Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls])))
-
-            # logger.info("Prev class AP75: " + str(np.mean(aps[75][:self.prev_intro_cls])))
-
-        # logger.info("\nCurrent class AP__: " + str(np.mean(avg_precs[self.prev_intro_cls:self.curr_intro_cls])))
-        logger.info("Current class AP50: " + str(np.mean(aps[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-        logger.info("Current class Precisions50: " + str(np.mean(precs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-        logger.info("Current class Recall50: " + str(np.mean(recs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-        print("Current class AP50: " + str(np.mean(aps[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-        print("Current class Precisions50: " + str(np.mean(precs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-        print("Current class Recall50: " + str(np.mean(recs[50][self.prev_intro_cls:self.prev_intro_cls + self.curr_intro_cls])))
-        # logger.info("Current class AP75: " + str(np.mean(aps[75][self.prev_intro_cls:self.curr_intro_cls])))
-
     # logger.info("\nKnown AP__: " + str(np.mean(avg_precs[:self.prev_intro_cls + self.curr_intro_cls])))
     logger.info("Known AP50: " + str(np.mean(aps[50][:-1])))
     logger.info("Known Precisions50: " + str(np.mean(precs[50][:-1])))
     logger.info("Known Recall50: " + str(np.mean(recs[50][:-1])))
-    # print("Known AP50: " + str(np.mean(aps[50][:-1])))
-    # print("Known Precisions50: " + str(np.mean(precs[50][:-1])))
-    # print("Known Recall50: " + str(np.mean(recs[50][:-1])))
-    # logger.info("Known AP75: " + str(np.mean(aps[75][:self.prev_intro_cls + self.curr_intro_cls])))
-    # logger.info("Known AP50: " + str(np.mean(aps[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    # logger.info("Known Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    # logger.info("Known Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    # print("Known AP50: " + str(np.mean(aps[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    # print("Known Precisions50: " + str(np.mean(precs[50][:self.prev_intro_cls + self.curr_intro_cls])))
-    # print("Known Recall50: " + str(np.mean(recs[50][:self.prev_intro_cls + self.curr_intro_cls])))
+    logger.info("------------------------------------------------------------------------------------------------\n")
 
-    # logger.info("\nUnknown AP__: " + str(avg_precs[-1]))
-    logger.info("Unknown AP50: " + str(aps[50][-1]))
-    logger.info("Unknown Precisions50: " + str(precs[50][-1]))
-    logger.info("Unknown Recall50: " + str(recs[50][-1]))
-    # print("Unknown AP50: " + str(aps[50][-1]))
-    # print("Unknown Precisions50: " + str(precs[50][-1]))
-    # print("Unknown Recall50: " + str(recs[50][-1]))
-    # logger.info("Unknown AP75: " + str(aps[75][-1]))
-
-    # logger.info("R__: " + str(['%.1f' % x for x in list(np.mean([x for _, x in recs.items()], axis=0))]))
-    # logger.info("R50: " + str(['%.1f' % x for x in recs[50]]))
-    # logger.info("R75: " + str(['%.1f' % x for x in recs[75]]))
-    #
-    # logger.info("P__: " + str(['%.1f' % x for x in list(np.mean([x for _, x in precs.items()], axis=0))]))
-    # logger.info("P50: " + str(['%.1f' % x for x in precs[50]]))
-    # logger.info("P75: " + str(['%.1f' % x for x in precs[75]]))
-
-    # Info for paper
+    # Metrics from Towards Open World Object Detection paper
     known_ap50 = np.mean(aps[50][:-1])
     unknown_ap50 = aps[50][-1]
     unknown_f1 = 2 * (precs[50][-1] * recs[50][-1]) / (precs[50][-1] + recs[50][-1])
@@ -354,60 +308,53 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     unknown_recall = recs[50][-1]
     wilderness_impact_recall_08 = wi[0.8][50]
     total_num_unk_det_as_known = total_num_unk_det_as_known[50]
+    # Reporting metrics from UnkSniffer code except for mAP, A-OSE and WI
     results_dict = {
         'mAP': known_ap50,
-        'U-AP': unknown_ap50,
-        'U-F1': unknown_f1,
-        'U-PRE': unknown_precision,
-        'U-REC': unknown_recall,
+        'U-AP': ap_unksniff,
+        'U-F1': f1_unksniff,
+        'U-PRE': precision_unksniff,
+        'U-REC': recall_unksniff,
         'A-OSE': total_num_unk_det_as_known,
         'WI-08': wilderness_impact_recall_08,
     }
-    logger.info('Summary:')
-    logger.info('-----------------')    
+    logger.info('Summary using UnkSniffer code for eval (except mAP, A-OSE and WI):')
+    logger.info('-----------------')
     logger.info('Known mAP50 [%]: ' + str(known_ap50))
-    logger.info('Unknown AP50 [%]: ' + str(unknown_ap50))
-    logger.info('Unknown F1 score [%]: ' + str(unknown_f1))
-    logger.info('Unknown Precision [%]: ' + str(unknown_precision))
-    logger.info('Unknown Recall [%]: ' + str(unknown_recall))
+    logger.info('Unknown AP50 [%]: ' + str(ap_unksniff))
+    logger.info('Unknown F1 score [%]: ' + str(f1_unksniff))
+    logger.info('Unknown Precision [%]: ' + str(precision_unksniff))
+    logger.info('Unknown Recall [%]: ' + str(recall_unksniff))
     logger.info('A-OSE: ' + str(total_num_unk_det_as_known))
     logger.info('Wilderness Impact Recall 0.8 [%]: ' + str(wilderness_impact_recall_08))
-    logger.info('-----------------')    
-    # logger.info('-----------------')
-    # logger.info('Known mAP50 [%]: ' + str(np.mean(aps[50][:-1])))
-    # logger.info('Unknown AP50 [%]: ' + str(aps[50][-1]))
-    # logger.info('Unknown F1 score [%]: ' + str(2 * (precs[50][-1] * recs[50][-1]) / (precs[50][-1] + recs[50][-1])))
-    # logger.info('Unknown Precision [%]: ' + str(precs[50][-1]))
-    # logger.info('Unknown Recall [%]: ' + str(recs[50][-1]))
-    # logger.info('A-OSE: ' + str(total_num_unk_det_as_known))
-    # logger.info('Wilderness Impact Recall 0.8 [%]: ' + str(wi[0.8]))
-    # logger.info('-----------------')
+    logger.info('-----------------')
 
     # Now adapt the data to the UnkSniffer evaluation code
     # detections = dict[cid][image_file] = numpy.array([[x1,y1,x2,y2,score], [...],...])
-    detections_unksniffer = {}
-    for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
-        one_class_preds ={}
-        if cls_name == 'unknown':
-            cls_id = UNKNOWN_CLASS_INDEX
-        for one_img_preds in all_predictions:
-            current_cls_preds_mask = one_img_preds['cls'] == cls_id
-            # Obtain an array of shape [N,5], where N is the number of predictions for this class
-            # and 5 is the format [x1, y1, x2, y2, conf]
-            one_class_preds[one_img_preds['img_name']] = np.concatenate([one_img_preds['bboxes'][current_cls_preds_mask], one_img_preds['conf'][current_cls_preds_mask][:, None]], axis=1)
-        detections_unksniffer[cls_id] = one_class_preds
-    # annotations =  dict[image_file] = numpy.array([[x1,y1,x2,y2, cl_id], [...],...])
-    annotations_unksniffer = {}
-    for one_img_targets in all_targets:
-        annotations_unksniffer[one_img_targets['img_name']] = np.concatenate([one_img_targets['bboxes'], one_img_targets['cls'][:, None]], axis=1)
+    # detections_unksniffer = {}
+    # for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
+    #     one_class_preds ={}
+    #     if cls_name == 'unknown':
+    #         cls_id = UNKNOWN_CLASS_INDEX
+    #     for one_img_preds in all_predictions:
+    #         current_cls_preds_mask = one_img_preds['cls'] == cls_id
+    #         # Obtain an array of shape [N,5], where N is the number of predictions for this class
+    #         # and 5 is the format [x1, y1, x2, y2, conf]
+    #         one_class_preds[one_img_preds['img_name']] = np.concatenate([one_img_preds['bboxes'][current_cls_preds_mask], one_img_preds['conf'][current_cls_preds_mask][:, None]], axis=1)
+    #     detections_unksniffer[cls_id] = one_class_preds
+    # # annotations =  dict[image_file] = numpy.array([[x1,y1,x2,y2, cl_id], [...],...])
+    # annotations_unksniffer = {}
+    # for one_img_targets in all_targets:
+    #     annotations_unksniffer[one_img_targets['img_name']] = np.concatenate([one_img_targets['bboxes'], one_img_targets['cls'][:, None]], axis=1)
     
-    # Compute metrics for UNK
-    recall, precision, ap, rec, prec, state, det_image_files = voc_evaluate_as_unksniffer(
-            detections=detections_unksniffer,
-            annotations=annotations_unksniffer,
-            cid=UNKNOWN_CLASS_INDEX,
-        )
-    logger.info(f"Class: UNK, AP: {ap * 100:.2f}, Recall: {recall * 100:.2f}, Precision: {precision * 100:.2f}")
+    # # Compute metrics for UNK
+    # recall, precision, ap, rec, prec, state, det_image_files = voc_evaluate_as_unksniffer(
+    #         detections=detections_unksniffer,
+    #         annotations=annotations_unksniffer,
+    #         cid=UNKNOWN_CLASS_INDEX,
+    #     )
+    # logger.info(f"Class: UNK, AP: {ap * 100:.2f}, Recall: {recall * 100:.2f}, Precision: {precision * 100:.2f}")
+
     # for idx_cls in range(len(class_names)):
     #     if idx_cls == 20:
     #         idx_cls = UNKNOWN_CLASS_INDEX
