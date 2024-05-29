@@ -4,10 +4,10 @@ from itertools import product
 
 import numpy as np
 from sklearn.base import BaseEstimator
-from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, SpectralClustering, OPTICS
+from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, SpectralClustering, OPTICS, Birch
 from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
 from sklearn.cluster._hdbscan.hdbscan import HDBSCAN
-from sklearn.metrics import silhouette_score, silhouette_samples
+from sklearn.metrics import silhouette_score, calinski_harabasz_score
 import matplotlib.pyplot as plt
 
 from constants import AVAILABLE_CLUSTERING_METHODS
@@ -21,7 +21,8 @@ RANGE_OF_CLUSTERS = CUSTOM_HYP.clusters.RANGE_OF_CLUSTERS
 def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         feature_maps: np.ndarray,
         cluster_method: str,
-        metric: str, 
+        metric: str,
+        perf_score_metric: str,
         logger: Logger
     ) -> np.ndarray:
     assert cluster_method in AVAILABLE_CLUSTERING_METHODS, f"Invalid clustering method: {cluster_method}"
@@ -79,6 +80,15 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         }
         # params = optimize_agglomerative_clustering(feature_maps, logger, metric)
         # return AgglomerativeClustering(**params).fit_predict(feature_maps)
+    elif cluster_method == 'Birch':
+        cluster_class = Birch
+        param_to_eval = 'threshold'
+        # Params: threshold=0.5, branching_factor=50, n_clusters=3, compute_labels=True, copy=True
+        params = {
+            'threshold': np.linspace(0.1, 1, 50),
+            'branching_factor': [50],
+            'n_clusters': None,
+        }
     elif cluster_method == 'GMM':
         cluster_class = GaussianMixture
         param_to_eval = 'n_components'
@@ -113,6 +123,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         cluster_class=cluster_class,
         params=params,
         param_to_eval=param_to_eval,
+        perf_score_metric=perf_score_metric,
         logger=logger
     )
 
@@ -123,10 +134,25 @@ def compute_silhouette_score_for_all_possible_configurations(
         feature_maps: np.ndarray,
         cluster_class: Type[BaseEstimator],
         parameters_to_search: dict[str, list],
+        param_to_eval: str,
+        perf_score_metric: str,
         logger: Logger
     ) -> Tuple[List[float], List[dict]]:
+    # Assert first than the only parameter that has a lenght greater than 1 is the one to be evaluated
+    for param_name, param_values in parameters_to_search.items():
+        if param_name != perf_score_metric:
+            if len(param_values) > 1:
+                raise NotImplementedError(f"Only one parameter can be evaluated at a time for the moment. 
+                    If {param_to_eval} is the parameter to evaluate, it must be the only one with more than one value.")
+    assert len(parameters_to_search[param_to_eval]) > 1, f"Parameter {param_to_eval} must have more than one value to evaluate"
 
-    silhouette_scores = []
+    if perf_score_metric == 'silhouette':
+        defalut_score = -1
+    elif perf_score_metric == 'calinski_harabasz':
+        defalut_score = 0
+    else:
+        raise ValueError(f"Invalid performance score metric: {perf_score_metric}")
+    clustering_performance_scores = []
     param_configs = []
     # Generate all combinations of parameters
     keys, values = zip(*parameters_to_search.items())
@@ -140,24 +166,32 @@ def compute_silhouette_score_for_all_possible_configurations(
             #print(set(cluster_labels))
             # Check if the clustering was successful (i.e., more than one cluster)
             if len(set(cluster_labels)) > 1:
-                score = silhouette_score(feature_maps, cluster_labels)
-                silhouette_scores.append(score)
+                if perf_score_metric == 'silhouette':
+                    score = silhouette_score(feature_maps, cluster_labels)
+                    logger.debug(f"Silhouette score: {score}")
+                elif perf_score_metric == 'calinski_harabasz':
+                    score = calinski_harabasz_score(feature_maps, cluster_labels)
+                    logger.debug(f"Calinski-Harabasz score: {score}")
+                else:
+                    raise ValueError(f"Invalid performance score metric: {perf_score_metric}")
+                clustering_performance_scores.append(score)
                 param_configs.append(params)
-                logger.debug(f"Silhouette score: {score}")
             else:
-                silhouette_scores.append(-1)
+                clustering_performance_scores.append(defalut_score)
                 param_configs.append(params)
                 logger.debug("Clustering resulted in a single cluster, skipping.")
+
         except Exception as e:
             logger.error(f"Error with parameters {params}: {e}")
-    return silhouette_scores, param_configs
+
+    return clustering_performance_scores, param_configs
 
 
-def plot_silhouette_scores(silhouette_scores: List[float], params: np.ndarray, parameter_name: str, filename: str):
-    plt.plot(params[parameter_name], silhouette_scores, marker='o')
+def plot_scores(clustering_performance_scores: List[float], params: np.ndarray, parameter_name: str, clustering_perf_metric: str,  filename: str):
+    plt.plot(params[parameter_name], clustering_performance_scores, marker='o')
     plt.xlabel(parameter_name)
-    plt.ylabel("Silhouette Score")
-    plt.title("Silhouette Analysis")
+    plt.ylabel(f"{clustering_perf_metric} Score")
+    plt.title(f"{clustering_perf_metric} Analysis")
     plt.savefig(filename)
     plt.close()
 
@@ -167,17 +201,18 @@ def search_for_best_param(
         cluster_class: Type[BaseEstimator],
         params: dict,
         param_to_eval: str,
+        perf_score_metric: str,
         logger: Logger,
     ) -> dict:
 
     # Compute silhouette scores for all possible configurations
-    silhouette_scores, param_configs = compute_silhouette_score_for_all_possible_configurations(feature_maps, cluster_class, params, logger)
+    clustering_performance_scores, param_configs = compute_silhouette_score_for_all_possible_configurations(feature_maps, cluster_class, params, param_to_eval, perf_score_metric, logger)
 
     if VISUALIZE:
-        plot_silhouette_scores(silhouette_scores, params, param_to_eval, "silhouette_scores.png")
+        plot_scores(clustering_performance_scores, params, param_to_eval, f"{perf_score_metric}_scores.png")
 
     # Select best parameters
-    best_param_config = param_configs[np.argmax(silhouette_scores)]
+    best_param_config = param_configs[np.argmax(clustering_performance_scores)]
     logger.info(f"Best parameters: {best_param_config}")
     return best_param_config
 
