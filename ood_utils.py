@@ -84,7 +84,8 @@ class OODMethod(ABC):
         per_stride: bool -> True if the method computes a threshold for each stride, False if it computes a single threshold
         thresholds: Union[List[float], List[List[float]]] -> The thresholds for each class and stride
         iou_threshold_for_matching: float -> The threshold to use when matching the predicted boxes to the ground truth boxes
-        min_conf_threshold: float -> Define the minimum threshold to output a box when predicting
+        min_conf_threshold_train: float -> Define the minimum threshold to output a box when predicting for training OOD methods
+        min_conf_threshold_test: float -> Define the minimum threshold to output a box when predicting
         which_internal_activations: str -> Where to extract internal activations from.
     """
     name: str
@@ -95,9 +96,9 @@ class OODMethod(ABC):
     # The threshold to use when matching the predicted boxes to the ground truth boxes.
     #   All boxes with an IoU lower than this threshold will be considered bad predictions
     iou_threshold_for_matching: float
-    # Define the minimum threshold to output a box when predicting. All boxe with
-    #   a confidence lower than this threshold will be discarded automatically
-    min_conf_threshold: float
+    # Define the minimum thresholds. All boxes with a confidence lower than this threshold will be discarded automatically
+    min_conf_threshold_train: float  # Train threshold, for configuring the In-Distribution
+    min_conf_threshold_test: float  # Test threshold, for outputs during tests
     which_internal_activations: str  # Where to extract internal activations from
     enhanced_unk_localization: bool  # If True, the method will try to enhance the localization of the UNK objects by adding new boxes
     compute_saliency_map_one_stride: Callable  # Function to compute the saliency map of one stride
@@ -105,7 +106,7 @@ class OODMethod(ABC):
     #extract_bboxes_from_saliency_map_and_thresholds: Callable  # Function to extract the bboxes from the saliency map and the thresholds
 
     def __init__(self, name: str, distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float,
-                 min_conf_threshold: float, which_internal_activations: str, enhanced_unk_localization: bool = False,
+                 min_conf_threshold_train: float, min_conf_threshold_test: float, which_internal_activations: str, enhanced_unk_localization: bool = False,
                  saliency_map_computation_function: Callable = None, thresholds_out_of_saliency_map_function: Callable = None
         ):
         self.name = name
@@ -113,7 +114,8 @@ class OODMethod(ABC):
         self.per_class = per_class
         self.per_stride = per_stride
         self.iou_threshold_for_matching = iou_threshold_for_matching
-        self.min_conf_threshold = min_conf_threshold
+        self.min_conf_threshold_train = min_conf_threshold_train
+        self.min_conf_threshold_test = min_conf_threshold_test
         self.thresholds = None  # This will be computed later
         self.which_internal_activations = self.validate_internal_activations_option(which_internal_activations)
         self.enhanced_unk_localization = enhanced_unk_localization
@@ -279,11 +281,12 @@ class OODMethod(ABC):
                 if results[img_idx].assignment_score_matrix[i, assigment] > iou_threshold:
                     results[img_idx].valid_preds.append(i)
 
-    def iterate_data_to_extract_ind_activations(self, data_loader, model, device, logger):
+    def iterate_data_to_extract_ind_activations(self, data_loader, model: YOLO, device: str, logger: Logger):
         """
         Function to iterate over the data and extract the internal activations of the model for each image.
         The extracted activations will be stored in a list.
         """
+        logger.warning(f"Using a confidence threshold of {self.min_conf_threshold_train} for training")
         if self.per_class:
             if self.per_stride:
                 all_internal_activations = [[[] for _ in range(3)] for _ in range(len(model.names))]
@@ -306,7 +309,7 @@ class OODMethod(ABC):
             imgs, targets = self.prepare_data_for_model(data, device)
 
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
-            results = model.predict(imgs, save=False, verbose=False, device=device)
+            results = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_train, device=device)
 
             ### Match the predicted boxes to the ground truth boxes ###
             self.match_predicted_boxes_to_targets(results, targets, self.iou_threshold_for_matching)
@@ -338,7 +341,7 @@ class OODMethod(ABC):
         # else:
         #     bbox_format=dataloader.dataset.labels[0]['bbox_format']
 
-        logger.warning(f"Using a confidence threshold of {self.min_conf_threshold} for tests")
+        logger.warning(f"Using a confidence threshold of {self.min_conf_threshold_test} for tests")
         count_of_images = 0
         number_of_images_saved = 0
 
@@ -372,7 +375,7 @@ class OODMethod(ABC):
                     method=CUSTOM_HYP.unk.xai.XAI_METHOD,
                     layer=CUSTOM_HYP.unk.xai.XAI_TARGET_LAYERS,
                     ratio=0.05,
-                    conf_threshold=self.min_conf_threshold,
+                    conf_threshold=self.min_conf_threshold_test,
                     renormalize=CUSTOM_HYP.unk.xai.XAI_RENORMALIZE,
                     show_box=False,
                 )
@@ -387,7 +390,7 @@ class OODMethod(ABC):
             imgs, targets = self.prepare_data_for_model(data, device)
             
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
-            results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold, device=device)
+            results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold_test, device=device)
 
             ### Comprobar si las cajas predichas son OoD ###
             ood_decision = self.compute_ood_decision_on_results(results, logger)
@@ -476,7 +479,7 @@ class OODMethod(ABC):
                 
     def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger, known_classes: List[int]) -> Dict[str, float]:
 
-        logger.warning(f"Using a confidence threshold of {self.min_conf_threshold} for tests")
+        logger.warning(f"Using a confidence threshold of {self.min_conf_threshold_test} for tests")
         number_of_images_processed = 0
         number_of_batches = len(dataloader)
         all_preds = []
@@ -514,7 +517,7 @@ class OODMethod(ABC):
                     method=CUSTOM_HYP.unk.xai.XAI_METHOD,
                     layer=CUSTOM_HYP.unk.xai.XAI_TARGET_LAYERS,
                     ratio=0.05,
-                    conf_threshold=self.min_conf_threshold,
+                    conf_threshold=self.min_conf_threshold_test,
                     renormalize=CUSTOM_HYP.unk.xai.XAI_RENORMALIZE,
                     show_box=False,
                 )
@@ -537,7 +540,7 @@ class OODMethod(ABC):
             # continue
             
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
-            results = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold, device=device)
+            results = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
 
             ### Comprobar si las cajas predichas son OoD ###
             ood_decision = self.compute_ood_decision_on_results(results, logger)
@@ -728,7 +731,8 @@ class OODMethod(ABC):
                         if len(cl_scores) < good_number_of_samples:
                             logger.warning(f"Class {idx}: {len(cl_scores)} samples. The threshold may not be accurate")
                     else:
-                        logger.warning(f"Class {idx} has less than {sufficient_samples} samples. No threshold is generated")
+                        if idx_cls < 20:
+                            logger.warning(f"Class {idx} has less than {sufficient_samples} samples. No threshold is generated")
 
         # One threshold for all classes
         else:
@@ -1346,11 +1350,13 @@ class OODMethod(ABC):
 ### Superclasses for methods using logits of the model ###
 class LogitsMethod(OODMethod):
     
-    def __init__(self, name: str, per_class: bool, per_stride: bool, iou_threshold_for_matching: float, min_conf_threshold: float, **kwargs):
+    def __init__(self, name: str, per_class: bool, per_stride: bool, iou_threshold_for_matching: float,
+                 min_conf_threshold_train: float, min_conf_threshold_test: float, **kwargs):
         distance_method = False
         which_internal_activations = 'logits'  # Always logits for these methods
         enhanced_unk_localization = False  # By default not used with logits, as feature maps are needed.
-        super().__init__(name, distance_method, per_class, per_stride, iou_threshold_for_matching, min_conf_threshold, which_internal_activations, enhanced_unk_localization)
+        super().__init__(name, distance_method, per_class, per_stride, iou_threshold_for_matching,
+                         min_conf_threshold_train, min_conf_threshold_test, which_internal_activations, enhanced_unk_localization)
 
     def compute_ood_decision_on_results(self, results: Results, logger: Logger) -> List[List[int]]:
         ood_decision = []  
@@ -1500,7 +1506,7 @@ class DistanceMethod(OODMethod):
     enhanced_unk_localization: bool
     metric: 'str'
 
-    # name: str, distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float, min_conf_threshold: float
+    # name: str, distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float, min_conf_threshold_test: float
     # def __init__(self, name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str,
     #              cluster_optimization_metric: str, ind_info_creation_option: str, **kwargs):
     def __init__(self, name: str, per_class: bool, per_stride: bool, cluster_method: str, metric: str,
@@ -2089,7 +2095,7 @@ class DistanceMethod(OODMethod):
                         logger.warning(f'SKIPPING Class {idx_cls:03}, Stride {idx_stride} -> NO SAMPLES')
                     clusters_per_class_and_stride[idx_cls][idx_stride] = np.empty(0)
 
-    def generate_multiple_cluster_per_class_per_stride(self, ind_tensors: List[List[np.ndarray]], clusters_per_class_and_stride: List[List[np.ndarray]], logger):
+    def generate_multiple_cluster_per_class_per_stride(self, ind_tensors: List[List[np.ndarray]], clusters_per_class_and_stride: List[List[np.ndarray]], logger: Logger):
         np.set_printoptions(threshold=20)
         for idx_cls, ftmaps_one_cls in enumerate(ind_tensors):
             #logger.info(f'Class {idx_cls:03} of {len(ind_tensors)}')
@@ -2097,18 +2103,15 @@ class DistanceMethod(OODMethod):
                 
                 if len(ftmaps_one_cls_one_stride) > 1:
                     ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride)
-                    # Here i have to implement the method to search for the best number of clusters
-                    # and then apply the clustering method, to finally generate N number of centroids
                     # 1. Find the optimal number of clusters and obtain the labels
                     cluster_labels = find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
                         ftmaps_one_cls_one_stride,
                         self.cluster_method,
                         self.metric,
+                        self.cluster_optimization_metric,
                         logger,
                     )
-                    # 2. Obtain the cluster labels
-                    #clusters_labels = self.cluster_method(n_clusters).fit_predict(ftmaps_one_cls_one_stride)
-                    # 3. Aggregate the samples of each cluster using the agg method
+                    # 2. Aggregate the samples of each cluster using the agg method
                     clusters = []
                     for idx_cluster in sorted(set(cluster_labels)):
                         clusters.append(self.agg_method(ftmaps_one_cls_one_stride[cluster_labels == idx_cluster], axis=0))
