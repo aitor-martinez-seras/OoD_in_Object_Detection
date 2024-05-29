@@ -329,44 +329,6 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     logger.info('Wilderness Impact Recall 0.8 [%]: ' + str(wilderness_impact_recall_08))
     logger.info('-----------------')
 
-    # Now adapt the data to the UnkSniffer evaluation code
-    # detections = dict[cid][image_file] = numpy.array([[x1,y1,x2,y2,score], [...],...])
-    # detections_unksniffer = {}
-    # for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
-    #     one_class_preds ={}
-    #     if cls_name == 'unknown':
-    #         cls_id = UNKNOWN_CLASS_INDEX
-    #     for one_img_preds in all_predictions:
-    #         current_cls_preds_mask = one_img_preds['cls'] == cls_id
-    #         # Obtain an array of shape [N,5], where N is the number of predictions for this class
-    #         # and 5 is the format [x1, y1, x2, y2, conf]
-    #         one_class_preds[one_img_preds['img_name']] = np.concatenate([one_img_preds['bboxes'][current_cls_preds_mask], one_img_preds['conf'][current_cls_preds_mask][:, None]], axis=1)
-    #     detections_unksniffer[cls_id] = one_class_preds
-    # # annotations =  dict[image_file] = numpy.array([[x1,y1,x2,y2, cl_id], [...],...])
-    # annotations_unksniffer = {}
-    # for one_img_targets in all_targets:
-    #     annotations_unksniffer[one_img_targets['img_name']] = np.concatenate([one_img_targets['bboxes'], one_img_targets['cls'][:, None]], axis=1)
-    
-    # # Compute metrics for UNK
-    # recall, precision, ap, rec, prec, state, det_image_files = voc_evaluate_as_unksniffer(
-    #         detections=detections_unksniffer,
-    #         annotations=annotations_unksniffer,
-    #         cid=UNKNOWN_CLASS_INDEX,
-    #     )
-    # logger.info(f"Class: UNK, AP: {ap * 100:.2f}, Recall: {recall * 100:.2f}, Precision: {precision * 100:.2f}")
-
-    # for idx_cls in range(len(class_names)):
-    #     if idx_cls == 20:
-    #         idx_cls = UNKNOWN_CLASS_INDEX
-        # recall, precision, ap, rec, prec, state, det_image_files = voc_evaluate_as_unksniffer(
-        #     detections=detections_unksniffer,
-        #     annotations=annotations_unksniffer,
-        #     cid=idx_cls,
-        # )
-    #     if idx_cls == UNKNOWN_CLASS_INDEX:
-    #         idx_cls = 20
-    #     logger.info(f"Class: {class_names[idx_cls]}, AP: {ap * 100:.2f}, Recall: {recall * 100:.2f}, Precision: {precision * 100:.2f}")
-
     return results_dict
 
 
@@ -741,6 +703,8 @@ def plot_pr_curve(precision, recall, filename, base_path='/home/fk1/workspace/OW
     # print(precision)
     # print(recall)
 
+
+# Below code is obtained and modified from https://github.com/Went-Liang/UnSniffer 
 
 def voc_evaluate_as_unksniffer(detections, annotations, cid, ovthresh=0.5, use_07_metric=True):
     """
