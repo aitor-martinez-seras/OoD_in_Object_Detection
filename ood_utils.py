@@ -184,16 +184,19 @@ class OODMethod(ABC):
         """
         pass
 
-    @abstractmethod
-    def compute_score_one_bbox() -> List[float]:
-        """
-        Function to be overriden by each method to compute the score of one bbox.
-        The input parameters will depend on if the method is a logits method or a distance method.
-        """
-        pass
+    # @abstractmethod
+    # def compute_score_one_bbox() -> List[float]:
+    #     """
+    #     Function to be overriden by each method to compute the score of one bbox.
+    #     The input parameters will depend on if the method is a logits method or a distance method.
+    #     """
+    #     pass
     
-    # TODO: Aqui vamos a computar las metricas AUROC, AUPR y FPR95
-    def iterate_data_to_compute_ood_decision():
+    def compute_scores(self, activations, *args, **kwargs) -> np.ndarray:
+        """
+        Function to compute the scores of the activations. Either for one box or multiple boxes.
+        The function should be overriden by each method and should try to vectorize the computation as much as possible.
+        """
         pass
     
     @staticmethod
@@ -287,11 +290,11 @@ class OODMethod(ABC):
             else:
                 all_internal_activations = [[] for _ in range(len(model.names))]
 
-        # Obtain the bbox format from the last transform of the dataset
-        if hasattr(data_loader.dataset.transforms.transforms[-1], "bbox_format"):
-            bbox_format = data_loader.dataset.transforms.transforms[-1].bbox_format
-        else:
-            bbox_format=data_loader.dataset.labels[0]['bbox_format']
+        # # Obtain the bbox format from the last transform of the dataset
+        # if hasattr(data_loader.dataset.transforms.transforms[-1], "bbox_format"):
+        #     bbox_format = data_loader.dataset.transforms.transforms[-1].bbox_format
+        # else:
+        #     bbox_format=data_loader.dataset.labels[0]['bbox_format']
 
         # Start iterating over the data
         number_of_batches = len(data_loader)
@@ -339,20 +342,7 @@ class OODMethod(ABC):
         count_of_images = 0
         number_of_images_saved = 0
 
-        # TODO: Estamos usando esta funcion para meter las diferentes pruebas... Finalmente deberia quedar solo
-        #   la ejecucion normal. Al final lo que tenemos que dejar es el metodo que pone en el if como "normal"
-
-        # TODO: MODOS PARA DEBUGEAR
-        # localizacion: buscamos crear un algoritmo capaz de mejorar la localizacion de las cajas
-        # clasificacion: queremos ver si localizando las cajas seriamos capaces de clasificarlas como UNK
-        # normal: ejecucion normal, se predicen cajas y se ve si son UNK o no
-        debugeando_en_modo = "normal"
-
-        # # TODO: Activado para ejecutar los plots OOD con targets
-        # if callable(getattr(self, "compute_ood_decision_with_ftmaps", None)):
-        #     model.model.extraction_mode = 'all_ftmaps'
-
-        # TODO: Explainabilty
+        ### XAI ###
         if CUSTOM_HYP.unk.USE_XAI:
             if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
                 from yolo_drise.xai.drise import DRISE
@@ -386,7 +376,8 @@ class OODMethod(ABC):
                     renormalize=CUSTOM_HYP.unk.xai.XAI_RENORMALIZE,
                     show_box=False,
                 )
-
+        
+        ### Start iterating over the data ###
         c = 0
         for idx_of_batch, data in enumerate(dataloader):
             count_of_images += len(data['im_file'])
@@ -397,819 +388,84 @@ class OODMethod(ABC):
             
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
             results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold, device=device)
-            
-            # TODO: Activado para ejecutar los plots OOD con targets
-            if debugeando_en_modo == "clasificacion":
-                ### Experiment with targets ###
-                # Lo que hago es representar los targets para cada imagen con el label de Known o UNK en funcion de si son clases
-                #   conocidas o no. Ademas, para cada uno de estos casos el score se ha obtenido de forma diferente. En ambos casos 
-                #   Hay 3 valores, uno por cada stride, con el orden s8/s16/s32.
-                # Known: Cada valor representa si para el espacio del stride y la clase correspondientes al objeto en la imagen, la caja es OoD o no
-                # UNK: Cada valor representa el % de espacios de clase para el stride correspondiente que han considerado el objeto OOD
-                if callable(getattr(self, "compute_ood_decision_with_ftmaps", None)):
-                    # Create a list of lists with the roi aligned features of each bouding box of each image
-                    # First list is for the image, second list is for the bbox
 
-                    # 1.Group ftmaps of all images in the batch per level, so that 
-                    #   we can do the RoIAlign efficiently once per level
-                    ftmaps_per_level = []
-                    for idx_lvl in range(3):
-                        one_level_ftmaps = []
-                        for i_bt in range(len(results)):
-                            one_level_ftmaps.append(results[i_bt].extra_item[idx_lvl].to('cpu'))
-                        ftmaps_per_level.append(torch.stack(one_level_ftmaps))
-                    
-                    # 2.Prepare the boxes in a list of boxes and keep track of the image index
-                    #   so that we can match the boxes with the correct image. Each position in the list of bboxes
-                    #   refers to one image bboxes
-                    _bboxes = []
-                    idx_of_img_per_box = []
-                    for _idx, one_img_bboxes in enumerate(targets["bboxes"]):
-                        _bboxes.append(one_img_bboxes.to(torch.float32))
-                        idx_of_img_per_box.append(torch.tensor([_idx]*len(one_img_bboxes), dtype=torch.int32))
-                    #_bboxes = torch.cat(_boxes, dim=0)
-                    idx_of_img_per_box = torch.cat(idx_of_img_per_box, dim=0)
-                    #_bboxes = [b.to(torch.float32) for b in targets["bboxes"]]
-                    
-                    # 3. RoIAlign the features per stride
-                    roi_aligned_features_all_images_per_stride = []
-                    
-                    for idx_lvl in range(3):                        
-                        roi_aligned_ftmaps_one_stride = t_ops.roi_align(
-                            input=ftmaps_per_level[idx_lvl],
-                            boxes=_bboxes,
-                            output_size=(1,1),  # Tiene que ser el mismo que hayamos usado para entrenar el algoritmo OOD
-                            spatial_scale=ftmaps_per_level[idx_lvl].shape[2]/imgs[0].shape[2]
-                        )
+            ### Comprobar si las cajas predichas son OoD ###
+            ood_decision = self.compute_ood_decision_on_results(results, logger)
 
-                        roi_aligned_features_all_images_per_stride.append(roi_aligned_ftmaps_one_stride)
-
-                    # Now create a list of lists, where the first list refers to the image and the second list to the stride
-                    activations = []
-                    for idx_img in range(len(results)):
-                        positions_of_activations_to_select = torch.where(idx_of_img_per_box == idx_img)[0]
-                        activations.append([])
-                        for idx_stride in range(3):
-                            activations[idx_img].append(roi_aligned_features_all_images_per_stride[idx_stride][positions_of_activations_to_select].numpy())
-
-                    # OOD Decision is a list of lists, where the first list refers to the image and the second list to the bbox
-                    # Each bbox has 3 scores, one per stride
-                    ood_decision = self.compute_ood_decision_with_ftmaps(activations, bboxes=targets, logger=logger)
-
-                    # PLOT #
-                    width = 2
-                    font = 'FreeMonoBold'
-                    font_size = 11
-                    # Create folder to store images
-                    prueba_ahora_path = folder_path / f'{now}_{self.name}'
-                    prueba_ahora_path.mkdir(exist_ok=True)
-
-                    import matplotlib.pyplot as plt
-                    from torchvision.utils import draw_bounding_boxes
-
-                    for idx_img, bboxes_one_img in enumerate(targets['bboxes']):
-                        
-                        # The labels are the ood decisions for each bbox
-                        labels_str = []
-                        for idx_bbox in range(len(bboxes_one_img)):
-                            if targets['cls'][idx_img][idx_bbox] <= 19:
-                                # Use the name of the class
-                                known_or_unk = f'{model.names[int(targets["cls"][idx_img][idx_bbox])]}'
-                            else:
-                                known_or_unk = 'UNK'
-                            labels_str.append(f'{known_or_unk}: {ood_decision[idx_img][idx_bbox][0]}/{ood_decision[idx_img][idx_bbox][1]}/{ood_decision[idx_img][idx_bbox][2]}')
-
-                        # The color will be red if the mean of the ood decisions is more than 0.5, green otherwise
-                        colors = ['red' if sum(ood_decision[idx_img][idx_bbox]) > 1.5 else 'green' for idx_bbox in range(len(bboxes_one_img))]
-
-                        im = draw_bounding_boxes(
-                            imgs[idx_img].cpu(),
-                            bboxes_one_img,
-                            width=width,
-                            font=font,
-                            font_size=font_size,
-                            labels=labels_str,
-                            colors=colors
-                        )
-
-                        plt.imshow(im.permute(1,2,0))
-                        plt.savefig(prueba_ahora_path / f'{(count_of_images + idx_img):03}.{IMAGE_FORMAT}', dpi=300)
-                        plt.close()
-
-
-                else:
-                    raise NotImplementedError("The method does not have the function compute_ood_decision_with_ftmaps implemented")
-
-            elif debugeando_en_modo == "localizacion":
-                ### 1º prueba ###
-                import matplotlib.pyplot as plt
-                from torchvision.utils import draw_bounding_boxes
-                from skimage.transform import resize
-                from sklearn.metrics import pairwise_distances
-                from sklearn import metrics
-                from sklearn.cluster import DBSCAN
-                import scipy.stats as sc_stats
-                # Pintar los feature maps de algunas imagenes
-                # Cogemos solo los mapas 80x80 de momento
-                # Create folder to store images
-                prueba_ahora_path = folder_path / f'{now}_{self.name}'
-                prueba_ahora_path.mkdir(exist_ok=True)
-
-                torch.set_printoptions(precision=2, threshold=10)
-                np.set_printoptions(precision=2, threshold=10)
-
-                # RELLENAR LISTA CON LAS VISUALIZACIONES QUE QUERAMOS
-                modos_de_visualizacion = [
-                    #"multiples_metricas",
-                    #"subplots",
-                    #"clusters",
-                    #"ftmaps",
-                    "bboxes",
-                    ]
-
-                one_ch_cmap = 'gray'
-                for _img_idx, res in enumerate(results):
-                    c += 1
-                    if _img_idx == -1:
-                        continue
-                    else:
-                        # Create folder for the image using the batch index and image index
-                        ftmaps_path = prueba_ahora_path / f'{number_of_images_saved + _img_idx}'
-                        ftmaps_path.mkdir(exist_ok=True)
-
-                        # Obtain the original image shape from the data dict
-                        # and figure out which zones of the feature maps 
-                        # should be removed
-                        original_shape = data['ori_shape'][_img_idx]
-                        # The ratio pad has in its first dimension the factor to which the image has been 
-                        # resized in each dimension (H, W) and
-                        # in the second dimension the padding in each dimension (X, Y). It is important to note
-                        # that the padding indicated is done by each of the sides of the image (left and right, top and bottom)
-                        ratio_pad = np.array(data['ratio_pad'][_img_idx][1], dtype=float)  # Take the padding
-                        # Remove the padding from the feature maps, but first we have to take into account that the
-                        # ftmaps have a lower resolution than the original image. In this case, the ratio is 8.
-                        ratio_pad_for_ftmaps = ratio_pad / 8  # For stride 8
-                        x_padding = int(ratio_pad_for_ftmaps[0])  # The padding in the x dimension is the first element
-                        y_padding = int(ratio_pad_for_ftmaps[1])  # The padding in the y dimension is the second element
-                        ftmaps = res.extra_item[0].cpu().detach().numpy()
-                        ftmap_height = ftmaps.shape[1]
-                        ftmap_width = ftmaps.shape[2]
-                        ftmaps = ftmaps[:, y_padding:ftmap_height-y_padding, x_padding:ftmap_width-x_padding]
-
-                        # CREATE ONLY THE SUBPLOTS
-                        if "subplots" in modos_de_visualizacion:
-                            # Save also the original with annotations
-                            orig_annotated = draw_bounding_boxes(
-                                imgs[_img_idx].cpu(),
-                                targets['bboxes'][_img_idx],
-                                width=2,
-                                font='FreeMonoBold',
-                                font_size=11,
-                                # Convert the classes to the names and above 19 all should be named unk
-                                labels=[model.names[int(cls)] if cls <= 19 else "UNK" for cls in targets['cls'][_img_idx]],                        
-                                colors=['blue']*len(targets['cls'][_img_idx])
-                            )
-                            # Mean
-                            mean_ftmap = ftmaps.mean(axis=0)
-                            mean_ftmap = (mean_ftmap - mean_ftmap.min()) / (mean_ftmap.max() - mean_ftmap.min())
-                            # Add the padding
-                            mean_ftmap = np.pad(mean_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            # STD
-                            std_ftmap = ftmaps.std(axis=0)
-                            std_ftmap = (std_ftmap - std_ftmap.min()) / (std_ftmap.max() - std_ftmap.min())
-                            # Add the padding
-                            std_ftmap = np.pad(std_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            # CLUSTERS. Clustering with DBSCAN but adding the spatial information
-                            # Original feature map shape
-                            num_channels, height, width = ftmaps.shape
-                            # Create the coordinate channels
-                            y_coords, x_coords = np.meshgrid(np.arange(height), np.arange(width), indexing='ij')
-                            # Add the coordinate channels to the original feature map
-                            yx_augmented_feature_map = np.concatenate([ftmaps, y_coords[None, :, :], x_coords[None, :, :]])
-                            # Now flatten the feature maps and make the first dimension be the pixels
-                            flattened_ftmaps_with_yx = yx_augmented_feature_map.reshape(num_channels + 2, -1).T
-                            ft_metric = 'cosine'
-                            samples_pairwise_distances_features = pairwise_distances(flattened_ftmaps_with_yx[:, :-2], metric=ft_metric)
-                            mean_ft_distance = samples_pairwise_distances_features.mean()
-                            std_ft_distance = samples_pairwise_distances_features.std()
-                            # Euclidean distance between sample coordinates. Normalize them to be in the same range as the feature distances
-                            samples_pairwise_distances_yx = pairwise_distances(flattened_ftmaps_with_yx[:, -2:], metric='euclidean')
-                            samples_pairwise_distances_yx = (samples_pairwise_distances_yx - samples_pairwise_distances_yx.min()) / (samples_pairwise_distances_yx.max() - samples_pairwise_distances_yx.min())
-                            samples_pairwise_distances_yx = samples_pairwise_distances_yx * (std_ft_distance + mean_ft_distance - (mean_ft_distance - std_ft_distance)) + (mean_ft_distance - std_ft_distance)
-                            # Merge the two distances using a weight lambda
-                            lambda_weight = 0.5
-                            samples_pairwise_distances_weighted = lambda_weight * samples_pairwise_distances_features + (1 - lambda_weight) * samples_pairwise_distances_yx
-                            # Now cluster
-                            eps = 18 if ft_metric == 'euclidean' else 0.13
-                            db = DBSCAN(eps=eps, min_samples=16).fit(samples_pairwise_distances_weighted)
-                            labels = db.labels_
-                            n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
-                            print(f"Number of clusters: {n_clusters_}")
-                            # Plot the labels as an image in the original size
-                            labels_as_image = labels.reshape(ftmaps.shape[1], ftmaps.shape[2])
-                            # Add padding to the labels
-                            labels_as_image = np.pad(labels_as_image, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(-1, -1))
-                            labels_as_image_spatial_info = labels_as_image.copy()
-                            # Create a PNG of good quality with 4 subplots, the original image, the mean, the std and the clustering
-                            # with no axis and no white space
-                            fig, axs = plt.subplots(2, 2, figsize=(8, 8))
-                            axs[0, 0].imshow(orig_annotated.permute(1,2,0))
-                            axs[0, 0].axis('off')
-                            axs[0, 0].set_title('Original (annotated)')
-                            axs[0, 1].imshow(mean_ftmap, cmap=one_ch_cmap)
-                            axs[0, 1].axis('off')
-                            axs[0, 1].set_title('Mean')
-                            axs[1, 0].imshow(std_ftmap, cmap=one_ch_cmap)
-                            axs[1, 0].axis('off')
-                            axs[1, 0].set_title('Std')
-                            axs[1, 1].imshow(labels_as_image_spatial_info, cmap='tab20')
-                            axs[1, 1].axis('off')
-                            axs[1, 1].set_title('Cluster')
-                            plt.tight_layout()
-                            plt.savefig(prueba_ahora_path / f'subplots_{c:0>3}.png', dpi=300, bbox_inches='tight')
-                            plt.close()
-
-                            # Create clusters for different lambdas
-                            lambda_imgs = []
-                            for lmb in [0.8,0.5,0.2]:
-                                samples_pairwise_distances_yx = pairwise_distances(flattened_ftmaps_with_yx[:, -2:], metric='euclidean')
-                                samples_pairwise_distances_yx = (samples_pairwise_distances_yx - samples_pairwise_distances_yx.min()) / (samples_pairwise_distances_yx.max() - samples_pairwise_distances_yx.min())
-                                samples_pairwise_distances_yx = samples_pairwise_distances_yx * (std_ft_distance + mean_ft_distance - (mean_ft_distance - std_ft_distance)) + (mean_ft_distance - std_ft_distance)
-                                samples_pairwise_distances_weighted = lmb * samples_pairwise_distances_features + (1 - lmb) * samples_pairwise_distances_yx
-                                db = DBSCAN(eps=eps, min_samples=16).fit(samples_pairwise_distances_weighted)
-                                labels = db.labels_
-                                n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
-                                print(f"Number of clusters for lambda {lmb}: {n_clusters_}")
-                                # Plot the labels as an image in the original size
-                                labels_as_image = labels.reshape(ftmaps.shape[1], ftmaps.shape[2])
-                                # Add padding to the labels
-                                labels_as_image = np.pad(labels_as_image, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(-1, -1))
-                                lambda_imgs.append(labels_as_image)
-
-                            # Create a PNG of good quality with 4 subplots, the original image, the mean, the std and the clustering
-                            # with no axis and no white space
-                            fig, axs = plt.subplots(2, 2, figsize=(8, 8))
-                            axs[0, 0].imshow(orig_annotated.permute(1,2,0))
-                            axs[0, 0].axis('off')
-                            axs[0, 0].set_title('Original (annotated)')
-                            axs[0, 1].imshow(lambda_imgs[2], cmap='tab20')
-                            axs[0, 1].axis('off')
-                            axs[0, 1].set_title('Lambda 0.2')
-                            axs[1, 0].imshow(lambda_imgs[1], cmap='tab20')
-                            axs[1, 0].axis('off')
-                            axs[0, 1].set_title('Lambda 0.5')
-                            axs[1, 1].imshow(lambda_imgs[0], cmap='tab20')
-                            axs[1, 1].axis('off')
-                            axs[0, 1].set_title('Lambda 0.8')
-                            plt.tight_layout()
-                            plt.savefig(prueba_ahora_path / f'subplots_{c:0>3}_lambdas.png', dpi=300, bbox_inches='tight')
-                            plt.close()
-
-                            # Skip to next iteration
-
-                        if "pngs" in modos_de_visualizacion:
-                            pass
-
-                        if "bboxes" in modos_de_visualizacion:
-                            # Max - Mean along the feature axis
-                            max_of_evey_ftmap = ftmaps.max(axis=(1,2))
-                            mean_of_evey_ftmap = ftmaps.mean(axis=(1,2))
-                            ftmaps_minus_mean = ftmaps - mean_of_evey_ftmap[:, None, None]
-                            # Sum of abs values
-                            ftmaps_minus_mean_sum_abs = np.abs(ftmaps_minus_mean).sum(axis=0)
-                            # Generate the image and bouding boxes
-                            generate_image_with_bboxes(
-                                saliency_map=ftmaps_minus_mean_sum_abs, folder_path=ftmaps_path,
-                                original_image=imgs[_img_idx].permute(1,2,0).cpu().numpy(), padding=(y_padding, x_padding),
-                                option='bboxes_with_oods',
-                                ftmaps=ftmaps,
-                                ood_method=self,
-                            )
-                            
-
-                        if "ftmaps" in modos_de_visualizacion:
-                            # Plot histogram of the feature maps mean and std
-                            fig, axs = plt.subplots(1, 2, figsize=(8, 4))
-                            axs[0].hist(ftmaps.mean(axis=(1,2)), bins=50)
-                            axs[0].set_title('Mean')
-                            axs[1].hist(ftmaps.std(axis=(1,2)), bins=50)
-                            axs[1].set_title('Std')
-                            plt.tight_layout()
-                            plt.savefig(prueba_ahora_path / f'hist.png', dpi=300, bbox_inches='tight')
-                            plt.close()
-
-                            # Print the indices of topK feature maps by mean, std and max
-                            topK = 50
-                            # topK_indices = np.argsort(ftmaps.mean(axis=(1,2)))[::-1][:topK]
-                            # print(f"Top {topK} feature maps by mean: {topK_indices}")
-                            # topK_indices = np.argsort(ftmaps.std(axis=(1,2)))[::-1][:topK]
-                            # print(f"Top {topK} feature maps by std: {topK_indices}")
-                            # topK_indices = np.argsort(ftmaps.max(axis=(1,2)))[::-1][:topK]
-                            # print(f"Top {topK} feature maps by max: {topK_indices}")
-                            # topK_indices = np.argsort(weighted_variance(ftmaps))[::-1][:topK]
-                            # print(f"Top {topK} feature maps by weighted variance: {topK_indices}")
-
-                            # Spatial_freq
-                            topK_indices = np.argsort(spatial_frequency_analysis(ftmaps))[:topK]  # Take the lowest spatial frequency
-                            topK_ftmaps = ftmaps[topK_indices]
-                            topK_ftmaps_sum = topK_ftmaps.sum(axis=0)
-                            np.savetxt(ftmaps_path / F'txt_top{topK}_ftmaps_sum_spatial_freqs.txt', topK_ftmaps_sum)
-                            topK_ftmaps_sum = (topK_ftmaps_sum - topK_ftmaps_sum.min()) / (topK_ftmaps_sum.max() - topK_ftmaps_sum.min())
-                            topK_ftmaps_sum = np.pad(topK_ftmaps_sum, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            plt.imshow(topK_ftmaps_sum, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'top{topK}_ftmaps_sum_spatial_freqs.png', dpi=300, bbox_inches='tight')
-                            plt.close()
-                            
-
-                            # Spread
-                            topK_indices = np.argsort(center_of_mass_and_spread(ftmaps)[1])[:topK]  # Take the lowest spread
-                            topK_ftmaps = ftmaps[topK_indices]
-                            topK_ftmaps_sum = topK_ftmaps.sum(axis=0)
-                            np.savetxt(ftmaps_path / F'txt_top{topK}_ftmaps_sum_spread.txt', topK_ftmaps_sum)
-                            topK_ftmaps_sum = (topK_ftmaps_sum - topK_ftmaps_sum.min()) / (topK_ftmaps_sum.max() - topK_ftmaps_sum.min())
-                            topK_ftmaps_sum = np.pad(topK_ftmaps_sum, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            plt.imshow(topK_ftmaps_sum, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'top{topK}_ftmaps_sum_spread.png', dpi=300, bbox_inches='tight')
-                            plt.close()
-
-                            # Entropy
-                            topK_indices = np.argsort(entropy(ftmaps))[:topK]  # Take the lowest entropy
-                            topK_ftmaps = ftmaps[topK_indices]
-                            topK_ftmaps_sum = topK_ftmaps.sum(axis=0)
-                            np.savetxt(ftmaps_path / F'txt_top{topK}_ftmaps_sum_entropy.txt', topK_ftmaps_sum)
-                            topK_ftmaps_sum = (topK_ftmaps_sum - topK_ftmaps_sum.min()) / (topK_ftmaps_sum.max() - topK_ftmaps_sum.min())
-                            topK_ftmaps_sum = np.pad(topK_ftmaps_sum, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            plt.imshow(topK_ftmaps_sum, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'top{topK}_ftmaps_sum_entropy.png', dpi=300, bbox_inches='tight')
-                            plt.close()
-
-                            # # Save the feature maps in another folder
-                            # indiv_ftmaps_folder = ftmaps_path / 'individual_ftmaps'
-                            # indiv_ftmaps_folder.mkdir(exist_ok=True)
-                            # for idx_ftmap in range(ftmaps.shape[0]):
-
-                            #     ftmap = ftmaps[idx_ftmap]
-
-                            #     # Option 1: plot as it is
-                            #     # plt.imshow(ftmap, vmin=-2, vmax=2, cmap='bwr')
-
-                            #     # Option 2: resize and plot
-                            #     # ftmap = resize(ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
-                            #     # plt.imshow(ftmap, vmin=-2, vmax=2, cmap='bwr')
-
-                            #     # Option 2: scale and plot
-                            #     ftmap = (ftmap - ftmap.min()) / (ftmap.max() - ftmap.min())
-                            #     plt.imshow(ftmap, cmap=one_ch_cmap)
-
-                            #     # Option 3: normalize to 0 - 1, resize and plot
-                            #     # ftmap = (ftmap - ftmap.min()) / (ftmap.max() - ftmap.min())
-                            #     # ftmap = resize(ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
-                            #     # plt.imshow(ftmap, cmap=one_ch_cmap)
-
-                            #     # Save close
-                            #     plt.savefig(indiv_ftmaps_folder / f'ftmap_{idx_ftmap}.{IMAGE_FORMAT}', bbox_inches='tight', dpi=300)
-                            #     plt.close()
-                            
-                        
-                        if "multiples_metricas" in modos_de_visualizacion:
-                            # First save the original image
-                            plt.imshow(imgs[_img_idx].cpu().permute(1,2,0))
-                            plt.savefig(ftmaps_path / 'A_original.{IMAGE_FORMAT}')
-                            plt.close()
-                            # Save also the original with annotations
-                            im = draw_bounding_boxes(
-                                imgs[_img_idx].cpu(),
-                                targets['bboxes'][_img_idx],
-                                width=2,
-                                font='FreeMonoBold',
-                                font_size=11,
-                                # Convert the classes to the names and above 19 all should be named unk
-                                labels=[model.names[int(cls)] if cls <= 19 else "UNK" for cls in targets['cls'][_img_idx]],                        
-                                colors=['blue']*len(targets['cls'][_img_idx])
-                            )
-                            plt.imshow(im.permute(1,2,0))
-                            plt.savefig(ftmaps_path / 'A_original_with_annotations.{IMAGE_FORMAT}')
-                            plt.close()
-                            
-                            # Make the mean of the feature maps
-                            mean_ftmap = ftmaps.mean(axis=0)
-                            mean_ftmap = (mean_ftmap - mean_ftmap.min()) / (mean_ftmap.max() - mean_ftmap.min())
-                            # Add the padding
-                            mean_ftmap = np.pad(mean_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            plt.imshow(mean_ftmap, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_mean_ftmap.{IMAGE_FORMAT}')
-                            plt.close()
-                            mean_ftmap = resize(mean_ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
-                            plt.imshow(mean_ftmap, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_mean_ftmap_reshaped.{IMAGE_FORMAT}')
-                            plt.close()
-
-                            # Make an image as the std of the feature maps
-                            std_ftmap = ftmaps.std(axis=0)
-                            std_ftmap = (std_ftmap - std_ftmap.min()) / (std_ftmap.max() - std_ftmap.min())
-                            # Add the padding
-                            std_ftmap = np.pad(std_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            plt.imshow(std_ftmap, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_std_ftmap.{IMAGE_FORMAT}')
-                            plt.close()
-                            # Transform them to txt file and save it
-                            np.savetxt(ftmaps_path / 'A_std_ftmap.txt', std_ftmap)
-                            std_ftmap = resize(std_ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
-                            plt.imshow(std_ftmap, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_std_ftmap_reshaped.{IMAGE_FORMAT}')
-                            plt.close()
-
-                            # Make an image as the max of the feature maps
-                            max_ftmap = ftmaps.max(axis=0)
-                            max_ftmap = (max_ftmap - max_ftmap.min()) / (max_ftmap.max() - max_ftmap.min())
-                            # Add the padding
-                            max_ftmap = np.pad(max_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            plt.imshow(max_ftmap, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_max_ftmap.{IMAGE_FORMAT}')
-                            plt.close()
-                            # max_ftmap = resize(max_ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
-                            # plt.imshow(max_ftmap, cmap=one_ch_cmap)
-                            # plt.savefig(ftmaps_path / f'A_max_ftmap_reshaped.{IMAGE_FORMAT}')
-                            # plt.close()
-
-                            # # Make an image as the min of the feature maps -> GIVES NO INFO
-                            # min_ftmap = ftmaps.min(axis=0)
-                            # min_ftmap = (min_ftmap - min_ftmap.min()) / (min_ftmap.max() - min_ftmap.min())
-                            # # Add the padding
-                            # min_ftmap = np.pad(min_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            # plt.imshow(min_ftmap, cmap=one_ch_cmap)
-                            # plt.savefig(ftmaps_path / f'A_min_ftmap.{IMAGE_FORMAT}')
-                            # plt.close()
-                            # min_ftmap = resize(min_ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
-                            # plt.imshow(min_ftmap, cmap=one_ch_cmap)
-                            # plt.savefig(ftmaps_path / f'A_min_ftmap_reshaped.{IMAGE_FORMAT}')
-                            # plt.close()
-
-                            # # Make an image of the IQR of the feature maps usign scipy.stats.iqr
-                            # from scipy.stats import iqr
-                            # iqr_ftmap = iqr(ftmaps, axis=0)
-                            # iqr_ftmap = (iqr_ftmap - iqr_ftmap.min()) / (iqr_ftmap.max() - iqr_ftmap.min())
-                            # # Add the padding
-                            # iqr_ftmap = np.pad(iqr_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            # plt.imshow(iqr_ftmap, cmap=one_ch_cmap)
-                            # plt.savefig(ftmaps_path / f'A_IQR_ftmap.{IMAGE_FORMAT}')
-                            # plt.close()
-
-                            # # Mean Absolute Deviation of the feature maps
-                            # mean_ftmaps = ftmaps.mean(axis=0)
-                            # mad_ftmap = np.mean(np.abs(ftmaps - mean_ftmaps), axis=0)
-                            # mad_ftmap = (mad_ftmap - mad_ftmap.min()) / (mad_ftmap.max() - mad_ftmap.min())
-                            # # Add the padding
-                            # mad_ftmap = np.pad(mad_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            # plt.imshow(mad_ftmap, cmap=one_ch_cmap)
-                            # plt.savefig(ftmaps_path / f'A_MAD_ftmap.{IMAGE_FORMAT}')
-                            # plt.close()
-
-                            # # Median Absolute Deviation (using scipy)
-                            # mad_ftmap = sc_stats.median_abs_deviation(ftmaps, axis=0)
-                            # mad_ftmap = (mad_ftmap - mad_ftmap.min()) / (mad_ftmap.max() - mad_ftmap.min())
-                            # # Add the padding
-                            # mad_ftmap = np.pad(mad_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            # plt.imshow(mad_ftmap, cmap=one_ch_cmap)
-                            # plt.savefig(ftmaps_path / f'A_MedianAD_ftmap.{IMAGE_FORMAT}')
-                            # plt.close()
-
-                            # Max - mean of the feature maps
-                            # Option 1: max along the pixel axis
-                            max_minus_mean_ftmap = ftmaps.max(axis=0) - ftmaps.mean(axis=0)
-                            np.savetxt(ftmaps_path / F'txt_A_max_minus_mean_ftmap.txt', max_minus_mean_ftmap)
-                            max_minus_mean_ftmap = (max_minus_mean_ftmap - max_minus_mean_ftmap.min()) / (max_minus_mean_ftmap.max() - max_minus_mean_ftmap.min())
-                            max_minus_mean_ftmap = np.pad(max_minus_mean_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            plt.imshow(max_minus_mean_ftmap, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_max_minus_mean_ftmap.{IMAGE_FORMAT}')
-                            plt.close()
-                            # Option 2: max - mean along the feature axis
-                            max_of_evey_ftmap = ftmaps.max(axis=(1,2))
-                            mean_of_evey_ftmap = ftmaps.mean(axis=(1,2))
-                            ftmaps_minus_mean = ftmaps - mean_of_evey_ftmap[:, None, None]
-                            # 2.1 Sum of values
-                            ftmaps_minus_mean_sum = ftmaps_minus_mean.sum(axis=0)
-                            np.savetxt(ftmaps_path / F'txt_A_max_minus_mean_ftmap_sum.txt', ftmaps_minus_mean_sum)
-                            ftmaps_minus_mean_sum = (ftmaps_minus_mean_sum - ftmaps_minus_mean_sum.min()) / (ftmaps_minus_mean_sum.max() - ftmaps_minus_mean_sum.min())
-                            ftmaps_minus_mean_sum = np.pad(ftmaps_minus_mean_sum, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            plt.imshow(ftmaps_minus_mean_sum, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_max_minus_mean_ftmap_sum.{IMAGE_FORMAT}')
-                            plt.close()
-                            # 2.2 Sum of abs values
-                            ftmaps_minus_mean_sum_abs = np.abs(ftmaps_minus_mean).sum(axis=0)
-                            np.savetxt(ftmaps_path / F'txt_A_max_minus_mean_ftmap_sum_abs.txt', ftmaps_minus_mean_sum_abs)
-                            ftmaps_minus_mean_sum_abs = (ftmaps_minus_mean_sum_abs - ftmaps_minus_mean_sum_abs.min()) / (ftmaps_minus_mean_sum_abs.max() - ftmaps_minus_mean_sum_abs.min())
-                            ftmaps_minus_mean_sum_abs = np.pad(ftmaps_minus_mean_sum_abs, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            plt.imshow(ftmaps_minus_mean_sum_abs, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_max_minus_mean_ftmap_sum_abs.{IMAGE_FORMAT}')
-                            plt.close()
-                            
-                            # Make an image of the sum of the topK values per pixel
-                            #topK = 10
-                            flattened_ftmaps = ftmaps.reshape(ftmaps.shape[0], -1).T
-                            topK_folder_path = ftmaps_path / 'topK'
-                            topK_folder_path.mkdir(exist_ok=True)
-                            for topK in [1,3,5,7,10,15,20,25,30]:
-                                topK_ftmap = np.sort(flattened_ftmaps, axis=1) # Sort the values (channels) of the pixels
-                                topK_ftmap = topK_ftmap.reshape(ftmaps.shape[1], ftmaps.shape[2], -1)  # Reshape to the original shape
-                                topK_ftmap = topK_ftmap[:,:, -topK:].sum(axis=2)  # Take the topK values of every pixel and sum them
-                                topK_ftmap = (topK_ftmap - topK_ftmap.min()) / (topK_ftmap.max() - topK_ftmap.min())  # Normalize
-                                # Add the padding
-                                topK_ftmap = np.pad(topK_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                                #topK_ftmap = topK_ftmap.reshape(ftmaps.shape[1], ftmaps.shape[2])
-                                plt.imshow(topK_ftmap, cmap=one_ch_cmap)
-                                plt.savefig(topK_folder_path / f'A_top{topK}_ftmap.{IMAGE_FORMAT}')
-                                plt.close()
-                                # topK_ftmap = resize(topK_ftmap, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
-                                # plt.imshow(topK_ftmap, cmap=one_ch_cmap)
-                                # plt.savefig(topK_folder_path / f'A_top{topK}_ftmap_reshaped.{IMAGE_FORMAT}')
-                                # plt.close()
-
-                        if "clusters" in modos_de_visualizacion:
-                            # CLuster
-                            # OPTION 1. Directly clustering
-                            features_metric = 'euclidean'
-                            min_samples = 16
-                            eps_options = {
-                                "euclidean": 18,
-                                "cosine": 0.1,
-                                "manhattan": 18
-                            }
-                            eps = eps_options[features_metric]
-                            # Flatten feature maps. original shape is (features, height, width). We want (n_samples, features)
-                            flattened_ftmaps = ftmaps.reshape(ftmaps.shape[0], -1).T
-                            db = DBSCAN(eps=eps, min_samples=min_samples, metric=features_metric).fit(flattened_ftmaps)
-                            labels = db.labels_
-                            n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
-                            print(f"Number of clusters: {n_clusters_}")
-                            # Plot the labels as an image in the original size
-                            labels_as_image = labels.reshape(ftmaps.shape[1], ftmaps.shape[2])
-                            plt.imshow(labels_as_image)
-                            plt.savefig(ftmaps_path / f'A_cluster_dbscan.{IMAGE_FORMAT}')
-                            plt.close()
-
-                            # Scale the feature maps
-                            from sklearn.preprocessing import StandardScaler
-                            scaler = StandardScaler()
-                            flattened_ftmaps_scaled = scaler.fit_transform(flattened_ftmaps)
-                            # Cluster
-                            db = DBSCAN(eps=eps, min_samples=min_samples).fit(flattened_ftmaps_scaled)
-                            labels = db.labels_
-                            n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
-                            print(f"Number of clusters: {n_clusters_}")
-                            # Plot the labels as an image in the original size
-                            labels_as_image = labels.reshape(ftmaps.shape[1], ftmaps.shape[2])
-                            plt.imshow(labels_as_image)
-                            plt.savefig(ftmaps_path / f'A_cluster_dbscan_scaled.{IMAGE_FORMAT}')
-                            plt.close()
-
-                            # Clustering with DBSCAN but adding the spatial information
-                            # Original feature map shape
-                            num_channels, height, width = ftmaps.shape
-                            # Create the coordinate channels
-                            y_coords, x_coords = np.meshgrid(np.arange(height), np.arange(width), indexing='ij')
-                            # Add the coordinate channels to the original feature map
-                            yx_augmented_feature_map = np.concatenate([ftmaps, y_coords[None, :, :], x_coords[None, :, :]])
-                            # Now flatten the feature maps and make the first dimension be the pixels
-                            flattened_ftmaps_with_yx = yx_augmented_feature_map.reshape(num_channels + 2, -1).T
-                            samples_pairwise_distances_features = pairwise_distances(flattened_ftmaps_with_yx[:, :-2], metric=features_metric)
-                            mean_ft_distance = samples_pairwise_distances_features.mean()
-                            std_ft_distance = samples_pairwise_distances_features.std()
-                            # Euclidean distance between sample coordinates. Normalize them to be in the same range as the feature distances
-                            samples_pairwise_distances_yx = pairwise_distances(flattened_ftmaps_with_yx[:, -2:], metric='euclidean')
-                            samples_pairwise_distances_yx = (samples_pairwise_distances_yx - samples_pairwise_distances_yx.min()) / (samples_pairwise_distances_yx.max() - samples_pairwise_distances_yx.min())
-                            samples_pairwise_distances_yx = samples_pairwise_distances_yx * (std_ft_distance + mean_ft_distance - (mean_ft_distance - std_ft_distance)) + (mean_ft_distance - std_ft_distance)
-                            # Merge the two distances using a weight lambda
-                            lambda_weight = 0.5
-                            samples_pairwise_distances_weighted = lambda_weight * samples_pairwise_distances_features + (1 - lambda_weight) * samples_pairwise_distances_yx
-                            # Now cluster 
-                            db = DBSCAN(eps=eps, min_samples=min_samples).fit(samples_pairwise_distances_weighted)
-                            labels = db.labels_
-                            n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
-                            print(f"Number of clusters: {n_clusters_}")
-                            # Plot the labels as an image in the original size
-                            labels_as_image = labels.reshape(ftmaps.shape[1], ftmaps.shape[2])
-                            # Add padding to the labels
-                            labels_as_image = np.pad(labels_as_image, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(-1, -1))
-                            labels_as_image_spatial_info = labels_as_image.copy()
-                            # As matrix
-                            plt.matshow(labels_as_image, cmap='tab20')
-                            # Plot also the legend
-                            plt.savefig(ftmaps_path / f'A_cluster_with_spatial_info_matshow.{IMAGE_FORMAT}')
-                            plt.close()
-                            # As image
-                            plt.imshow(labels_as_image, cmap='viridis')
-                            plt.savefig(ftmaps_path / f'A_cluster_with_spatial_info_imshow.{IMAGE_FORMAT}')
-                            plt.close()
-                            # As image resized to the original size but maintaining the clusters
-                            labels_as_image = resize(labels_as_image, (imgs[_img_idx].shape[1], imgs[_img_idx].shape[2]), anti_aliasing=True)
-                            labels_as_image = np.rint(labels_as_image)                     
-                            plt.imshow(labels_as_image, cmap='tab20')
-                            plt.savefig(ftmaps_path / f'A_cluster_with_spatial_info_imshow_reshaped.{IMAGE_FORMAT}')
-                            plt.close()
-
-                        if "thresholds" in modos_de_visualizacion:
-                            # Creating boxes with cv2 and std_ftmap
-                            import cv2
-                            # Remove one extra pixel from the padding
-                            # ftmaps_one_less_pixel = ftmaps[:, 1:-1, 1:-1]
-                            # std_ftmap = ftmaps_one_less_pixel.std(axis=0)
-                            std_ftmap = ftmaps.std(axis=0)
-                            std_ftmap = (std_ftmap - std_ftmap.min()) / (std_ftmap.max() - std_ftmap.min())
-                            #std_ftmap = np.pad(std_ftmap, ((y_padding, y_padding), (x_padding, x_padding)), 'constant', constant_values=(0, 0))
-                            # Threshold the map
-                            saliency_map_8bit = np.uint8(std_ftmap * 255)
-                            _, binary_map = cv2.threshold(saliency_map_8bit, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                            plt.imshow(binary_map, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_binary_map_otsu.{IMAGE_FORMAT}')
-                            plt.close()
-
-                            # Adaptive Mean Thresholding
-                            adaptive_mean = cv2.adaptiveThreshold(saliency_map_8bit, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
-                            plt.imshow(adaptive_mean, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_binary_map_adaptive_mean.{IMAGE_FORMAT}')
-                            plt.close()
-
-                            # Adaptive Gaussian Thresholding
-                            adaptive_gaussian = cv2.adaptiveThreshold(saliency_map_8bit, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-                            plt.imshow(adaptive_gaussian, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_binary_map_adaptive_gaussian.{IMAGE_FORMAT}')
-                            plt.close()
-
-                            # Triangle thresholding
-                            _, triangle_threshold = cv2.threshold(saliency_map_8bit, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_TRIANGLE)
-                            plt.imshow(triangle_threshold, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_binary_map_triangle.{IMAGE_FORMAT}')
-                            plt.close()
-
-                            from skimage.filters import threshold_multiotsu
-                            # Applying Multi-Otsu threshold for the values in image
-                            thresholds = threshold_multiotsu(saliency_map_8bit, classes=3)
-                            multi_otsu_result = np.digitize(saliency_map_8bit, bins=thresholds)
-                            plt.imshow(multi_otsu_result, cmap=one_ch_cmap)
-                            plt.savefig(ftmaps_path / f'A_binary_map_multi_otsu.{IMAGE_FORMAT}')
-                            plt.close()
-
-                        # Selective search for bounding boxes (opencv)
-                        # TODO: Deactivated for the moment
-                        if False:
-                            ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
-                            ss.setBaseImage(saliency_map_8bit)
-                            ss.switchToSelectiveSearchFast()
-                            #ss.switchToSelectiveSearchQuality()
-                            # run selective search on the input image
-                            import time
-                            start = time.time()
-                            rects = ss.process()
-                            end = time.time()
-                            # show how along selective search took to run along with the total
-                            # number of returned region proposals
-                            print("[INFO] selective search took {:.4f} seconds".format(end - start))
-                            print("[INFO] {} total region proposals".format(len(rects)))
-
-                            # loop over the region proposals in chunks (so we can better visualize them)
-                            import random
-                            for i in range(0, len(rects), 100):
-                                # clone the original image so we can draw on it
-                                output = saliency_map_8bit.copy()
-                                # loop over the current subset of region proposals
-                                for (x, y, w, h) in rects[i:i + 100]:
-                                    # draw the region proposal bounding box on the image
-                                    color = [random.randint(0, 255) for j in range(0, 3)]
-                                    cv2.rectangle(output, (x, y), (x + w, y + h), color, 2)
-                            # Find contours
-                            contours, _ = cv2.findContours(binary_map, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                            # Draw bounding boxes
-                            output_image = cv2.cvtColor(saliency_map_8bit, cv2.COLOR_GRAY2BGR)  # Convert to BGR for coloring
-                            for contour in contours:
-                                x, y, w, h = cv2.boundingRect(contour)
-                                cv2.rectangle(output_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                            
-                            plt.imshow(output_image)
-                            plt.savefig(ftmaps_path / f'A_boxes_from_std_ftmap.{IMAGE_FORMAT}')
-                            plt.close()
-                            # Save the result in an image with cv2 (same path as with matplotlib)
-                            cv2.imwrite(str(ftmaps_path / f'A_boxes_from_std_ftmap_cv2.png'), output_image)
-
-                        if False:
-                            # OPTION 2. Clustering algorithms
-                            # CLUSTERING OPTIONS:
-                            cluster_option = 'optics'
-                            if cluster_option == 'meanshift':
-                                from sklearn.cluster import MeanShift
-                                mean_shift = MeanShift(bandwidth=None)  # Experiment with the bandwidth parameter
-                                labels = mean_shift.fit_predict(flattened_ftmaps_with_xy_scaled)
-                            elif cluster_option == 'dbscan':
-                                db = DBSCAN(eps=0.9, min_samples=8).fit(flattened_ftmaps_with_xy_scaled)
-                                labels = db.labels_
-                            elif cluster_option == 'gmm':
-                                from sklearn.mixture import GaussianMixture
-                                gmm = GaussianMixture(n_components=5, covariance_type='full')
-                                labels = gmm.fit_predict(flattened_ftmaps_with_xy_scaled)
-                            elif cluster_option == 'optics':
-                                from sklearn.cluster import OPTICS
-                                optics = OPTICS(min_samples=8, xi=.05, min_cluster_size=.05)
-                                optics_labels = optics.fit_predict(flattened_ftmaps_with_xy_scaled)
-                                print(f"OPTICS found {len(np.unique(optics_labels))} clusters")
-                            else:
-                                raise ValueError("The cluster option is not valid")
-                            # Number of clusters
-                            n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
-                            print(f"Number of clusters: {n_clusters_}")
-                            # Plot the labels as an image in the original size
-                            labels_as_image = labels.reshape(ftmaps_shape[1], ftmaps_shape[2])
-                            plt.imshow(labels_as_image, cmap='tab20')
-                            # Plot also the legend
-                            plt.colorbar()
-                            plt.savefig(ftmaps_path / f'A_cluster_with_spatial_info_{cluster_option}.{IMAGE_FORMAT}')
-                            plt.close()                            
-
-                print()
-                if c > 20:
-                    quit()
-
-            elif debugeando_en_modo == "normal":
-                # Por aqui va la ejecucion normal
-
-                ### Comprobar si las cajas predichas son OoD ###
-                ood_decision = self.compute_ood_decision_on_results(results, logger)
-
-                ### Añadir posibles cajas desconocidas a las predicciones ###
-                if self.enhanced_unk_localization:
+            ### Añadir posibles cajas desconocidas a las predicciones ###
+            if self.enhanced_unk_localization:
+                directory_name = f'{now}_{self.name}'
+                imgs_folder_path = folder_path / directory_name
+                imgs_folder_path.mkdir(exist_ok=True)
+                if CUSTOM_HYP.unk.USE_XAI:
+                    # TODO: Aqui pruebo lo de la explicabilidad, que tiene que sacar un mapa de valores por imagen, siendo cada mapa una imagen de 80x80
+                    #   con los valores de la importancia de cada pixel, que luego se restaran al saliency map correspondiente, escalando los valores al rango
+                    #   del saliency map
+                    # Crear carpeta
                     directory_name = f'{now}_{self.name}'
                     imgs_folder_path = folder_path / directory_name
                     imgs_folder_path.mkdir(exist_ok=True)
-                    if CUSTOM_HYP.unk.USE_XAI:
-                        # TODO: Aqui pruebo lo de la explicabilidad, que tiene que sacar un mapa de valores por imagen, siendo cada mapa una imagen de 80x80
-                        #   con los valores de la importancia de cada pixel, que luego se restaran al saliency map correspondiente, escalando los valores al rango
-                        #   del saliency map
-                        # Crear carpeta
-                        directory_name = f'{now}_{self.name}'
-                        imgs_folder_path = folder_path / directory_name
-                        imgs_folder_path.mkdir(exist_ok=True)
-                        # Save hyperparameters as dict
-                        from dataclasses import asdict
-                        with open(imgs_folder_path / 'hyperparameters.json', 'w') as f:
-                            json.dump(asdict(CUSTOM_HYP), f)
-                        delattr(model.model, 'which_layers_to_extract')
-                        delattr(model.model, 'extraction_mode')
-                        # Heatmaps in shape (M, H, W), M being the batch size an in form of a tensor in cpu
-                        # and in the range [0, 1]
-                        if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
-                            from skimage.transform import downscale_local_mean
-                            save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}.npy'
-                            if not os.path.exists(save_name):
-                                expl_heatmaps = expl_model(x=imgs, results=results, mode='object_detection')
-                                # Save the heatmaps
-                                np.save(save_name, expl_heatmaps.numpy())
-                            else:
-                                # Load the heatmaps and downscale them
-                                print('***** LOADING HEATMAPS *****')
-                                expl_heatmaps = torch.tensor(np.load(save_name), dtype=torch.float32)
-                            processed_heatmaps = downscale_local_mean(expl_heatmaps.numpy(), (1, 8, 8))
-                            processed_heatmaps = [torch.tensor(hm, dtype=torch.float32) for hm in processed_heatmaps]
+                    # Save hyperparameters as dict
+                    from dataclasses import asdict
+                    with open(imgs_folder_path / 'hyperparameters.json', 'w') as f:
+                        json.dump(asdict(CUSTOM_HYP), f)
+                    delattr(model.model, 'which_layers_to_extract')
+                    delattr(model.model, 'extraction_mode')
+                    # Heatmaps in shape (M, H, W), M being the batch size an in form of a tensor in cpu
+                    # and in the range [0, 1]
+                    if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
+                        from skimage.transform import downscale_local_mean
+                        save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}.npy'
+                        if not os.path.exists(save_name):
+                            expl_heatmaps = expl_model(x=imgs, results=results, mode='object_detection')
+                            # Save the heatmaps
+                            np.save(save_name, expl_heatmaps.numpy())
                         else:
-                            expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
-                            processed_heatmaps = expl_heatmaps
-                            #processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
-                        configure_extra_output_of_the_model(model, self)
+                            # Load the heatmaps and downscale them
+                            print('***** LOADING HEATMAPS *****')
+                            expl_heatmaps = torch.tensor(np.load(save_name), dtype=torch.float32)
+                        processed_heatmaps = downscale_local_mean(expl_heatmaps.numpy(), (1, 8, 8))
+                        processed_heatmaps = [torch.tensor(hm, dtype=torch.float32) for hm in processed_heatmaps]
                     else:
-                        processed_heatmaps = None
-                    if CUSTOM_HYP.unk.RANK_BOXES:
-                        possible_unk_bboxes, ood_decision_on_unknown, distances_per_image = self.compute_extra_possible_unkwnown_bboxes_and_decision(
-                            results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
-                            folder_path=imgs_folder_path, origin_of_idx=idx_of_batch*dataloader.batch_size
-                        )
-                    else:
-                        distances_per_image = None
-                        possible_unk_bboxes, ood_decision_on_unknown = self.compute_extra_possible_unkwnown_bboxes_and_decision(
-                            results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
-                            folder_path=imgs_folder_path, origin_of_idx=idx_of_batch*dataloader.batch_size
-                        )
+                        expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
+                        processed_heatmaps = expl_heatmaps
+                        #processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
+                    configure_extra_output_of_the_model(model, self)
                 else:
-                    possible_unk_bboxes = None
-                    ood_decision_on_unknown = None
+                    processed_heatmaps = None
+                if CUSTOM_HYP.unk.RANK_BOXES:
+                    possible_unk_bboxes, ood_decision_on_unknown, distances_per_image = self.compute_extra_possible_unkwnown_bboxes_and_decision(
+                        results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
+                        folder_path=imgs_folder_path, origin_of_idx=idx_of_batch*dataloader.batch_size
+                    )
+                else:
                     distances_per_image = None
-                    
-                class_names = {k:v for k, v in model.names.items() if k < 20}
-                class_names.update({80: 'UNK'})
-                plot_results( 
-                    class_names=class_names,
-                    results=results,
-                    folder_path=folder_path,
-                    now=now,
-                    valid_preds_only=False,
-                    origin_of_idx=idx_of_batch*dataloader.batch_size,
-                    image_format=IMAGE_FORMAT,
-                    ood_decision=ood_decision,
-                    ood_method_name=self.name,
-                    targets=targets,
-                    possible_unk_boxes=possible_unk_bboxes,
-                    ood_decision_on_possible_unk_boxes=ood_decision_on_unknown,
-                    distances_unk_prop_per_image=distances_per_image
-                )
+                    possible_unk_bboxes, ood_decision_on_unknown = self.compute_extra_possible_unkwnown_bboxes_and_decision(
+                        results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
+                        folder_path=imgs_folder_path, origin_of_idx=idx_of_batch*dataloader.batch_size
+                    )
             else:
-                raise ValueError("The mode to debug is not valid")
+                possible_unk_bboxes = None
+                ood_decision_on_unknown = None
+                distances_per_image = None
+                
+            class_names = {k:v for k, v in model.names.items() if k < 20}
+            class_names.update({80: 'UNK'})
+            plot_results( 
+                class_names=class_names,
+                results=results,
+                folder_path=folder_path,
+                now=now,
+                valid_preds_only=False,
+                origin_of_idx=idx_of_batch*dataloader.batch_size,
+                image_format=IMAGE_FORMAT,
+                ood_decision=ood_decision,
+                ood_method_name=self.name,
+                targets=targets,
+                possible_unk_boxes=possible_unk_bboxes,
+                ood_decision_on_possible_unk_boxes=ood_decision_on_unknown,
+                distances_unk_prop_per_image=distances_per_image
+            )
             
             number_of_images_saved += len(data['im_file'])
             # TODO: De momento no queremos plotear todo, solo unos pocos batches
@@ -1441,8 +697,8 @@ class OODMethod(ABC):
             # we need to get the lower bound, the (1-tpr)*100%
             used_tpr = (1 - tpr)*100
 
-        sufficient_samples = 10
-        good_number_of_samples = 50
+        sufficient_samples = CUSTOM_HYP.SUFFICIENT_NUM_SAMPLES
+        good_number_of_samples = CUSTOM_HYP.GOOD_NUM_SAMPLES
 
         # One threshold per class
         if self.per_class:
@@ -2103,7 +1359,9 @@ class LogitsMethod(OODMethod):
             for idx_bbox in range(len(res.boxes.cls)):
                 cls_idx = int(res.boxes.cls[idx_bbox].cpu())
                 logits = res.extra_item[idx_bbox][4:].cpu()
-                score = self.compute_score_one_bbox(logits, cls_idx)
+                # TODO: Probablemente haya que cambiar esto para quedarnos con el output [0]
+                #score = self.compute_score_one_bbox(logits, cls_idx)
+                score = self.compute_scores(logits, cls_idx)[0]
                 if score < self.thresholds[cls_idx]:
                     ood_decision[idx_img].append(0)  # OOD
                 else:
@@ -2119,15 +1377,42 @@ class LogitsMethod(OODMethod):
         for res in results:
             # Loop over the valid predictions
             for valid_idx_one_bbox in res.valid_preds:
+                #cls_idx_one_bbox = res.boxes.cls[valid_idx_one_bbox].cpu().unsqueeze(0)
                 cls_idx_one_bbox = int(res.boxes.cls[valid_idx_one_bbox].cpu())
                 logits_one_bbox = res.extra_item[valid_idx_one_bbox][4:].cpu()
-                all_activations[cls_idx_one_bbox].append(self.compute_score_one_bbox(logits_one_bbox, cls_idx_one_bbox))
+                #all_activations[cls_idx_one_bbox].append(self.compute_score_one_bbox(logits_one_bbox, cls_idx_one_bbox))
+                # Concatenate the cls_idx to the logits in the first element and the append to the list
+                all_activations[cls_idx_one_bbox].append(logits_one_bbox)
+                
 
     def format_internal_activations(self, all_activations: Union[List[float], List[List[np.ndarray]]]):
         """
         Format the internal activations of the model. In this case, the activations are already well formatted.
         """
-        pass
+        # Concatenate tensors of the same class
+        for idx_cls in range(len(all_activations)):
+            if len(all_activations[idx_cls]) > 0:
+                all_activations[idx_cls] = torch.stack(all_activations[idx_cls], dim=0)
+            else:
+                all_activations[idx_cls] = torch.tensor([])
+
+    def compute_scores_from_activations(self, activations: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger):
+        """
+        Compute the scores for each class using the in-distribution activations (usually feature maps). They come in form of a list of ndarrays when
+            per_class True and per_stride are False, where each position of the list refers to one class and the array is a tensor of shape [N, C, H, W]. 
+            When is per_class and per_stride, the first list refers to classes and the second to the strides, being the arrays of the same shape as presented.
+        """
+        if self.per_class:
+            scores = [[] for _ in range(len(activations))]
+            for idx_cls in range(len(scores)):
+                if len(activations[idx_cls]) > 0:
+                    scores[idx_cls] = self.compute_scores(activations[idx_cls], idx_cls)
+                else:
+                    scores[idx_cls] = np.array([])
+        else:
+            raise NotImplementedError("Not implemented yet")
+        
+        return scores
 
     def activations_transformation(self, activations: np.array) -> np.array:
         raise NotImplementedError("This method is not needed for methods using logits")
@@ -2142,11 +1427,17 @@ class MSP(LogitsMethod):
         name = 'MSP'
         super().__init__(name, **kwargs)
     
-    def compute_score_one_bbox(self, logits: Tensor, cls_idx: int) -> float:
-        logits = logits.numpy()
-        assert cls_idx == logits.argmax(), "The max logit is not the one of the predicted class"
-        return logits[cls_idx]
+    # def compute_score_one_bbox(self, logits: Tensor, cls_idx: int) -> float:
+    #     logits = logits.numpy()
+    #     assert cls_idx == logits.argmax(), "The max logit is not the one of the predicted class"
+    #     return logits[cls_idx]
     
+    def compute_scores(self, logits: Tensor, cls_idx: int) -> np.ndarray:
+        if len(logits.shape) == 1:  # In case we only have one bbox
+            logits = logits.unsqueeze(0)
+        return torch.nn.functional.softmax(logits, dim=1)[:, cls_idx].numpy()
+
+
 class Energy(LogitsMethod):
 
     temper: float
@@ -2156,22 +1447,44 @@ class Energy(LogitsMethod):
         super().__init__(name, **kwargs)
         self.temper = temper
     
-    def compute_score_one_bbox(self, logits, cls_idx) -> float:
-        return self.temper * torch.logsumexp(logits / self.temper, dim=0).item()
+    # def compute_score_one_bbox(self, logits, cls_idx) -> float:
+    #     if len(logits.shape) == 1:
+    #         return self.temper * torch.logsumexp(logits.unsqueeze(0) / self.temper, dim=0)
+    #     return self.temper * torch.logsumexp(logits / self.temper, dim=0).item()
+    
+    def compute_scores(self, logits: Tensor, cls_idx: int) -> np.ndarray:
+        if len(logits.shape) == 1:  # In case we only have one bbox
+            logits = logits.unsqueeze(0)
+        return self.temper * torch.logsumexp(logits / self.temper, dim=0)[:, cls_idx].numpy()
+    
 
-    # def extract_internal_activations(self, results: Results, all_activations: List[float]):
-    #     """
-    #     The extracted activations will be stored in the list all_activations
-    #     """
-    #     for res in results:
-    #         # Loop over the valid predictions
-    #         for valid_idx_one_bbox in res.valid_preds:
-                
-    #             cls_idx_one_bbox = int(res.boxes.cls[valid_idx_one_bbox].cpu())
+class ODIN(LogitsMethod):
 
-    #             logits_one_bbox = res.extra_item[valid_idx_one_bbox][4:].cpu()
+    temper: float
 
-    #             all_activations[cls_idx_one_bbox].append(self.temper * torch.logsumexp(logits_one_bbox / self.temper, dim=0).item())
+    def __init__(self, temper: float, **kwargs):
+        name = 'ODIN'
+        super().__init__(name, **kwargs)
+        self.temper = temper
+    
+    def compute_scores(self, logits: Tensor, cls_idx: int) -> np.ndarray:
+        if len(logits.shape) == 1:  # In case we only have one bbox
+            logits = logits.unsqueeze(0)
+        return torch.nn.functional.softmax(logits/self.temper, dim=1)[:, cls_idx].numpy()
+
+
+class Sigmoid(LogitsMethod):
+
+    def __init__(self, **kwargs):
+        name = 'MSP'
+        super().__init__(name, **kwargs)
+    
+    def compute_scores(self, logits: Tensor, cls_idx: int) -> np.ndarray:
+        if len(logits.shape) == 1:  # In case we only have one bbox
+            logits = logits.unsqueeze(0)
+        logits = logits.numpy()
+        assert cls_idx == logits.argmax(), "The max logit is not the one of the predicted class"
+        return logits[cls_idx]
 
 
 ### Superclasses for methods using feature maps of the model ###
@@ -2223,7 +1536,7 @@ class DistanceMethod(OODMethod):
           f"of {AVAILABLE_CLUSTER_OPTIMIZATION_METRICS}, but got {cluster_optimization_metric}"
         return cluster_optimization_metric
 
-    def compute_score_one_bbox(self, cluster: np.array, activations: np.array) -> List[float]:
+    def compute_scores(self, activations: np.array, cluster: np.array) -> np.ndarray:
         return self.compute_distance(cluster, activations)
 
     # TODO: Juntar las dos funciones de debajo en una sola, ya que podemos devolver una lista de floats siempre

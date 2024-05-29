@@ -226,33 +226,41 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
                 precs[thresh].append(0)
             logger.info(f"Class: {cls_name}, AP: {ap * 100:.2f}, Recall: {rec[-1] * 100:.2f}, Precision: {prec[-1] * 100:.2f}")       
     
-    # Check if we are in coco_ood, where ONLY the unknown class is present. If is the case, we need to compute the metrics for the unknown class ONLY
-    if tp_plus_fp_cs[50] == [None] and fp_os[50] == [None]:
-        detections_unksniffer = {}
-        for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
-            one_class_preds ={}
-            if cls_name == 'unknown':
-                cls_id = UNKNOWN_CLASS_INDEX
-            for one_img_preds in all_predictions:
-                current_cls_preds_mask = one_img_preds['cls'] == cls_id
-                # Obtain an array of shape [N,5], where N is the number of predictions for this class
-                # and 5 is the format [x1, y1, x2, y2, conf]
-                one_class_preds[one_img_preds['img_name']] = np.concatenate([one_img_preds['bboxes'][current_cls_preds_mask], one_img_preds['conf'][current_cls_preds_mask][:, None]], axis=1)
-            detections_unksniffer[cls_id] = one_class_preds
-        # annotations =  dict[image_file] = numpy.array([[x1,y1,x2,y2, cl_id], [...],...])
-        annotations_unksniffer = {}
-        for one_img_targets in all_targets:
-            annotations_unksniffer[one_img_targets['img_name']] = np.concatenate([one_img_targets['bboxes'], one_img_targets['cls'][:, None]], axis=1)
-        
-        # Compute metrics for UNK
-        recall, precision, ap, rec, prec, state, det_image_files = voc_evaluate_as_unksniffer(
-                detections=detections_unksniffer,
-                annotations=annotations_unksniffer,
-                cid=UNKNOWN_CLASS_INDEX,
-            )
-        print("---------------")
-        logger.info(f"Class: UNK from UnkSniffer\nU-AP: {ap * 100:.2f}\nU-F1': {2 * (precision * recall) / (precision + recall) * 100}\nU-PRE: {recall * 100:.2f}\nU-REC: {precision * 100:.2f}")
-        print("---------------")
+    # Compute metrics for UNK as in UnkSniffer
+    detections_unksniffer = {}
+    for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
+        one_class_preds ={}
+        if cls_name == 'unknown':
+            cls_id = UNKNOWN_CLASS_INDEX
+        for one_img_preds in all_predictions:
+            current_cls_preds_mask = one_img_preds['cls'] == cls_id
+            # Obtain an array of shape [N,5], where N is the number of predictions for this class
+            # and 5 is the format [x1, y1, x2, y2, conf]
+            one_class_preds[one_img_preds['img_name']] = np.concatenate([one_img_preds['bboxes'][current_cls_preds_mask], one_img_preds['conf'][current_cls_preds_mask][:, None]], axis=1)
+        detections_unksniffer[cls_id] = one_class_preds
+    # annotations =  dict[image_file] = numpy.array([[x1,y1,x2,y2, cl_id], [...],...])
+    annotations_unksniffer = {}
+    for one_img_targets in all_targets:
+        annotations_unksniffer[one_img_targets['img_name']] = np.concatenate([one_img_targets['bboxes'], one_img_targets['cls'][:, None]], axis=1)
+    
+    # Compute metrics for UNK
+    recall, precision, ap, rec, prec, state, det_image_files = voc_evaluate_as_unksniffer(
+            detections=detections_unksniffer,
+            annotations=annotations_unksniffer,
+            cid=UNKNOWN_CLASS_INDEX,
+        )
+    print("---------------")
+    logger.info(f"Class: UNK from UnkSniffer\nU-AP: {ap * 100:.2f}\nU-F1': {2 * (precision * recall) / (precision + recall) * 100}\nU-PRE: {precision * 100:.2f}\nU-REC: {recall * 100:.2f}")
+    print("---------------")
+    # Check if we are in coco_ood, where ONLY the unknown class is present in the targets.
+    # If is the case, we need to return the metrics for the unknown class ONLY
+    # Otherwise, we compute WI and A-OSE and return all metrics
+    cls_diff_from_unk_found = False
+    for t in all_targets:
+        if torch.where(t["cls"] == 80, 0, 1).sum() > 0:
+            cls_diff_from_unk_found = True
+            break
+    if not cls_diff_from_unk_found:
         return {
             'U-AP': ap * 100,
             'U-F1': 2 * (precision * recall) / (precision + recall) * 100,

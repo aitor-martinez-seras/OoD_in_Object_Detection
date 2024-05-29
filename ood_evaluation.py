@@ -65,8 +65,9 @@ class SimpleArgumentParser(Tap):
     enhanced_unk_localization: bool = False  # Whether to use enhanced unknown localization
     which_internal_activations: str = 'roi_aligned_ftmaps'  # Which internal activations to use for the OoD detection
     # ODIN and Energy
-    temperature: int = 1000
-    epsilon_odin: float = 0.0
+    temperature_energy: int = 1
+    temperature_odin: int = 1000
+    # Options to load from disk
     load_ind_activations: bool = False  # load in-distribution scores from disk
     load_clusters: bool = False  # load clusters from disk
     load_thresholds: bool = False  # load thresholds from disk
@@ -112,7 +113,7 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
     if args.ood_method == 'MSP':
         return MSP(per_class=True, per_stride=False, **common_kwargs)
     elif args.ood_method == 'Energy':
-        return Energy(temper=args.temperature, per_class=True, per_stride=False, **common_kwargs)
+        return Energy(temper=args.temperature_energy, per_class=True, per_stride=False, **common_kwargs)
     elif args.ood_method == 'L1_cl_stride':
         return L1DistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'L2_cl_stride':
@@ -186,9 +187,7 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
             logger.info("In-distribution data processed")
             logger.info("Saving in-distribution activations...")
             # Save activations
-            if args.ind_info_creation_option in TARGETS_RELATED_OPTIONS:
-                torch.save(ind_activations, STORAGE_PATH / f'{ood_method.which_internal_activations}_{model.ckpt["train_args"]["name"]}_activations_{args.ind_info_creation_option}.pt', pickle_protocol=5)
-            torch.save(ind_activations, STORAGE_PATH / f'{ood_method.which_internal_activations}_{model.ckpt["train_args"]["name"]}_activations.pt', pickle_protocol=5)
+            torch.save(ind_activations, activations_path, pickle_protocol=5)
             logger.info(f"In-distribution activations succesfully saved in {activations_path}")
 
         ### 2. Obtain scores ###
@@ -221,7 +220,7 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
         
         # For the rest of the methods activations are the scores themselves
         else:
-            ind_scores = ind_activations 
+            ind_scores = ood_method.compute_scores_from_activations(ind_activations, logger)
 
         ### 3. Obtain thresholds ###
         # Finally generate and save the thresholds

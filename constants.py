@@ -6,14 +6,15 @@ PRUEBAS_ROOT_PATH = ROOT / 'pruebas'
 RESULTS_PATH = ROOT / 'results'
 
 # OOD Related
-OOD_METHOD_CHOICES = ['MSP', 'ODIN', 'Energy', 'Mahalanobis', 'GradNorm','RankFeat','React', 'L1_cl_stride', 'L2_cl_stride', \
-                      'GAP_L2_cl_stride', 'Cosine_cl_stride']
+LOGITS_METHODS = ['MSP', 'Energy']
+DISTANCE_METHODS = ['L1_cl_stride', 'L2_cl_stride', 'GAP_L2_cl_stride', 'Cosine_cl_stride']
+OOD_METHOD_CHOICES = LOGITS_METHODS + DISTANCE_METHODS
 
 FTMAPS_RELATED_OPTIONS = ['roi_aligned_ftmaps','all_ftmaps', 'ftmaps_and_strides']
 LOGITS_RELATED_OPTIONS = ['logits']
 INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS = FTMAPS_RELATED_OPTIONS + LOGITS_RELATED_OPTIONS
 
-AVAILABLE_CLUSTERING_METHODS = ['one','all','DBSCAN', 'KMeans', 'GMM', 'DBSCAN', 'OPTICS', 'SpectralClustering', 'AgglomerativeClustering']
+AVAILABLE_CLUSTERING_METHODS = ['one', 'DBSCAN', 'KMeans', 'HDBSCAN', 'AgglomerativeClustering', 'GMM', 'BGMM']
 AVAILABLE_CLUSTER_OPTIMIZATION_METRICS = ['silhouette', 'calinski_harabasz', 'davies_bouldin']
 
 TARGETS_RELATED_OPTIONS = [
