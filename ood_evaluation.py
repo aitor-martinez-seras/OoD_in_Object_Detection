@@ -6,37 +6,32 @@ from typing import Type, Union, Literal, List, Tuple, Dict
 from logging import Logger
 
 from tap import Tap
-
-#os.environ['CUDA_VISIBLE_DEVICES'] = '3'
-
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torch import Tensor
 
 import log
 from ultralytics import YOLO
-from ultralytics.yolo.data import build_dataloader
-from ultralytics.yolo.data import BaseDataset
 from ultralytics.yolo.data.build import InfiniteDataLoader
 
-
-from ood_utils import configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, \
-    L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride
+from ood_utils import configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, ODIN, Sigmoid, \
+    L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride, \
+    FusionMethod
 from data_utils import read_json, write_json, load_dataset_and_dataloader
 from unknown_localization_utils import select_ftmaps_summarization_method, select_thresholding_method
 from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, OOD_METHOD_CHOICES, TARGETS_RELATED_OPTIONS, \
     AVAILABLE_CLUSTERING_METHODS, DISTANCE_METHODS, BENCHMARKS, COCO_OOD_NAME, COCO_MIXED_NAME, COCO_OWOD_TEST_NAME, \
-    COMMON_COLUMNS, COCO_OOD_COLUMNS, COCO_MIX_COLUMNS, COCO_OWOD_COLUMNS
-from custom_hyperparams import CUSTOM_HYP
+    COMMON_COLUMNS, COCO_OOD_COLUMNS, COCO_MIX_COLUMNS, COCO_OWOD_COLUMNS, FINAL_COLUMNS, LOGITS_METHODS, DISTANCE_METHODS
+from custom_hyperparams import CUSTOM_HYP, Hyperparams
 
 
 NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 class SimpleArgumentParser(Tap):
     # MAIN OPTION TO SELECT
+    ood_method: str  # OOD detection method to use. If it is a fusion method, it must be passed as 'fusion-logits_method-distance_method'.
     visualize_oods: bool = False  # visualize the OoD detection
     compute_metrics: bool = False  # compute the metrics
+    benchmark: Literal['', 'best_methods', 'conf_thr_test', 'cluster_methods', 'logits_methods'] = ''  # Benchmark to run
     # Model options
     device: int  # Device to use for training on GPU. Indicate more than one to use multiple GPUs. Use -1 for CPU.
     model: Literal["n", "s", "m", "l", "x"]  # Which variant of the model YOLO to use
@@ -47,16 +42,22 @@ class SimpleArgumentParser(Tap):
     logdir: str = 'logs'  # Where to log test info (small).
     name: str = 'prueba'  # Name of this run. Used for monitoring and checkpointing
     # Benchmarks
-    benchmark: str = ''  # Benchmark to run. Options: 'best_methods', 'conf_thr_test', 'clusters', 'logits_methods'
     benchmark_datasets: List[str] = []  # Datasets to use for the benchmark. Options: 'coco_ood', 'coco_mixed', 'coco_owod_test'
-    # benchmark_best_methods: bool = False  # Run benchmark over the best methods for OoD detection
-    # benchmark_conf_thr_test: bool = False  # Run confidence benchmark over confidence thresholds [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001]
-    # benchmark_clusters: bool = False  # Run cluster benchmark over the different clustering methods
-    # benchmark_logits_methods: bool = False  # Run benchmark over the logits methods
-    # Hyperparameters
+    # Hyperparameters for YOLO
     conf_thr_train: float = 0.15  # Confidence threshold for the In-Distribution configuration
     conf_thr_test: float = 0.15  # Confidence threshold for the detections
+    # Hyperparameters for the OOD detection
     tpr_thr: float = 0.95  # TPR threshold for the OoD detection
+    cluster_method: str = 'one'  # Clustering method to use for the distance methods
+    cluster_optimization_metric: Literal['silhouette', 'calinski_harabasz'] = 'silhouette'  # Metric to use for the optimization of the clusters
+    ind_info_creation_option: str = 'valid_preds_one_stride'  # How to create the in-distribution information for the distance methods
+    enhanced_unk_localization: bool = False  # Whether to use enhanced unknown localization
+    which_internal_activations: str = 'roi_aligned_ftmaps'  # Which internal activations to use for the OoD detection
+    # Hyperparams for methods
+    fusion_strategy: Literal["and", "or", "score"] = "or"
+    # ODIN and Energy
+    temperature_energy: int = 1
+    temperature_odin: int = 1000
     # Datasets
     ind_dataset: str  # Dataset to use for training and validation
     ind_split: Literal['train', 'val', 'test'] = 'train'  # Split to use in the in-distribution dataset
@@ -64,15 +65,6 @@ class SimpleArgumentParser(Tap):
     ood_split: Literal['train', 'val', 'test'] = 'val'  # Split to use in the out-of-distribution dataset
     owod_task_ind: Literal["", "t1", "t2", "t3", "t4", "all_task_test"] = ""  # OWOD task to use in the in-distribution dataset
     owod_task_ood: Literal["", "t1", "t2", "t3", "t4", "all_task_test"] = ""  # OWOD task to use in the out-of-distribution dataset
-    # OOD related
-    ood_method: str
-    cluster_method: str = 'one'  # Clustering method to use for the distance methods
-    ind_info_creation_option: str = 'valid_preds_one_stride'  # How to create the in-distribution information for the distance methods
-    enhanced_unk_localization: bool = False  # Whether to use enhanced unknown localization
-    which_internal_activations: str = 'roi_aligned_ftmaps'  # Which internal activations to use for the OoD detection
-    # ODIN and Energy
-    temperature_energy: int = 1
-    temperature_odin: int = 1000
     # Options to load from disk
     load_ind_activations: bool = False  # load in-distribution scores from disk
     load_clusters: bool = False  # load clusters from disk
@@ -99,8 +91,16 @@ class SimpleArgumentParser(Tap):
             if self.model == '':
                 raise ValueError("You must pass a model size.")
         
-        if not self.visualize_oods and not self.compute_metrics:
-            raise ValueError("You must pass either visualize_oods or compute_metrics")
+        if not self.visualize_oods and not self.compute_metrics and not self.benchmark:
+            raise ValueError("You must pass either visualize_oods or compute_metrics or define a benchmark")
+        
+        if self.benchmark and not len(self.benchmark_datasets) > 0:
+            raise ValueError("You must pass benchmark_datasets to run a benchmark")
+        
+        if self.benchmark == 'cluster_methods':
+            if self.ood_method not in DISTANCE_METHODS:
+                raise ValueError("You must select a distance method to run this benchmark")
+
 
 
 def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMethod, DistanceMethod]:
@@ -115,18 +115,31 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
     distance_methods_kwargs = {
         'agg_method': 'mean',
         'cluster_method': args.cluster_method,
+        'cluster_optimization_metric': args.cluster_optimization_metric,
         'ind_info_creation_option': args.ind_info_creation_option,
-        'enhanced_unk_localization': args.enhanced_unk_localization,
         'which_internal_activations': args.which_internal_activations,
+        'enhanced_unk_localization': args.enhanced_unk_localization,
         'saliency_map_computation_function': select_ftmaps_summarization_method(CUSTOM_HYP.unk.SUMMARIZATION_METHOD),
         'thresholds_out_of_saliency_map_function': select_thresholding_method(CUSTOM_HYP.unk.THRESHOLDING_METHOD),
     }
     distance_methods_kwargs.update(common_kwargs)
 
+    if args.ood_method.startswith('fusion'):
+        _, logits_method, distance_method = args.ood_method.split('-')
+        args.ood_method = logits_method
+        ood_method_logits = select_ood_detection_method(args)
+        args.ood_method = distance_method
+        ood_method_distance = select_ood_detection_method(args)
+        return FusionMethod(ood_method_logits, ood_method_distance, args.fusion_strategy)
+
     if args.ood_method == 'MSP':
         return MSP(per_class=True, per_stride=False, **common_kwargs)
     elif args.ood_method == 'Energy':
         return Energy(temper=args.temperature_energy, per_class=True, per_stride=False, **common_kwargs)
+    elif args.ood_method == 'ODIN':
+        return ODIN(temper=args.temperature_odin, per_class=True, per_stride=False, **common_kwargs)
+    elif args.ood_method == 'Sigmoid':
+        return Sigmoid(per_class=True, per_stride=False, **common_kwargs)
     elif args.ood_method == 'L1_cl_stride':
         return L1DistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'L2_cl_stride':
@@ -158,7 +171,7 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
     activations_str =   f'{ood_method.which_internal_activations}_conf{ood_method.min_conf_threshold_train}_{model.ckpt["train_args"]["name"]}_activations'
     thresholds_str =    f'{ood_method.name}_conf{ood_method.min_conf_threshold_train}_{model.ckpt["train_args"]["name"]}_thresholds'
     if args.ood_method in DISTANCE_METHODS:
-        clusters_str = f'{ood_method.name}_conf{ood_method.min_conf_threshold_train}_{model.ckpt["train_args"]["name"]}_clusters_{ood_method.cluster_method}'
+        clusters_str = f'{ood_method.name}_conf{ood_method.min_conf_threshold_train}_{model.ckpt["train_args"]["name"]}_clusters_{ood_method.cluster_method}_{ood_method.cluster_optimization_metric}'
         thresholds_str += f'_{ood_method.cluster_method}'
     if args.ood_method in TARGETS_RELATED_OPTIONS:
         activations_str += f'_{args.ind_info_creation_option}'
@@ -192,7 +205,7 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
         ood_method.thresholds = read_json(thresholds_path)
         logger.info(f"Thresholds succesfully loaded from {thresholds_path}")
         # For a distance method also the clusters are needed
-        if ood_method.distance_method:
+        if ood_method.is_distance_method:
             # Load in_distribution clusters from disk
             ood_method.clusters = torch.load(clusters_path)
             logger.info(f"As we have a distance method, clusters have been also loaded from {clusters_path}")
@@ -228,13 +241,22 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
 
         ### 2. Obtain scores ###
         # Distance methods need to have clusters representing the In-Distribution data and then compute the scores
-        if ood_method.distance_method:
+        if ood_method.is_distance_method:
             
             ### 2.1. Distance methods need to obtain clusters for scores ###
             # Load the clusters
             if args.load_clusters:
                 # Load in_distribution clusters from disk
-                ood_method.clusters = torch.load(clusters_path)
+                logger.info("Loading clusters...")
+                if clusters_path.exists():
+                    ood_method.clusters = torch.load(clusters_path)
+                else:
+                    logger.error(f"File {clusters_path} does not exist. Generating clusters by using the activations...")
+                    ood_method.clusters = ood_method.generate_clusters(ind_activations, logger)
+                    logger.info("Saving clusters...")
+                    torch.save(ood_method.clusters, clusters_path, pickle_protocol=5)
+                    logger.info(f"Clusters succesfully saved in {clusters_path}")
+                logger.info(f"Clusters succesfully loaded from {clusters_path}")
 
             # Generate the clusters using the In-Distribution activations
             else:
@@ -289,18 +311,6 @@ def run_eval(ood_method: OODMethod, model: YOLO, device: str, ood_loader: Infini
 
     return results
 
-def fill_dict_with_results(results_dict: Dict[str, float], results_one_dataset: Dict[str, float], dataset_name: str) -> None:
-    if dataset_name == COCO_OOD_NAME:
-        for col in COCO_OOD_COLUMNS:
-            results_dict[col] = results_one_dataset[col]
-    elif dataset_name == COCO_MIXED_NAME:
-        for col in COCO_MIX_COLUMNS:
-            results_dict[col] = results_one_dataset[col]
-    elif dataset_name == COCO_OWOD_TEST_NAME:
-        for col in COCO_OWOD_COLUMNS:
-            results_dict[col] = results_one_dataset[col]
-    else:
-        raise ValueError("Unknown dataset")
 
 def main(args: SimpleArgumentParser):
     print('---------------------------- OOD Detection ----------------------------')
@@ -355,8 +365,10 @@ def main(args: SimpleArgumentParser):
         workers=args.workers,
         owod_task=args.owod_task_ind
     )
+    # TODO: Si metemos otro dataset habra que hacer esto de forma mas general
+    known_classes = [x for x in range(ind_dataset.number_of_classes)]
 
-    # Execution for the configuration defined in args
+    ### Execution for the configuration defined in args ###
     if args.benchmark not in BENCHMARKS.keys():
 
         # Load Out-of-Distribution dataset
@@ -377,8 +389,6 @@ def main(args: SimpleArgumentParser):
         start_time = time.time()
         
         ### OOD evaluation ###
-        # TODO: Si metemos otro dataset habra que hacer esto de forma mas general
-        known_classes = [x for x in range(ind_dataset.number_of_classes)]
 
         # Main function that executes the pipeline for the OOD evaluation (explained inside the function)
         execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
@@ -399,16 +409,18 @@ def main(args: SimpleArgumentParser):
         logger.info("Total running time: {}".format(end_time - start_time))
         logger.info(CUSTOM_HYP)
 
-    # Benchmark execution
+    ### Benchmark execution ###
     else:
         import pandas as pd
         logger.info(f"Running benchmark for {args.benchmark}")
 
-        logger.info(f"Out-of-Distribution datasets: {args.ood_dataset} - {args.ood_split}")
+        print('--------------------------------------')
+        logger.info(f"Loading Out-of-Distribution datasets:")
         ood_dataloaders = []
         results_colums = COMMON_COLUMNS
         # Load Out-of-Distribution datasets
         if COCO_OOD_NAME in args.benchmark_datasets:
+            logger.info(f"{COCO_OOD_NAME} - {args.ood_split}")
             coco_ood_dataset, coco_ood_dataloader = load_dataset_and_dataloader(
                 dataset_name=COCO_OOD_NAME,
                 data_split=args.ood_split,
@@ -416,11 +428,11 @@ def main(args: SimpleArgumentParser):
                 workers=args.workers,
                 owod_task=args.owod_task_ood
             )
-            logger.info(f"{COCO_OOD_NAME} - {args.ood_split}")
             ood_dataloaders.append(coco_ood_dataloader)
             results_colums += COCO_OOD_COLUMNS
 
         if COCO_MIXED_NAME in args.benchmark_datasets:
+            logger.info(f"{COCO_MIXED_NAME} - {args.ood_split}")
             coco_mixed_dataset, coco_mixed_dataloader = load_dataset_and_dataloader(
                 dataset_name=COCO_MIXED_NAME,
                 data_split=args.ood_split,
@@ -428,11 +440,11 @@ def main(args: SimpleArgumentParser):
                 workers=args.workers,
                 owod_task=args.owod_task_ood
             )
-            logger.info(f"{COCO_MIXED_NAME} - {args.ood_split}")
             ood_dataloaders.append(coco_mixed_dataloader)
             results_colums += COCO_MIX_COLUMNS
 
         if COCO_OWOD_TEST_NAME in args.benchmark_datasets:
+            logger.info(f"{COCO_OWOD_TEST_NAME} - {args.ood_split}")
             coco_owod_test_dataset, coco_owod_test_dataloader = load_dataset_and_dataloader(
                 dataset_name=COCO_OWOD_TEST_NAME,
                 data_split=args.ood_split,
@@ -440,20 +452,29 @@ def main(args: SimpleArgumentParser):
                 workers=args.workers,
                 owod_task=args.owod_task_ood
             )
-            logger.info(f"{COCO_OWOD_TEST_NAME} - {args.ood_split}")
             ood_dataloaders.append(coco_owod_test_dataloader)
             results_colums += COCO_OWOD_COLUMNS
+        print('--------------------------------------')
+
+        results_colums += FINAL_COLUMNS
 
         global_start_time = time.perf_counter()
 
+        ### Benchmaks ###
         if args.benchmark == 'best_methods':
             raise NotImplementedError("Not implemented yet")
 
         elif args.benchmark == 'conf_thr_test':
+            ## 1. Name results file
+            if args.ood in DISTANCE_METHODS:
+                results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}_{args.cluster_method}'
+            else:
+                results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}'
             CONF_THR_TEST_BENCHMARK = BENCHMARKS[args.benchmark]
             logger.info(f"Running benchmark for confidences {CONF_THR_TEST_BENCHMARK}")
 
-            ### Load common assets for the benchmark ###
+            ## 2. Load common assets for the benchmark 
+            logger.info(f"First configure and train the OOD detection method")
             # Load the OOD detection method
             ood_method = select_ood_detection_method(args)
             # Modify internal attributes of the model to obtain the desired outputs in the extra_item
@@ -461,20 +482,22 @@ def main(args: SimpleArgumentParser):
             # Create all the info for the configuration of the OOD detection method
             execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
 
-            # Compute the metrics for various confidence thresholds
-            final_results_df = pd.DataFrame(colums=results_colums)
+            ## 3. Run the benchmark
+            final_results_df = pd.DataFrame(columns=results_colums)
             for conf_threshold in CONF_THR_TEST_BENCHMARK:
-                print("-"*50)
-                logger.info(f" *** Confidence threshold: {conf_threshold} ***")
                 results_one_run = {}
+                print("-"*50)
+                ## 3.1. Modify what is going to be benchmarked
+                logger.info(f" *** Confidence threshold: {conf_threshold} ***")
                 ood_method.min_conf_threshold_test = conf_threshold
 
+                ## 3.2. Add info
                 results_one_run['Method'] = args.ood_method
                 results_one_run['Conf_threshold'] = conf_threshold
                 results_one_run["tpr_thr"] = args.tpr_thr
-                results_one_run['Model'] = args.model_path if args.model_path else model_to_load
+                results_one_run["cluster_method"] = ood_method.cluster_method
 
-                # Run configuration for every dataset
+                ## 3.3. Run configuration for every dataset
                 for dataloader in ood_dataloaders:
                     # Extract metrics
                     results_one_run_one_dataset = run_eval(ood_method, model, device, dataloader, known_classes, logger)
@@ -487,67 +510,146 @@ def main(args: SimpleArgumentParser):
                     else:
                         raise ValueError("Unknown dataset")
                     fill_dict_with_results(results_one_run, results_one_run_one_dataset, dataset_name)
-
-                # # Make data be in range [0, 1]
-                # for key in results_one_run.keys():
-                #     if key not in ["A-OSE", "WI-08"]:
-                #         results_one_run[key] = results_one_run[key] / 100
-                # res_columns = list(results_one_run.keys())
                 
+                ## 3.4. Collect results
+                add_args_and_hyperparams_info(results_one_run, args, CUSTOM_HYP)
+                final_results_df.loc[len(final_results_df)] = results_one_run
+                print("-"*50, '\n')
+
+        ###
+        ##
+        elif args.benchmark == 'cluster_methods':
+            ## 1. Name results file
+            results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}_{args.cluster_optimization_metric}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
+            CLUSTER_METHODS_TO_TEST = BENCHMARKS[args.benchmark]
+            logger.info(f"Running benchmark for methods {CLUSTER_METHODS_TO_TEST}")
+
+            ## 2. Load common assets for the benchmark if any
+            logger.info(f"First configure and train the OOD detection method")
+            # Load the OOD detection method
+            ood_method = select_ood_detection_method(args)
+            # Modify internal attributes of the model to obtain the desired outputs in the extra_item
+            configure_extra_output_of_the_model(model, ood_method)
+            
+            ## 3. Run the benchmark
+            final_results_df = pd.DataFrame(columns=results_colums)
+            for cluster_method_one_run in CLUSTER_METHODS_TO_TEST:
+                print("-"*50)
+                results_one_run = {}
+                ## 3.1. Modify what is going to be benchmarked
+                logger.info(f"*** Cluster method: {cluster_method_one_run} ***")
+                ood_method.cluster_method = cluster_method_one_run
+                # Create all the info for the configuration of the OOD detection method
+                execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
+                
+                ## 3.2. Add info
+                results_one_run['Method'] = args.ood_method
+                results_one_run['Conf_threshold'] = args.conf_thr_test
+                results_one_run["tpr_thr"] = args.tpr_thr
+                results_one_run["cluster_method"] = ood_method.cluster_method
+
+                ## 3.3. Run configuration for every dataset
+                for dataloader in ood_dataloaders:
+                    # Extract metrics
+                    results_one_run_one_dataset = run_eval(ood_method, model, device, dataloader, known_classes, logger)
+                    if coco_ood_dataloader == dataloader:
+                        dataset_name = COCO_OOD_NAME    
+                    elif coco_mixed_dataloader == dataloader:
+                        dataset_name = COCO_MIXED_NAME
+                    elif coco_owod_test_dataloader == dataloader:
+                        dataset_name = COCO_OWOD_TEST_NAME
+                    else:
+                        raise ValueError("Unknown dataset")
+                    fill_dict_with_results(results_one_run, results_one_run_one_dataset, dataset_name)
+                
+                ## 3.4. Collect results
+                add_args_and_hyperparams_info(results_one_run, args, CUSTOM_HYP)
                 final_results_df.loc[len(final_results_df)] = results_one_run
                 print("-"*50, '\n')
         
-        elif args.benchmark == 'clusters':
-            raise NotImplementedError("Not implemented yet")
-        
         elif args.benchmark == 'logits_methods':
-            raise NotImplementedError("Not implemented yet")
+            ## 1. Name results file
+            results_file_name = f'{NOW}_{args.benchmark}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
+            LOGITS_METHOD_TO_TEST = BENCHMARKS[args.benchmark]
+            logger.info(f"Running benchmark for methods {LOGITS_METHOD_TO_TEST}")
+
+            ## 2. Load common assets for the benchmark if any
+            logger.info(f"First configure and train the OOD detection method")
+            
+            ## 3. Run the benchmark
+            final_results_df = pd.DataFrame(columns=results_colums)
+            for ood_method_name in LOGITS_METHOD_TO_TEST:
+                print("-"*50)
+                results_one_run = {}
+                ## 3.1. Modify what is going to be benchmarked
+                logger.info(f" *** Method: {ood_method_name} ***")
+                args.ood_method = ood_method_name
+                # Load the OOD detection method
+                ood_method = select_ood_detection_method(args)
+                # Modify internal attributes of the model to obtain the desired outputs in the extra_item
+                configure_extra_output_of_the_model(model, ood_method)
+                # Create all the info for the configuration of the OOD detection method
+                execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
+                
+                ## 3.2. Add info
+                results_one_run['Method'] = args.ood_method
+                results_one_run['Conf_threshold'] = args.conf_thr_test
+                results_one_run["tpr_thr"] = args.tpr_thr
+                results_one_run["cluster_method"] = ood_method.cluster_method
+
+                ## 3.3. Run configuration for every dataset
+                for dataloader in ood_dataloaders:
+                    # Extract metrics
+                    results_one_run_one_dataset = run_eval(ood_method, model, device, dataloader, known_classes, logger)
+                    if coco_ood_dataloader == dataloader:
+                        dataset_name = COCO_OOD_NAME    
+                    elif coco_mixed_dataloader == dataloader:
+                        dataset_name = COCO_MIXED_NAME
+                    elif coco_owod_test_dataloader == dataloader:
+                        dataset_name = COCO_OWOD_TEST_NAME
+                    else:
+                        raise ValueError("Unknown dataset")
+                    fill_dict_with_results(results_one_run, results_one_run_one_dataset, dataset_name)
+                
+                ## 3.4. Collect results
+                add_args_and_hyperparams_info(results_one_run, args, CUSTOM_HYP)
+                final_results_df.loc[len(final_results_df)] = results_one_run
+                print("-"*50, '\n')
+        else:
+            raise ValueError(f"Unknown benchmark {args.benchmark}")
         
         # Save results
-        final_results_df.to_csv(RESULTS_PATH / f'{NOW}_{args.benchmark}.csv', index=False)
-        final_results_df.to_excel(RESULTS_PATH / f'{NOW}_{args.benchmark}.xlsx', index=False)
+        final_results_df.to_csv(RESULTS_PATH / f'{results_file_name}.csv', index=False)
+        final_results_df.to_excel(RESULTS_PATH / f'{results_file_name}.xlsx', index=False)
 
         # Time of execution
         global_end_time = time.perf_counter()
         logger.info("Total running time: {}".format(global_end_time - global_start_time))
-            
-        ########## OLD CODE to be REFACTOR ##########
-        ### Compute the metrics for various confidence thresholds ###
-        # if args.benchmark_conf:
-            
-        #     results_df.to_csv(RESULTS_PATH / f'{NOW}_{args.ood_method}.csv', index=False)
-        #     results_df.to_excel(RESULTS_PATH / f'{NOW}_{args.ood_method}.xlsx', index=False)
 
-        # elif args.benchmark_clusters:
-        #     logger.info(f"Running benchmark for clustering methods {AVAILABLE_CLUSTERING_METHODS}")
-        #     import pandas as pd
-        #     final_results = []
-        #     for cluster_method in AVAILABLE_CLUSTERING_METHODS:
-        #         print("-"*50)
-        #         logger.info(f" *** Clustering method: {cluster_method} ***")
-        #         ood_method.cluster_method = cluster_method
-        #         # Extract metrics
-        #         execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
-        #         results_one_run = run_eval(ood_method, model, device, ood_dataloader, known_classes, logger)
-        #         # Make data be in range [0, 1]
-        #         for key in results_one_run.keys():
-        #             if key not in ["A-OSE", "WI-08"]:
-        #                 results_one_run[key] = results_one_run[key] / 100
-        #         res_columns = list(results_one_run.keys())
-        #         results_one_run['Method'] = args.ood_method
-        #         results_one_run['Conf_threshold'] = args.conf_thr
-        #         results_one_run["tpr_thr"] = args.tpr_thr
-        #         results_one_run['cluster_method'] = cluster_method
-        #         results_one_run['Model'] = args.model_path if args.model_path else model_to_load
-                
-        #         final_results.append(results_one_run)
-        #         print("-"*50, '\n')
-        #     # Save the results
-        #     results_df = pd.DataFrame(final_results)
-        #     results_df = results_df[['Method', 'Conf_threshold', 'tpr_thr', 'cluster_method'] + res_columns + ['Model']]
-        #     results_df.to_csv(RESULTS_PATH / f'{NOW}_{args.ood_method}_cluster_methods.csv', index=False)
-        #     results_df.to_excel(RESULTS_PATH / f'{NOW}_{args.ood_method}_cluster_methods.xlsx', index=False)
-        
+
+def fill_dict_with_results(results_dict: Dict[str, float], results_one_dataset: Dict[str, float], dataset_name: str) -> None:
+    if dataset_name == COCO_OOD_NAME:
+        final_results_columns =  COCO_OOD_COLUMNS
+    elif dataset_name == COCO_MIXED_NAME:
+        final_results_columns = COCO_MIX_COLUMNS
+    elif dataset_name == COCO_OWOD_TEST_NAME:
+        final_results_columns = COCO_OWOD_COLUMNS
+    else:
+        raise ValueError("Unknown dataset")
+
+    # Fill the columns
+    for res_col in results_one_dataset.keys():
+        for col in final_results_columns:
+            if col.startswith(res_col):
+                results_dict[col] = results_one_dataset[res_col]
+                break
+
+
+def add_args_and_hyperparams_info(results_dict: Dict[str, float], args: SimpleArgumentParser, custom_hyp: Type[Hyperparams]) -> None:
+    results_dict['Model'] = args.model_path if args.model_path else f'yolov8{args.model}.pt'
+    results_dict['args'] = str(args)
+    results_dict['custom_hyp'] = str(custom_hyp)
+
 
 if __name__ == "__main__":
     main(SimpleArgumentParser().parse_args())

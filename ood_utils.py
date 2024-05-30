@@ -79,7 +79,7 @@ class OODMethod(ABC):
     need to be overriden by each method. It also contains some helper functions that can be used by all the methods.
     Attributes:
         name: str -> Name of the method
-        distance_method: bool -> True if the method uses a distance to measure the OOD, False if it uses a similarity
+        is_distance_method: bool -> True if the method uses a distance to measure the OOD, False if it uses a similarity
         per_class: bool -> True if the method computes a threshold for each class, False if it computes a single threshold
         per_stride: bool -> True if the method computes a threshold for each stride, False if it computes a single threshold
         thresholds: Union[List[float], List[List[float]]] -> The thresholds for each class and stride
@@ -89,7 +89,8 @@ class OODMethod(ABC):
         which_internal_activations: str -> Where to extract internal activations from.
     """
     name: str
-    distance_method: bool
+    is_distance_method: bool
+    cluster_method: str
     per_class: bool
     per_stride: bool
     thresholds: Union[List[float], List[List[float]]]
@@ -105,12 +106,12 @@ class OODMethod(ABC):
     compute_thresholds_out_of_saliency_map: Callable  # Function to compute the thresholds out of the saliency map
     #extract_bboxes_from_saliency_map_and_thresholds: Callable  # Function to extract the bboxes from the saliency map and the thresholds
 
-    def __init__(self, name: str, distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float,
+    def __init__(self, name: str, is_distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float,
                  min_conf_threshold_train: float, min_conf_threshold_test: float, which_internal_activations: str, enhanced_unk_localization: bool = False,
                  saliency_map_computation_function: Callable = None, thresholds_out_of_saliency_map_function: Callable = None
         ):
         self.name = name
-        self.distance_method = distance_method
+        self.is_distance_method = is_distance_method
         self.per_class = per_class
         self.per_stride = per_stride
         self.iou_threshold_for_matching = iou_threshold_for_matching
@@ -185,14 +186,6 @@ class OODMethod(ABC):
                 The value is 1 if the bbox is In-Distribution, 0 if it is Out-of-Distribution
         """
         pass
-
-    # @abstractmethod
-    # def compute_score_one_bbox() -> List[float]:
-    #     """
-    #     Function to be overriden by each method to compute the score of one bbox.
-    #     The input parameters will depend on if the method is a logits method or a distance method.
-    #     """
-    #     pass
     
     def compute_scores(self, activations, *args, **kwargs) -> np.ndarray:
         """
@@ -476,8 +469,8 @@ class OODMethod(ABC):
             #     quit()
             # if idx_of_batch > 10:
             #     quit()
-                
-    def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger, known_classes: List[int]) -> Dict[str, float]:
+    
+    def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger: Logger, known_classes: List[int]) -> Dict[str, float]:
 
         logger.warning(f"Using a confidence threshold of {self.min_conf_threshold_test} for tests")
         number_of_images_processed = 0
@@ -490,7 +483,7 @@ class OODMethod(ABC):
         known_classes_tensor = torch.tensor(known_classes, dtype=torch.float32)
 
         # TODO: XAI
-        if CUSTOM_HYP.unk.USE_XAI:
+        if CUSTOM_HYP.unk.USE_XAI and self.enhanced_unk_localization:
             if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
                 from yolo_drise.xai.drise import DRISE
                 import os
@@ -521,6 +514,7 @@ class OODMethod(ABC):
                     renormalize=CUSTOM_HYP.unk.xai.XAI_RENORMALIZE,
                     show_box=False,
                 )
+
         number_of_images_saved = 0
         count_of_images = 0
         for idx_of_batch, data in enumerate(dataloader):
@@ -683,15 +677,14 @@ class OODMethod(ABC):
 
         return results_dict
 
-    
-    def generate_thresholds(self, ind_scores: list, tpr: float, logger) -> Union[List[float], List[List[float]]]:
+    def generate_thresholds(self, ind_scores: list, tpr: float, logger: Logger) -> Union[List[float], List[List[float]]]:
         """
         Generate the thresholds for each class using the in-distribution scores.
         If per_class=True, in_scores must be a list of lists,
         where each list is the list of scores for each class.
         tpr must be in the range [0, 1]
         """
-        if self.distance_method:
+        if self.is_distance_method:
             # If the method measures distance, the higher the score, the more OOD. Therefore
             # we need to get the upper bound, the tpr*100%
             used_tpr = 100*tpr
@@ -725,14 +718,14 @@ class OODMethod(ABC):
             else:
                 # Per class with no stride differentiation
                 thresholds = [0 for _ in range(len(ind_scores))]
-                for idx, cl_scores in enumerate(ind_scores):
+                for idx_cls, cl_scores in enumerate(ind_scores):
                     if len(cl_scores) > sufficient_samples:
-                        thresholds[idx] = float(np.percentile(cl_scores, used_tpr, method='lower'))
+                        thresholds[idx_cls] = float(np.percentile(cl_scores, used_tpr, method='lower'))
                         if len(cl_scores) < good_number_of_samples:
-                            logger.warning(f"Class {idx}: {len(cl_scores)} samples. The threshold may not be accurate")
+                            logger.warning(f"Class {idx_cls}: {len(cl_scores)} samples. The threshold may not be accurate")
                     else:
                         if idx_cls < 20:
-                            logger.warning(f"Class {idx} has less than {sufficient_samples} samples. No threshold is generated")
+                            logger.warning(f"Class {idx_cls} has less than {sufficient_samples} samples. No threshold is generated")
 
         # One threshold for all classes
         else:
@@ -1352,11 +1345,12 @@ class LogitsMethod(OODMethod):
     
     def __init__(self, name: str, per_class: bool, per_stride: bool, iou_threshold_for_matching: float,
                  min_conf_threshold_train: float, min_conf_threshold_test: float, **kwargs):
-        distance_method = False
+        is_distance_method = False
         which_internal_activations = 'logits'  # Always logits for these methods
         enhanced_unk_localization = False  # By default not used with logits, as feature maps are needed.
-        super().__init__(name, distance_method, per_class, per_stride, iou_threshold_for_matching,
+        super().__init__(name, is_distance_method, per_class, per_stride, iou_threshold_for_matching,
                          min_conf_threshold_train, min_conf_threshold_test, which_internal_activations, enhanced_unk_localization)
+        self.cluster_method = 'None'
 
     def compute_ood_decision_on_results(self, results: Results, logger: Logger) -> List[List[int]]:
         ood_decision = []  
@@ -1461,7 +1455,7 @@ class Energy(LogitsMethod):
     def compute_scores(self, logits: Tensor, cls_idx: int) -> np.ndarray:
         if len(logits.shape) == 1:  # In case we only have one bbox
             logits = logits.unsqueeze(0)
-        return self.temper * torch.logsumexp(logits / self.temper, dim=0)[:, cls_idx].numpy()
+        return self.temper * torch.logsumexp(logits / self.temper, dim=1).numpy()
     
 
 class ODIN(LogitsMethod):
@@ -1489,8 +1483,8 @@ class Sigmoid(LogitsMethod):
         if len(logits.shape) == 1:  # In case we only have one bbox
             logits = logits.unsqueeze(0)
         logits = logits.numpy()
-        assert cls_idx == logits.argmax(), "The max logit is not the one of the predicted class"
-        return logits[cls_idx]
+        assert (cls_idx == logits.argmax(axis=1)).all(), "The max logit is not the one of the predicted class"
+        return logits[:, cls_idx]
 
 
 ### Superclasses for methods using feature maps of the model ###
@@ -1506,14 +1500,14 @@ class DistanceMethod(OODMethod):
     enhanced_unk_localization: bool
     metric: 'str'
 
-    # name: str, distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float, min_conf_threshold_test: float
+    # name: str, is_distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float, min_conf_threshold_test: float
     # def __init__(self, name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str,
     #              cluster_optimization_metric: str, ind_info_creation_option: str, **kwargs):
     def __init__(self, name: str, per_class: bool, per_stride: bool, cluster_method: str, metric: str,
                  cluster_optimization_metric: str, agg_method: str, ind_info_creation_option: str, which_internal_activations: str, **kwargs):
-        distance_method = True  # Always True for distance methods
+        is_distance_method = True  # Always True for distance methods
         which_internal_activations = self.validate_correct_which_internal_activations_distance_methods(which_internal_activations)
-        super().__init__(name, distance_method, per_class, per_stride, which_internal_activations=which_internal_activations, **kwargs)
+        super().__init__(name, is_distance_method, per_class, per_stride, which_internal_activations=which_internal_activations, **kwargs)
         self.metric = metric
         self.cluster_method = self.check_cluster_method_selected(cluster_method)
         self.cluster_optimization_metric = self.check_cluster_optimization_metric_selected(cluster_optimization_metric)
@@ -1803,7 +1797,7 @@ class DistanceMethod(OODMethod):
         return scores
     
     def generate_unk_prop_thr(self, scores, tpr) -> None:
-        if self.distance_method:
+        if self.is_distance_method:
             # If the method measures distance, the higher the score, the more OOD. Therefore
             # we need to get the upper bound, the tpr*100%
             used_tpr = 100*tpr
@@ -2143,8 +2137,8 @@ class _PairwiseDistanceClustersPerClassPerStride(DistanceMethod):
             AVAILABLE_PAIRWISE_METRICS = ['cosine', 'l1', 'l2']
             per_class = True
             per_stride = True
-            cluster_optimization_metric = 'silhouette'
-            super().__init__(name=name, metric=metric, per_class=per_class, per_stride=per_stride, cluster_optimization_metric=cluster_optimization_metric, **kwargs)
+            #cluster_optimization_metric = 'silhouette'
+            super().__init__(name=name, metric=metric, per_class=per_class, per_stride=per_stride, **kwargs)
             assert self.per_class and self.per_stride, "This method is only compatible with per_class and per_stride"
             assert self.metric in AVAILABLE_PAIRWISE_METRICS, f"The metric must be one of {AVAILABLE_PAIRWISE_METRICS}. Current value: {self.metric}"
         
@@ -2259,8 +2253,8 @@ class GAPL2DistanceOneClusterPerStride(DistanceMethod):
             per_class = True
             per_stride = True
             cluster_method = 'one'
-            cluster_optimization_metric = 'silhouette'
-            super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
+            #cluster_optimization_metric = 'silhouette'
+            super().__init__(name, per_class, per_stride, cluster_method, **kwargs)
         
         def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
 
@@ -2290,8 +2284,8 @@ class ActivationsExtractor(DistanceMethod):
         per_class = True
         per_stride = True
         cluster_method = 'one'
-        cluster_optimization_metric = 'silhouette'
-        super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
+        #cluster_optimization_metric = 'silhouette'
+        super().__init__(name, per_class, per_stride, cluster_method, **kwargs)
 
     def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
         raise NotImplementedError("Not implemented yet")
@@ -2368,8 +2362,8 @@ class FeaturemapExtractor(DistanceMethod):
         per_class = True
         per_stride = True
         cluster_method = 'one'
-        cluster_optimization_metric = 'silhouette'
-        super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
+        #cluster_optimization_metric = 'silhouette'
+        super().__init__(name, per_class, per_stride, cluster_method, **kwargs)
 
     def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
         raise NotImplementedError("Not implemented yet")
@@ -2437,6 +2431,344 @@ class FeaturemapExtractor(DistanceMethod):
         return all_internal_activations
     
 
+### FUSION Method ###
+
+class FusionMethod(OODMethod):
+
+    def __init__(self, logits_method: LogitsMethod, distance_method: DistanceMethod, fusion_strategy: str,  **kwargs):
+
+        self.logits_method = logits_method
+        self.distance_method = distance_method
+        self.fusion_strategy = fusion_strategy
+        super().__init__(is_distance_method=True, which_internal_activations="none", **kwargs)
+
+        # Define as properties the clusters and thresholds
+        self._clusters = None
+        self._thresholds = None
+    
+    # Clusters
+    @property
+    def clusters(self):
+        return self.distance_method.clusters
+    
+    @clusters.setter
+    def clusters(self, clusters):
+        self.distance_method.clusters = clusters
+
+    # Thresholds
+    @property
+    def thresholds(self):
+        return self.logits_method.thresholds, self.distance_method.thresholds
+    
+    @thresholds.setter
+    def thresholds(self, thresholds):
+        assert len(thresholds) == 2, "The thresholds must be a tuple with two elements"
+        self.logits_method.thresholds = thresholds[0]
+        self.distance_method.thresholds = thresholds[1]
+
+    @abstractmethod
+    def extract_internal_activations(self, results: Results, all_activations: Union[List[float], List[List[np.ndarray]]], targets: Dict[str, Tensor]):
+        """
+        Function to be overriden by each method to extract the internal activations of the model. In the logits
+        methods, it will be the logits, and in the ftmaps methods, it will be the ftmaps.
+        The extracted activations will be stored in the list all_activations
+        """
+        pass
+
+    @abstractmethod
+    def format_internal_activations(self, all_activations: Union[List[float], List[List[np.ndarray]]]):
+        """
+        Function to be overriden by each method to format the internal activations of the model.
+        The extracted activations will be stored in the list all_activations
+        """
+        pass
+
+    @abstractmethod
+    def compute_ood_decision_on_results(self, results: Results, logger) -> List[List[int]]:
+        """
+        Function to be overriden by each method type to compute the OOD decision for each image.
+        Parameters:
+            results: Results -> The results of the model predictions
+            logger: Logger -> The logger to print warnings or info
+        Returns:
+            ood_decision: List[int] -> A list of lists, where the first list is for each image and the second list is for each bbox. 
+                The value is 1 if the bbox is In-Distribution, 0 if it is Out-of-Distribution
+        """
+        pass
+    
+    def compute_scores(self, activations, *args, **kwargs) -> np.ndarray:
+        """
+        Function to compute the scores of the activations. Either for one box or multiple boxes.
+        The function should be overriden by each method and should try to vectorize the computation as much as possible.
+        """
+        pass 
+
+    def iterate_data_to_extract_ind_activations(self, data_loader, model: YOLO, device: str, logger: Logger):
+        
+        all_activations_logits = self.logits_method.iterate_data_to_extract_ind_activations(data_loader, model, device, logger)
+        all_activations_ftmaps = self.is_distance_method.iterate_data_to_extract_ind_activations(data_loader, model, device, logger)
+
+        return all_activations_logits, all_activations_ftmaps
+
+    # def iterate_data_to_plot_with_ood_labels(self, model: YOLO, dataloader: InfiniteDataLoader, device: str, logger: Logger, folder_path: Path, now: str):
+        
+
+    # def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger: Logger, known_classes: List[int]) -> Dict[str, float]:
+    #     pass
+
+    def generate_thresholds(self, ind_scores: list, tpr: float, logger: Logger) -> Union[List[float], List[List[float]]]:
+        
+        logits, ftmaps = ind_scores
+        self.logits_method.generate_thresholds(logits, tpr, logger)
+        #self.distance_method.generate_thresholds(ftmaps, tpr, logger)
+
+    def generate_clusters(self, ind_tensors: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger) -> Union[List[np.ndarray], List[List[np.ndarray]]]:
+        
+        return self.distance_method.generate_clusters(ind_tensors, logger)
+    
+    def compute_scores_from_activations(self, activations: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger) -> Tuple[List[List[float]], List[List[float]]]:
+        
+        logits, ftmaps = activations
+        logit_scores = self.logits_method.compute_scores(logits, logger)
+        distance_scores = self.distance_method.compute_scores_clusters_per_class_and_stride(ftmaps, logger)
+
+        return logit_scores, distance_scores
+
+    def fuse_ood_decisions(self, ood_decision_logits: List[List[int]], ood_decision_distance: List[List[int]]) -> List[List[int]]:
+        
+        if self.fusion_strategy == "":
+            ood_decision = []
+            for idx_img in range(len(ood_decision_logits)):
+                ood_decision.append([max(ood_decision_logits[idx_img][idx_bbox], ood_decision_distance[idx_img][idx_bbox]) for idx_bbox in range(len(ood_decision_logits[idx_img]))])
+        else:
+            raise NotImplementedError("Not implemented yet")
+
+        return ood_decision
+
+
+    def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger: Logger, known_classes: List[int]) -> Dict[str, float]:
+        
+        logger.warning(f"Using a confidence threshold of {self.min_conf_threshold_test} for tests")
+        number_of_images_processed = 0
+        number_of_batches = len(dataloader)
+        all_preds = []
+        all_targets = []
+        assert hasattr(dataloader.dataset, "number_of_classes"), "The dataset does not have the attribute number_of_classes to know the number of classes known in the dataset"
+        class_names = list(dataloader.dataset.data['names'].values())[:dataloader.dataset.number_of_classes]
+        class_names.append('unknown')
+        known_classes_tensor = torch.tensor(known_classes, dtype=torch.float32)
+
+        # TODO: XAI
+        if CUSTOM_HYP.unk.USE_XAI and self.enhanced_unk_localization:
+            if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
+                from yolo_drise.xai.drise import DRISE
+                import os
+                input_size = (640, 640)
+                gpu_batch = CUSTOM_HYP.unk.xai.drise.GPU_BATCH
+                number_of_masks = CUSTOM_HYP.unk.xai.drise.NUMBER_OF_MASKS
+                stride = CUSTOM_HYP.unk.xai.drise.STRIDE
+                p1 = CUSTOM_HYP.unk.xai.drise.P1
+                expl_model = DRISE(model=model, 
+                                  input_size=input_size, 
+                                  device=device,
+                                  gpu_batch=gpu_batch)
+                
+                generate_new = CUSTOM_HYP.unk.xai.drise.GENERATE_NEW_MASKS
+                mask_file = f"./yolo_drise/masks/masks_640x640_{p1:.2f}.npy"
+                if generate_new or not os.path.isfile(mask_file):
+                    expl_model.generate_masks(N=number_of_masks, s=stride, p1=p1, savepath=mask_file)
+                else:
+                    expl_model.load_masks(mask_file)
+                    print('Masks are loaded.')
+            else:
+                expl_model = yolov8_heatmap(
+                    weight=model.ckpt_path,
+                    method=CUSTOM_HYP.unk.xai.XAI_METHOD,
+                    layer=CUSTOM_HYP.unk.xai.XAI_TARGET_LAYERS,
+                    ratio=0.05,
+                    conf_threshold=self.min_conf_threshold_test,
+                    renormalize=CUSTOM_HYP.unk.xai.XAI_RENORMALIZE,
+                    show_box=False,
+                )
+
+        number_of_images_saved = 0
+        count_of_images = 0
+        for idx_of_batch, data in enumerate(dataloader):
+            count_of_images += len(data['im_file'])
+
+            if idx_of_batch % 50 == 0 or idx_of_batch == number_of_batches - 1:
+                logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch+1} of {number_of_batches}") 
+
+            ### Preparar imagenes y targets ###
+            imgs, targets = self.prepare_data_for_model(data, device)
+
+            ###
+            # Logits method
+            ###
+            configure_extra_output_of_the_model(model, ood_method=self.logits_method)
+            ### Procesar imagenes en el modelo para obtener logits y las cajas ###
+            results_logits = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
+            ### Comprobar si las cajas predichas son OoD ###
+            ood_decision_logits = self.logits_method.compute_ood_decision_on_results(results_logits, logger)
+
+            ###
+            # Distance method
+            ###
+            configure_extra_output_of_the_model(model, ood_method=self.distance_method)
+            ### Procesar imagenes en el modelo para obtener las caracteristicas y las cajas ###
+            results_distance = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
+            ### Comprobar si las cajas predichas son OoD ###
+            ood_decision_distance = self.distance_method.compute_ood_decision_on_results(results_distance, logger)
+
+            ### Fuse the results of the logits and distance methods ###
+            ood_decision = self.fuse_ood_decisions(ood_decision_logits, ood_decision_distance)
+
+            results = results_logits
+            
+
+            ### Añadir posibles cajas desconocidas a las predicciones ###
+            if self.enhanced_unk_localization:
+                if CUSTOM_HYP.unk.USE_XAI:
+                    # TODO: Aqui pruebo lo de la explicabilidad, que tiene que sacar un mapa de valores por imagen, siendo cada mapa una imagen de 80x80
+                    #   con los valores de la importancia de cada pixel, que luego se restaran al saliency map correspondiente, escalando los valores al rango
+                    #   del saliency map
+                    # Crear carpeta
+                    # directory_name = f'{now}_{self.name}'
+                    # imgs_folder_path = folder_path / directory_name
+                    # imgs_folder_path.mkdir(exist_ok=True)
+                    delattr(model.model, 'which_layers_to_extract')
+                    delattr(model.model, 'extraction_mode')
+                    # Heatmaps in shape (M, H, W), M being the batch size an in form of a tensor in cpu
+                    # and in the range [0, 1]
+                    if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
+                        from skimage.transform import downscale_local_mean
+                        if p1 == 0.5:
+                            save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}.npy'
+                        else:
+                            save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}_p1_{p1:.2f}.npy'
+                        if not os.path.exists(save_name):
+                            expl_heatmaps = expl_model(x=imgs, results=results, mode='object_detection')
+                            # Save the heatmaps
+                            np.save(save_name, expl_heatmaps.numpy())
+                        else:
+                            # Load the heatmaps and downscale them
+                            print('***** LOADING HEATMAPS *****')
+                            expl_heatmaps = torch.tensor(np.load(save_name), dtype=torch.float32)
+                        processed_heatmaps = downscale_local_mean(expl_heatmaps.numpy(), (1, 8, 8))
+                        processed_heatmaps = [torch.tensor(hm, dtype=torch.float32) for hm in processed_heatmaps]
+                    else:
+                        expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
+                        processed_heatmaps = expl_heatmaps
+                        #processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
+                    configure_extra_output_of_the_model(model, self)
+                    
+                    # delattr(model.model, 'which_layers_to_extract')
+                    # delattr(model.model, 'extraction_mode')
+                    # expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
+                    # processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
+                    # configure_extra_output_of_the_model(model, self)
+                else:
+                    processed_heatmaps = None
+                if CUSTOM_HYP.unk.RANK_BOXES:
+                        possible_unk_bboxes, ood_decision_on_unknown, distances_per_image = self.compute_extra_possible_unkwnown_bboxes_and_decision(
+                            results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
+                            folder_path=None, origin_of_idx=idx_of_batch*dataloader.batch_size
+                        )
+                else:
+                    distances_per_image = None
+                    possible_unk_bboxes, ood_decision_on_unknown = self.compute_extra_possible_unkwnown_bboxes_and_decision(
+                        results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
+                        folder_path=None, origin_of_idx=idx_of_batch*dataloader.batch_size
+                    )
+
+            # Cada prediccion va a ser un diccionario con las siguientes claves:
+            #   'img_idx': int -> Indice de la imagen
+            #   'img_name': str -> Nombre del archivo de la imagen
+            #   'bboxes': List[Tensor] -> Lista de tensores con las cajas predichas
+            #   'cls': List[Tensor] -> Lista de tensores con las clases predichas
+            #   'conf': List[Tensor] -> Lista de tensores con las confianzas de las predicciones (en yolov8 es cls)
+            #   'ood_decision': List[int] -> Lista de enteros con la decision de si la caja es OoD o no
+            for img_idx, res in enumerate(results):
+                #for idx_bbox in range(len(res.boxes.cls)):
+                # if self.enhanced_unk_localization:
+                #     pass
+                # else:
+                # Parse the ood elements as the unknown class (80)
+                ood_decision_one_image = torch.tensor(ood_decision[img_idx], dtype=torch.float32)
+                unknown_mask = ood_decision_one_image == 0
+                bboxes_coords = res.boxes.xyxy.cpu()
+                bboxes_cls = torch.where(unknown_mask, torch.tensor(80, dtype=torch.float32), res.boxes.cls.cpu())   
+                # Make all the preds to be the class 80 to known the max recall possible
+                #bboxes_cls = torch.tensor(80, dtype=torch.float32).repeat(len(res.boxes.cls))
+                bboxes_conf = res.boxes.conf.cpu()
+                # TODO: La logica de como ignorar ciertos unknowns la tenemos que idear, ya que por el momento no tiene 
+                #   sentido que las propuestas no sean unknowns
+                if self.enhanced_unk_localization:
+                    # Add the possible unknown boxes to the predictions
+                    bboxes_coords = torch.cat([bboxes_coords, possible_unk_bboxes[img_idx]], dim=0)
+                    one_image_ood_decision_on_possible_unk = torch.tensor(ood_decision_on_unknown[img_idx], dtype=torch.float32)
+                    assert one_image_ood_decision_on_possible_unk.sum().item() == 0.0, "Uno de los posible unknowns es considerado como known, pero como no tenemos esa logica implementada es ERROR"
+                    # TODO: Por el momento simplemente lo que hago es hacer un tensor con todo clase 80 (unk). Luego tendre que ver como gestiono el hacer que acaben siendo una clase
+                    cls_unk_prop = torch.tensor(80, dtype=torch.float32).repeat(len(possible_unk_bboxes[img_idx]))
+                    bboxes_cls = torch.cat([bboxes_cls, cls_unk_prop], dim=0)
+                    conf_unk_prop = torch.ones(len(possible_unk_bboxes[img_idx])) * 0.150001  # TODO: Pongo 0.150001 de confianza para las propuestas de unknown
+                    bboxes_conf = torch.cat([bboxes_conf, conf_unk_prop], dim=0)
+                all_preds.append({
+                    'img_idx': number_of_images_processed + img_idx,
+                    'img_name': Path(data['im_file'][img_idx]).stem,
+                    'bboxes': bboxes_coords,
+                    'cls': bboxes_cls,
+                    'conf': bboxes_conf,
+                    #'ood_decision': torch.tensor(ood_decision[img_idx], dtype=torch.float32)
+                })
+                    
+                # Transform the classes to index 80 if they are not in the known classes
+                known_mask = torch.isin(targets['cls'][img_idx], known_classes_tensor)
+                transformed_target_cls = torch.where(known_mask, targets['cls'][img_idx], torch.tensor(80, dtype=torch.float32))
+                all_targets.append({
+                    'img_idx': number_of_images_processed + img_idx,
+                    'img_name': Path(data['im_file'][img_idx]).stem,
+                    'bboxes': targets['bboxes'][img_idx],
+                    'cls': transformed_target_cls
+                })
+
+            ### Acumular predicciones y targets ###
+            number_of_images_processed += len(imgs)
+
+            # # Plot one image of the batch with predictions and targets
+            # idx_image = 4
+            # plot_results(
+            #     class_names=model.names,
+            #     results=results,
+            #     folder_path=Path('.'),
+            #     now='ahora',
+            #     valid_preds_only=False,
+            #     origin_of_idx=idx_of_batch*dataloader.batch_size,
+            #     image_format='{IMAGE_FORMAT}',
+            #     #ood_decision=ood_decision,
+            #     targets=targets,
+            # )
+            number_of_images_saved += len(data['im_file'])
+
+        #########
+        # Loop finished
+        #########
+
+        # All predictions collected, now compute metrics
+        results_dict = compute_metrics(all_preds, all_targets, class_names, known_classes, logger)
+
+        # Count the number of non-unknown instances and the number of unknown instances
+        number_of_known_boxes = 0 
+        number_of_unknown_boxes = 0
+        for _target in all_targets:
+            number_of_known_boxes += torch.sum(_target['cls'] != 80).item()
+            number_of_unknown_boxes += torch.sum(_target['cls'] == 80).item()
+        logger.info(f"Number of target known boxes: {number_of_known_boxes}")
+        logger.info(f"Number of target unknown boxes: {number_of_unknown_boxes}")
+
+        return results_dict
+
+
 ### Method to configure internals of the model ###
     
 def configure_extra_output_of_the_model(model: YOLO, ood_method: Type[OODMethod]):
@@ -2446,6 +2778,8 @@ def configure_extra_output_of_the_model(model: YOLO, ood_method: Type[OODMethod]
             model.model.which_layers_to_extract = "convolutional_layers"
         elif ood_method.which_internal_activations in LOGITS_RELATED_OPTIONS:
             model.model.which_layers_to_extract = "logits"
+        elif ood_method.which_internal_activations == "none":
+            model.model.which_layers_to_extract = "none"
         else:
             raise ValueError(f"The option {ood_method.which_internal_activations} is not valid.")
         # 2. Select the extraction mode for the ultralytics/yolo/v8/detect/predict.py

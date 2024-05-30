@@ -4,7 +4,7 @@ from itertools import product
 
 import numpy as np
 from sklearn.base import BaseEstimator
-from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, SpectralClustering, OPTICS, Birch
+from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, SpectralClustering, OPTICS, Birch, MeanShift
 from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
 from sklearn.cluster._hdbscan.hdbscan import HDBSCAN
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
@@ -85,10 +85,19 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         param_to_eval = 'threshold'
         # Params: threshold=0.5, branching_factor=50, n_clusters=3, compute_labels=True, copy=True
         params = {
-            'threshold': np.linspace(0.1, 1, 50),
+            'threshold': np.linspace(0.1, 10, 50),
             'branching_factor': [50],
-            'n_clusters': None,
+            'n_clusters': [None],
+            'compute_labels': [True],
         }
+    elif cluster_method == 'MeanShift':
+        cluster_class = MeanShift
+        param_to_eval = 'bandwidth'
+        params = {
+            'bandwidth': [None, 1],
+            'cluster_all': [False],
+        }
+
     elif cluster_method == 'GMM':
         cluster_class = GaussianMixture
         param_to_eval = 'n_components'
@@ -127,10 +136,21 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         logger=logger
     )
 
-    return cluster_class(**best_params).fit_predict(feature_maps)
+    cluster_labels = cluster_class(**best_params).fit_predict(feature_maps)
+
+    if VISUALIZE:
+        # Plot histogram
+        plt.hist(cluster_labels, bins=len(set(cluster_labels)))
+        plt.xlabel('Cluster')
+        plt.ylabel('Number of samples')
+        plt.title('Cluster distribution')
+        plt.savefig('cluster_distribution.png')
+        plt.close()
+
+    return cluster_labels
     
 
-def compute_silhouette_score_for_all_possible_configurations(
+def compute_score_for_all_possible_configurations(
         feature_maps: np.ndarray,
         cluster_class: Type[BaseEstimator],
         parameters_to_search: dict[str, list],
@@ -140,10 +160,10 @@ def compute_silhouette_score_for_all_possible_configurations(
     ) -> Tuple[List[float], List[dict]]:
     # Assert first than the only parameter that has a lenght greater than 1 is the one to be evaluated
     for param_name, param_values in parameters_to_search.items():
-        if param_name != perf_score_metric:
+        if param_name != param_to_eval:
             if len(param_values) > 1:
-                raise NotImplementedError(f"Only one parameter can be evaluated at a time for the moment. 
-                    If {param_to_eval} is the parameter to evaluate, it must be the only one with more than one value.")
+                raise NotImplementedError(f"Only one parameter can be evaluated at a time for the moment." \
+                    f"If {param_to_eval} is the parameter to evaluate, it must be the only one with more than one value.")
     assert len(parameters_to_search[param_to_eval]) > 1, f"Parameter {param_to_eval} must have more than one value to evaluate"
 
     if perf_score_metric == 'silhouette':
@@ -166,6 +186,8 @@ def compute_silhouette_score_for_all_possible_configurations(
             #print(set(cluster_labels))
             # Check if the clustering was successful (i.e., more than one cluster)
             if len(set(cluster_labels)) > 1:
+                if -1 in set(cluster_labels):
+                    raise ValueError("Some samples were not assigned to any cluster (label = -1).")
                 if perf_score_metric == 'silhouette':
                     score = silhouette_score(feature_maps, cluster_labels)
                     logger.debug(f"Silhouette score: {score}")
@@ -183,11 +205,13 @@ def compute_silhouette_score_for_all_possible_configurations(
 
         except Exception as e:
             logger.error(f"Error with parameters {params}: {e}")
+            clustering_performance_scores.append(defalut_score)
+            param_configs.append(params)
 
     return clustering_performance_scores, param_configs
 
 
-def plot_scores(clustering_performance_scores: List[float], params: np.ndarray, parameter_name: str, clustering_perf_metric: str,  filename: str):
+def plot_scores(clustering_performance_scores: List[float], params: dict, parameter_name: str, clustering_perf_metric: str,  filename: str):
     plt.plot(params[parameter_name], clustering_performance_scores, marker='o')
     plt.xlabel(parameter_name)
     plt.ylabel(f"{clustering_perf_metric} Score")
@@ -206,92 +230,26 @@ def search_for_best_param(
     ) -> dict:
 
     # Compute silhouette scores for all possible configurations
-    clustering_performance_scores, param_configs = compute_silhouette_score_for_all_possible_configurations(feature_maps, cluster_class, params, param_to_eval, perf_score_metric, logger)
+    clustering_performance_scores, param_configs = compute_score_for_all_possible_configurations(
+        feature_maps,
+        cluster_class,
+        params,
+        param_to_eval,
+        perf_score_metric,
+        logger
+    )
 
     if VISUALIZE:
-        plot_scores(clustering_performance_scores, params, param_to_eval, f"{perf_score_metric}_scores.png")
+        #plot_scores(clustering_performance_scores, params, param_to_eval, f"{perf_score_metric}_scores.png")
+        plot_scores(
+            clustering_performance_scores=clustering_performance_scores,
+            params=params,
+            parameter_name=param_to_eval,
+            clustering_perf_metric=perf_score_metric,
+            filename=f"cluster_{perf_score_metric}_scores.png"
+        )
 
     # Select best parameters
     best_param_config = param_configs[np.argmax(clustering_performance_scores)]
     logger.info(f"Best parameters: {best_param_config}")
     return best_param_config
-
-
-def optimize_dbscan(feature_maps: np.ndarray, logger: Logger, metric: str) -> dict:
-    params = {
-        'eps': np.linspace(0.1, 10, 100),
-        'min_samples': [MIN_SAMPLES],
-        'metric': [metric],
-    }
-    best_params = search_for_best_param(feature_maps, DBSCAN, params, 'eps', logger)
-    return best_params
-
-
-def optimize_kmeans(feature_maps: np.ndarray, logger: Logger) -> dict:
-    params = {
-        'n_clusters': RANGE_OF_CLUSTERS,
-        'random_state': [10],
-    }
-    best_params = search_for_best_param(feature_maps, KMeans, params, 'n_clusters', logger)
-    return best_params
-
-
-def optimize_hdbscan(feature_maps: np.ndarray, logger: Logger, metric: str) -> dict:
-    params = {
-        'min_cluster_size': list(range(5,105, 5)),
-        'min_samples': [MIN_SAMPLES],
-        'metric': [metric],
-    }
-    best_params = search_for_best_param(feature_maps, HDBSCAN, params, 'min_cluster_size', logger)
-    return best_params
-
-
-def optimize_optics(feature_maps: np.ndarray, logger: Logger, metric: str) -> dict:
-    params = {
-        'min_samples': [MIN_SAMPLES],
-        'xi': np.linspace(0.05, 0.95, 10),
-        'metric': [metric],
-        'n_jobs': [4]
-    }
-    best_params = search_for_best_param(feature_maps, OPTICS, params, 'xi', logger)
-    return best_params
-
-
-def optimize_spectral_clustering(feature_maps: np.ndarray, logger: Logger) -> dict:
-    params = {
-        'n_clusters': RANGE_OF_CLUSTERS,
-        'random_state': [10],
-    }
-    best_params = search_for_best_param(feature_maps, SpectralClustering, params, 'n_clusters', logger)
-    return best_params
-
-
-def optimize_agglomerative_clustering(feature_maps: np.ndarray, logger: Logger, metric: str) -> dict:
-    params = {
-        'n_clusters': RANGE_OF_CLUSTERS,
-        # 'metric': [metric],
-        # 'linkage': ['complete']
-        # Or
-        'metric': ['euclidean'],
-        'linkage': ['ward']
-    }
-    best_params = search_for_best_param(feature_maps, AgglomerativeClustering, params, 'n_clusters', logger)
-    return best_params
-
-
-def optimize_gmm(feature_maps: np.ndarray, logger: Logger) -> dict:
-    #raise NotImplementedError("GMM is not implemented yet")
-    params = {
-        'n_components': RANGE_OF_CLUSTERS,
-    }
-    best_params = search_for_best_param(feature_maps, GaussianMixture, params, 'n_components', logger)
-    return best_params
-
-
-def optimize_bgmm(feature_maps: np.ndarray, logger: Logger) -> dict:
-    #raise NotImplementedError("GMM is not implemented yet")
-    params = {
-        'n_components': RANGE_OF_CLUSTERS,
-    }
-    best_params = search_for_best_param(feature_maps, BayesianGaussianMixture, params, 'n_components', logger)
-    return best_params

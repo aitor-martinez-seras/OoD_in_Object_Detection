@@ -25,7 +25,7 @@ OOD_METHOD_CHOICES = LOGITS_METHODS + DISTANCE_METHODS
 
 FTMAPS_RELATED_OPTIONS = ['roi_aligned_ftmaps','all_ftmaps', 'ftmaps_and_strides']
 LOGITS_RELATED_OPTIONS = ['logits']
-INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS = FTMAPS_RELATED_OPTIONS + LOGITS_RELATED_OPTIONS
+INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS = FTMAPS_RELATED_OPTIONS + LOGITS_RELATED_OPTIONS + ['none']  # None for fusion methods, that implement it internally
 
 AVAILABLE_CLUSTERING_METHODS = ['one', 'DBSCAN', 'KMeans', 'HDBSCAN', 'AgglomerativeClustering', 'OPTICS', 'Birch', 'MeanShift', 'SpectralClustering', 'OPTICS', 'GMM', 'BGMM']
 AVAILABLE_CLUSTER_OPTIMIZATION_METRICS = ['silhouette', 'calinski_harabasz']
@@ -46,14 +46,15 @@ IND_INFO_CREATION_OPTIONS = TARGETS_RELATED_OPTIONS + PREDICTIONS_RELATED_OPTION
 COMMON_COLUMNS = ['Method', 'Conf_threshold', 'tpr_thr', 'cluster_method']
 VOC_TEST_COLUMN = ['mAP']
 COCO_OOD_COLUMNS = ['U-AP_(COOD)', 'U-F1_(COOD)', 'U-PRE_(COOD)', 'U-REC_(COOD)']
-COCO_MIX_COLUMNS = ['mAP', 'U-AP_(CMIX)', 'U-F1_(CMIX)', 'U-PRE_(CMIX)', 'U-REC_(CMIX)','A-OSE', 'WI']
-COCO_OWOD_COLUMNS = ['mAP', 'U-AP_(OWOD)', 'U-F1_(OWOD)', 'U-PRE_(OWOD)', 'U-REC_(OWOD)','A-OSE_(OWOD)', 'WI_(OWOD)']
+COCO_MIX_COLUMNS = ['mAP', 'U-AP_(CMIX)', 'U-F1_(CMIX)', 'U-PRE_(CMIX)', 'U-REC_(CMIX)','A-OSE', 'WI-08']
+COCO_OWOD_COLUMNS = ['mAP', 'U-AP_(OWOD)', 'U-F1_(OWOD)', 'U-PRE_(OWOD)', 'U-REC_(OWOD)','A-OSE_(OWOD)', 'WI-08_(OWOD)']
+FINAL_COLUMNS = ['Model', 'args', 'custom_hyp']
 # Benchmark options
 AVAILABLE_BENCHMARKS = ['best_methods', 'conf_thr_test', 'clusters', 'logits_methods']
 BENCHMARKS = {
     'best_methods': OOD_METHOD_CHOICES,
     'conf_thr_test': [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001],
-    'clusters': ['one', 'DBSCAN', 'KMeans', 'HDBSCAN', 'AgglomerativeClustering', 'OPTICS', 'Birch', 'MeanShift'],
+    'cluster_methods': ['one', 'DBSCAN', 'KMeans', 'HDBSCAN', 'AgglomerativeClustering', 'Birch', 'MeanShift'],
     'cluster_perf_metric': AVAILABLE_CLUSTER_OPTIMIZATION_METRICS,
     'logits_methods': LOGITS_METHODS,
 }

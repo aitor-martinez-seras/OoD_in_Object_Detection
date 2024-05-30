@@ -193,16 +193,16 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
             break
     if not cls_diff_from_unk_found:
         return {
-            'U-AP': ap_unksniff * 100,
-            'U-F1': f1_unksniff * 100,
-            'U-PRE': precision_unksniff * 100,
-            'U-REC': recall_unksniff * 100,
+            'U-AP': ap_unksniff,
+            'U-F1': f1_unksniff,
+            'U-PRE': precision_unksniff,
+            'U-REC': recall_unksniff,
         }
     
     # WI is calculated for all_test?? Or only for WI split?
     #if n_clases_wout_preds < 19:
     wi = compute_WI_at_many_recall_level(all_recs, tp_plus_fp_cs, fp_os, known_classes=known_classes)
-    Logger.info('----------------- Calculations as per Towards Open World Object Detection paper -----------------')
+    logger.info('----------------- Calculations as per Towards Open World Object Detection paper -----------------')
     logger.info('Wilderness Impact: ' + str(wi))
     logger.info('Wilderness Impact Recall 0.8: ' + str(wi[0.8]))
 
@@ -240,7 +240,7 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     total_num_unk_det_as_known = total_num_unk_det_as_known[50]
     # Reporting metrics from UnkSniffer code except for mAP, A-OSE and WI
     results_dict = {
-        'mAP': known_ap50,
+        'mAP': known_ap50/100,
         'U-AP': ap_unksniff,
         'U-F1': f1_unksniff,
         'U-PRE': precision_unksniff,
