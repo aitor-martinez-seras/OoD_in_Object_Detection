@@ -114,6 +114,8 @@ class Hyperparams:
     # For thresholds of the OOD methods
     GOOD_NUM_SAMPLES: int = 50
     SUFFICIENT_NUM_SAMPLES: int = 10
+    MAX_PERCENT_OF_ORPHANS: float = 0.1
+    VISUALIZE_CLUSTERS: bool = False  # This is activated from ood_evaluation
 
     def __post_init__(self):
         if self.USE_ONLY_SUBSET_OF_IMAGES:

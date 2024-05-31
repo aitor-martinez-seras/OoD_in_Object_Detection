@@ -185,19 +185,35 @@ def compute_score_for_all_possible_configurations(
             cluster_labels = clustering_algorithm.fit_predict(feature_maps)
             #print(set(cluster_labels))
             # Check if the clustering was successful (i.e., more than one cluster)
+
+            # Check if there are orphan samples
             if len(set(cluster_labels)) > 1:
                 if -1 in set(cluster_labels):
-                    raise ValueError("Some samples were not assigned to any cluster (label = -1).")
+                    logger.debug("Some samples were not assigned to any cluster (label = -1).")
+                    
+                    # Check if the number of orphan samples is greater than the maximum allowed
+                    total_number_of_orphan_samples = np.sum(cluster_labels == -1)
+                    if total_number_of_orphan_samples > CUSTOM_HYP.MAX_PERCENT_OF_ORPHANS * len(feature_maps):
+                        raise ValueError(f"More than {CUSTOM_HYP.MAX_PERCENT_OF_ORPHANS*100:.0f}% of the samples were not assigned to any cluster.")
+                    feature_maps_one_run = feature_maps[cluster_labels != -1]
+                    cluster_labels = cluster_labels[cluster_labels != -1]
+
+                else:  # No orphan samples
+                    feature_maps_one_run = feature_maps
+
+                # Compute performance score and append it to the list
                 if perf_score_metric == 'silhouette':
-                    score = silhouette_score(feature_maps, cluster_labels)
+                    score = silhouette_score(feature_maps_one_run, cluster_labels)
                     logger.debug(f"Silhouette score: {score}")
                 elif perf_score_metric == 'calinski_harabasz':
-                    score = calinski_harabasz_score(feature_maps, cluster_labels)
+                    score = calinski_harabasz_score(feature_maps_one_run, cluster_labels)
                     logger.debug(f"Calinski-Harabasz score: {score}")
                 else:
                     raise ValueError(f"Invalid performance score metric: {perf_score_metric}")
                 clustering_performance_scores.append(score)
                 param_configs.append(params)
+            
+            # If there is only one cluster, assign the default score to the configuration
             else:
                 clustering_performance_scores.append(defalut_score)
                 param_configs.append(params)

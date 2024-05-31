@@ -33,6 +33,9 @@ from YOLOv8_Explainer import yolov8_heatmap
 from cluster_utils import find_optimal_number_of_clusters_one_class_one_stride_and_return_labels
 
 
+import datetime
+NOW_ood_utils = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
 def limit_heatmaps_to_bounding_boxes(expl_heatmaps: List[Tensor], results: List[Results]) -> List[Tensor]:
     processed_heatmaps = []
     for _i, expl_heatmaps_one_image in enumerate(expl_heatmaps):
@@ -186,11 +189,26 @@ class OODMethod(ABC):
                 The value is 1 if the bbox is In-Distribution, 0 if it is Out-of-Distribution
         """
         pass
-    
+
+    @abstractmethod
     def compute_scores(self, activations, *args, **kwargs) -> np.ndarray:
         """
         Function to compute the scores of the activations. Either for one box or multiple boxes.
         The function should be overriden by each method and should try to vectorize the computation as much as possible.
+        """
+        pass
+
+    @abstractmethod
+    def activations_transformation(self, activations: np.array) -> np.array:
+        """
+        Transform the activations to the format needed to compute the distance to the centroids. Only in DistanceMethods.
+        """
+        pass
+
+    @abstractmethod
+    def compute_distance(self, centroids: np.array, features: np.array) -> np.array:
+        """
+        Compute the distance between the centroids and the features. Only in DistanceMethods. Only in DistanceMethods.
         """
         pass
     
@@ -1320,20 +1338,6 @@ class OODMethod(ABC):
         # Return a tensor with shape (num_boxes, 4) in case we don't want to rank the unk proposals 
         return all_unk_prop
 
-    @abstractmethod
-    def activations_transformation(self, activations: np.array) -> np.array:
-        """
-        Transform the activations to the format needed to compute the distance to the centroids.
-        """
-        pass
-
-    @abstractmethod
-    def compute_distance(self, centroids: np.array, features: np.array) -> np.array:
-        """
-        Compute the distance between the centroids and the features. Only in DistanceMethods
-        """
-        pass
-
 
 #################################################################################
 # Create classes for each method. Methods will inherit from OODMethod,
@@ -1368,6 +1372,21 @@ class LogitsMethod(OODMethod):
                     ood_decision[idx_img].append(1)  # InD
 
         return ood_decision
+
+    def compute_ood_scores_on_results(self, results: Results, logger: Logger) -> List[List[int]]:
+        scores = []  
+        for idx_img, res in enumerate(results):
+            scores.append([])  # Every image has a list of decisions for each bbox
+            for idx_bbox in range(len(res.boxes.cls)):
+                cls_idx = int(res.boxes.cls[idx_bbox].cpu())
+                logits = res.extra_item[idx_bbox][4:].cpu()
+                # TODO: Probablemente haya que cambiar esto para quedarnos con el output [0]
+                #score = self.compute_score_one_bbox(logits, cls_idx)
+                score = self.compute_scores(logits, cls_idx)[0]
+                # AQUI hay que poner una logica para que devuelva el score entre -1 y 1.
+                # -1 significa que es OOD al maximo y 1 que es IND al maximo
+
+        return scores
     
     def extract_internal_activations(self, results: Results, all_activations: List[float], targets: Dict[str, Tensor]):
         """
@@ -2089,8 +2108,17 @@ class DistanceMethod(OODMethod):
                         logger.warning(f'SKIPPING Class {idx_cls:03}, Stride {idx_stride} -> NO SAMPLES')
                     clusters_per_class_and_stride[idx_cls][idx_stride] = np.empty(0)
 
-    def generate_multiple_cluster_per_class_per_stride(self, ind_tensors: List[List[np.ndarray]], clusters_per_class_and_stride: List[List[np.ndarray]], logger: Logger):
+    def generate_multiple_cluster_per_class_per_stride(
+            self, ind_tensors: List[List[np.ndarray]], clusters_per_class_and_stride: List[List[np.ndarray]], logger: Logger
+        ):
         np.set_printoptions(threshold=20)
+
+        if CUSTOM_HYP.VISUALIZE_CLUSTERS:
+            import matplotlib.pyplot as plt
+            from collections import Counter
+            folder_for_hist = Path('figures/histograms')
+            folder_for_hist.mkdir(parents=False, exist_ok=True)        
+
         for idx_cls, ftmaps_one_cls in enumerate(ind_tensors):
             #logger.info(f'Class {idx_cls:03} of {len(ind_tensors)}')
             for idx_stride, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
@@ -2105,10 +2133,36 @@ class DistanceMethod(OODMethod):
                         self.cluster_optimization_metric,
                         logger,
                     )
+                    
+                    # Obtain the indices of the clusters
+                    cluster_indices = set(cluster_labels)
+
+                    if CUSTOM_HYP.VISUALIZE_CLUSTERS:
+                        # Count the number of samples per cluster
+                        cluster_counts = Counter(cluster_labels)
+                        # Extracting cluster indices and their respective counts
+                        clusters = list(cluster_counts.keys())
+                        counts = list(cluster_counts.values())
+                        # Plotting the number of samples per cluster
+                        plt.figure(figsize=(10, 6))
+                        plt.bar(clusters, counts, color='skyblue')
+                        # Adding labels and title
+                        plt.xlabel('Cluster Index')
+                        plt.ylabel('Number of Samples')
+                        plt.title('Number of Samples per Cluster')
+                        plt.xticks(clusters)  # Ensuring the x-ticks correspond to cluster indices
+                        plt.grid(axis='y', linestyle='--', alpha=0.7)
+                        plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{idx_stride}_{self.cluster_optimization_metric}.png')
+                        # Plot the histogram of the clusters
+                        # plt.hist(cluster_labels, bins=len(cluster_indices))
+                        # plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{idx_stride}_{self.cluster_optimization_metric}.png')
+                        plt.close()
+
                     # 2. Aggregate the samples of each cluster using the agg method
                     clusters = []
-                    for idx_cluster in sorted(set(cluster_labels)):
-                        clusters.append(self.agg_method(ftmaps_one_cls_one_stride[cluster_labels == idx_cluster], axis=0))
+                    for idx_cluster in sorted(cluster_indices):
+                        if idx_cluster != -1:  # To remove the samples that are not assigned to any cluster
+                            clusters.append(self.agg_method(ftmaps_one_cls_one_stride[cluster_labels == idx_cluster], axis=0))
                     clusters_per_class_and_stride[idx_cls][idx_stride] = np.array(clusters)
 
                 else:
@@ -2123,14 +2177,6 @@ class DistanceMethod(OODMethod):
         """
         return activations.reshape(activations.shape[0], -1)
 
-
-class Mahalanobis(DistanceMethod):
-    # if compute_covariance:
-    #     clusters_per_class_and_stride = [
-    #             self.agg_method(ftmaps_one_cls_one_stride, axis=0),
-    #             np.cov(ftmaps_one_cls_one_stride, rowvar=False)  # rowvar to represent variables in columns
-    #     ]
-    pass
 
 class _PairwiseDistanceClustersPerClassPerStride(DistanceMethod):
     def __init__(self, name: str, metric: str, **kwargs):
@@ -2376,7 +2422,7 @@ class FeaturemapExtractor(DistanceMethod):
         raise NotImplementedError("Not implemented yet")
         return np.mean(activations, axis=(2,3))  # Already reshapes to [N, features]
     
-    def iterate_data_to_extract_ind_activations_and_create_its_annotations(self, data_loader: InfiniteDataLoader, model, device, split: str):
+    def iterate_data_to_extract_ind_activations_and_create_its_annotations(self, data_loader: InfiniteDataLoader, model: YOLO, device: str, split: str):
         """
         Custom function to iterate over the data to extract the internal activations of the model along
         with the annotations for the dataset. They will be in the same order as in the 
@@ -2435,12 +2481,17 @@ class FeaturemapExtractor(DistanceMethod):
 
 class FusionMethod(OODMethod):
 
+    logits_method: LogitsMethod
+    distance_method: DistanceMethod
+    fusion_strategy: str
+
     def __init__(self, logits_method: LogitsMethod, distance_method: DistanceMethod, fusion_strategy: str,  **kwargs):
 
+        name = f'fusion_{logits_method.name}_{distance_method.name}'
         self.logits_method = logits_method
         self.distance_method = distance_method
         self.fusion_strategy = fusion_strategy
-        super().__init__(is_distance_method=True, which_internal_activations="none", **kwargs)
+        super().__init__(name=name, per_class=True, per_stride=True, is_distance_method=True, which_internal_activations="none", **kwargs)
 
         # Define as properties the clusters and thresholds
         self._clusters = None
@@ -2462,11 +2513,18 @@ class FusionMethod(OODMethod):
     
     @thresholds.setter
     def thresholds(self, thresholds):
-        assert len(thresholds) == 2, "The thresholds must be a tuple with two elements"
-        self.logits_method.thresholds = thresholds[0]
-        self.distance_method.thresholds = thresholds[1]
+        if thresholds is not None:
+            if len(thresholds) == 2:
+                self.logits_method.thresholds = thresholds[0]
+                self.distance_method.thresholds = thresholds[1]
+            else:
+                raise ValueError("The thresholds must be a tuple with two elements, one for the logits and one for the distance")
+        else:
+            print("The thresholds must be a tuple with two elements, one for the logits and one for the distance")
+            self.logits_method.thresholds = None
+            self.distance_method.thresholds = None
 
-    @abstractmethod
+
     def extract_internal_activations(self, results: Results, all_activations: Union[List[float], List[List[np.ndarray]]], targets: Dict[str, Tensor]):
         """
         Function to be overriden by each method to extract the internal activations of the model. In the logits
@@ -2475,7 +2533,6 @@ class FusionMethod(OODMethod):
         """
         pass
 
-    @abstractmethod
     def format_internal_activations(self, all_activations: Union[List[float], List[List[np.ndarray]]]):
         """
         Function to be overriden by each method to format the internal activations of the model.
@@ -2483,7 +2540,6 @@ class FusionMethod(OODMethod):
         """
         pass
 
-    @abstractmethod
     def compute_ood_decision_on_results(self, results: Results, logger) -> List[List[int]]:
         """
         Function to be overriden by each method type to compute the OOD decision for each image.
@@ -2501,50 +2557,77 @@ class FusionMethod(OODMethod):
         Function to compute the scores of the activations. Either for one box or multiple boxes.
         The function should be overriden by each method and should try to vectorize the computation as much as possible.
         """
-        pass 
+        pass
+
+    def activations_transformation(self, activations: np.array) -> np.array:
+        raise NotImplementedError("This method is not going to be called directly")
+
+    def compute_distance(self, centroids: np.array, features: np.array) -> np.array:
+        raise NotImplementedError("This method is not going to be called directly")
 
     def iterate_data_to_extract_ind_activations(self, data_loader, model: YOLO, device: str, logger: Logger):
         
+        configure_extra_output_of_the_model(model, which_internal_activations=self.logits_method.which_internal_activations)
         all_activations_logits = self.logits_method.iterate_data_to_extract_ind_activations(data_loader, model, device, logger)
-        all_activations_ftmaps = self.is_distance_method.iterate_data_to_extract_ind_activations(data_loader, model, device, logger)
+        configure_extra_output_of_the_model(model, which_internal_activations=self.distance_method.which_internal_activations)
+        all_activations_ftmaps = self.distance_method.iterate_data_to_extract_ind_activations(data_loader, model, device, logger)
 
         return all_activations_logits, all_activations_ftmaps
-
-    # def iterate_data_to_plot_with_ood_labels(self, model: YOLO, dataloader: InfiniteDataLoader, device: str, logger: Logger, folder_path: Path, now: str):
-        
-
-    # def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger: Logger, known_classes: List[int]) -> Dict[str, float]:
-    #     pass
 
     def generate_thresholds(self, ind_scores: list, tpr: float, logger: Logger) -> Union[List[float], List[List[float]]]:
         
         logits, ftmaps = ind_scores
-        self.logits_method.generate_thresholds(logits, tpr, logger)
-        #self.distance_method.generate_thresholds(ftmaps, tpr, logger)
+        logits_thrs = self.logits_method.generate_thresholds(logits, tpr, logger)
+        distance_thrs = self.distance_method.generate_thresholds(ftmaps, tpr, logger)
+
+        return logits_thrs, distance_thrs
 
     def generate_clusters(self, ind_tensors: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger) -> Union[List[np.ndarray], List[List[np.ndarray]]]:
-        
-        return self.distance_method.generate_clusters(ind_tensors, logger)
+        ftmaps = ind_tensors[1]
+        return self.distance_method.generate_clusters(ftmaps, logger)
     
     def compute_scores_from_activations(self, activations: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger) -> Tuple[List[List[float]], List[List[float]]]:
         
         logits, ftmaps = activations
-        logit_scores = self.logits_method.compute_scores(logits, logger)
-        distance_scores = self.distance_method.compute_scores_clusters_per_class_and_stride(ftmaps, logger)
+        logit_scores = self.logits_method.compute_scores_from_activations(logits, logger)
+        distance_scores = self.distance_method.compute_scores_from_activations(ftmaps, logger)
 
         return logit_scores, distance_scores
 
     def fuse_ood_decisions(self, ood_decision_logits: List[List[int]], ood_decision_distance: List[List[int]]) -> List[List[int]]:
-        
-        if self.fusion_strategy == "":
-            ood_decision = []
+        # 1 is InD, 0 is OoD
+        ood_decision = []
+        if self.fusion_strategy == "and":
+            # AND strategy: If one of methods say that the bbox is InD (decision = 1), then it is InD
             for idx_img in range(len(ood_decision_logits)):
-                ood_decision.append([max(ood_decision_logits[idx_img][idx_bbox], ood_decision_distance[idx_img][idx_bbox]) for idx_bbox in range(len(ood_decision_logits[idx_img]))])
+                ood_decision.append(
+                    [max(ood_decision_logits[idx_img][idx_bbox], ood_decision_distance[idx_img][idx_bbox]) for idx_bbox in range(len(ood_decision_logits[idx_img]))]
+                )
+
+        elif self.fusion_strategy == "or":
+            # OR strategy: If one of the methods says that the bbox is OoD (decision = 0), then it is OoD
+            for idx_img in range(len(ood_decision_logits)):
+                ood_decision.append(
+                    [min(ood_decision_logits[idx_img][idx_bbox], ood_decision_distance[idx_img][idx_bbox]) for idx_bbox in range(len(ood_decision_logits[idx_img]))]
+                )
+        
+        elif self.fusion_strategy == "score":
+            # SCORE strategy: The score is the sum of the scores of the two methods. If the score is greater than 0, it is InD
+            for idx_img in range(len(ood_decision_logits)):
+                ood_score_one_img = [ood_decision_logits[idx_img][idx_bbox] + ood_decision_distance[idx_img][idx_bbox] for idx_bbox in range(len(ood_decision_logits[idx_img]))]
+                ood_decision.append(
+                    [1 if score > 0 else 0 for score in ood_score_one_img]                    
+                )
+            
         else:
             raise NotImplementedError("Not implemented yet")
+        
+        # Assert that the number of bboxes is the same after the decision
+        for idx_img in range(len(ood_decision)):
+            assert len(ood_decision[idx_img]) == len(ood_decision_logits[idx_img]), "The number of bboxes is different"
+            assert len(ood_decision[idx_img]) == len(ood_decision_distance[idx_img]), "The number of bboxes is different"
 
         return ood_decision
-
 
     def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger: Logger, known_classes: List[int]) -> Dict[str, float]:
         
@@ -2609,7 +2692,10 @@ class FusionMethod(OODMethod):
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
             results_logits = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
             ### Comprobar si las cajas predichas son OoD ###
-            ood_decision_logits = self.logits_method.compute_ood_decision_on_results(results_logits, logger)
+            if self.fusion_strategy == 'score':
+                ood_decision_logits = self.logits_method.compute_ood_score_on_results(results_logits, logger)
+            else:
+                ood_decision_logits = self.logits_method.compute_ood_decision_on_results(results_logits, logger)
 
             ###
             # Distance method
@@ -2618,13 +2704,20 @@ class FusionMethod(OODMethod):
             ### Procesar imagenes en el modelo para obtener las caracteristicas y las cajas ###
             results_distance = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
             ### Comprobar si las cajas predichas son OoD ###
-            ood_decision_distance = self.distance_method.compute_ood_decision_on_results(results_distance, logger)
+            if self.fusion_strategy == 'score':
+                ood_decision_distance = self.distance_method.compute_ood_score_on_results(results_distance, logger)
+            else:
+                ood_decision_distance = self.distance_method.compute_ood_decision_on_results(results_distance, logger)
+
+            # Assert deeply that results are the same and assign the results as one of them (either logits or distance)
+            for idx_r in range(len(results_logits)):
+                assert torch.allclose(results_logits[idx_r].boxes.xyxy, results_distance[idx_r].boxes.xyxy), f"Results are not the same for image {idx_r}"
+                assert torch.allclose(results_logits[idx_r].boxes.cls, results_distance[idx_r].boxes.cls), f"Results are not the same for image {idx_r}"
+                assert torch.allclose(results_logits[idx_r].boxes.conf, results_distance[idx_r].boxes.conf), f"Results are not the same for image {idx_r}"
+            results = results_logits
 
             ### Fuse the results of the logits and distance methods ###
             ood_decision = self.fuse_ood_decisions(ood_decision_logits, ood_decision_distance)
-
-            results = results_logits
-            
 
             ### Añadir posibles cajas desconocidas a las predicciones ###
             if self.enhanced_unk_localization:
