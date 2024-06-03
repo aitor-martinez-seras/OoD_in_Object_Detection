@@ -40,7 +40,7 @@ def main():
 
     # Create the data extractor
     print('Creating the data extractor...')
-    activations_extractor = ActivationsExtractor(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold=CONF_THRESHOLD)
+    activations_extractor = ActivationsExtractor(agg_method='mean', iou_threshold_for_matching=IOU_THRESHOLD, min_conf_threshold_test=CONF_THRESHOLD)
     print('Data extractor created!')
     
     # Load model

@@ -44,7 +44,7 @@ class SimpleArgumentParser(Tap):
     logdir: str = 'logs'  # Where to log test info (small).
     name: str = 'prueba'  # Name of this run. Used for monitoring and checkpointing
     # Benchmarks
-    benchmark_datasets: List[str] = []  # Datasets to use for the benchmark. Options: 'coco_ood', 'coco_mixed', 'coco_owod_test'
+    benchmark_datasets: List[str] = []  # Datasets to use for the benchmark. Options: 'coco_ood', 'coco_mixed', 'coco_owod'
     # Hyperparameters for YOLO
     conf_thr_train: float = 0.15  # Confidence threshold for the In-Distribution configuration
     conf_thr_test: float = 0.15  # Confidence threshold for the detections
@@ -116,7 +116,7 @@ class SimpleArgumentParser(Tap):
             
         if self.visualize_clusters:
             print('-- Visualizing clusters activated --')
-            CUSTOM_HYP.VISUALIZE_CLUSTERS = True
+            CUSTOM_HYP.clusters.VISUALIZE = True
 
 
 
@@ -644,7 +644,6 @@ def main(args: SimpleArgumentParser):
                 ood_method.clusters = ood_method.generate_clusters(ind_activations, logger)
                 ind_scores = ood_method.compute_scores_from_activations(ind_activations, logger)
                 ood_method.thresholds = ood_method.generate_thresholds(ind_scores, tpr=args.tpr_thr, logger=logger)
-                execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
                 
                 ## 3.2. Add info
                 results_one_run['Method'] = args.ood_method

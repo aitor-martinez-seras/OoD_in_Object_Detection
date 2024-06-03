@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from constants import AVAILABLE_CLUSTERING_METHODS
 from custom_hyperparams import CUSTOM_HYP
 
-VISUALIZE = False
+VISUALIZE = CUSTOM_HYP.clusters.VISUALIZE
 MIN_SAMPLES = CUSTOM_HYP.clusters.MIN_SAMPLES
 RANGE_OF_CLUSTERS = CUSTOM_HYP.clusters.RANGE_OF_CLUSTERS
 
@@ -23,6 +23,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         cluster_method: str,
         metric: str,
         perf_score_metric: str,
+        string_for_visualization: str,
         logger: Logger
     ) -> np.ndarray:
     assert cluster_method in AVAILABLE_CLUSTERING_METHODS, f"Invalid clustering method: {cluster_method}"
@@ -133,6 +134,8 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         params=params,
         param_to_eval=param_to_eval,
         perf_score_metric=perf_score_metric,
+        string_for_visualization=string_for_visualization,
+        metric=metric,
         logger=logger
     )
 
@@ -144,7 +147,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         plt.xlabel('Cluster')
         plt.ylabel('Number of samples')
         plt.title('Cluster distribution')
-        plt.savefig('cluster_distribution.png')
+        plt.savefig(f'{string_for_visualization}_cluster_distribution.png')
         plt.close()
 
     return cluster_labels
@@ -156,6 +159,7 @@ def compute_score_for_all_possible_configurations(
         parameters_to_search: dict[str, list],
         param_to_eval: str,
         perf_score_metric: str,
+        metric: str,
         logger: Logger
     ) -> Tuple[List[float], List[dict]]:
     # Assert first than the only parameter that has a lenght greater than 1 is the one to be evaluated
@@ -188,13 +192,13 @@ def compute_score_for_all_possible_configurations(
 
             # Check if there are orphan samples
             if len(set(cluster_labels)) > 1:
-                if -1 in set(cluster_labels):
+                if -1 in set(cluster_labels) and CUSTOM_HYP.clusters.REMOVE_ORPHANS:
                     logger.debug("Some samples were not assigned to any cluster (label = -1).")
                     
                     # Check if the number of orphan samples is greater than the maximum allowed
                     total_number_of_orphan_samples = np.sum(cluster_labels == -1)
-                    if total_number_of_orphan_samples > CUSTOM_HYP.MAX_PERCENT_OF_ORPHANS * len(feature_maps):
-                        raise ValueError(f"More than {CUSTOM_HYP.MAX_PERCENT_OF_ORPHANS*100:.0f}% of the samples were not assigned to any cluster.")
+                    if total_number_of_orphan_samples > CUSTOM_HYP.clusters.MAX_PERCENT_OF_ORPHANS * len(feature_maps):
+                        raise ValueError(f"More than {CUSTOM_HYP.clusters.MAX_PERCENT_OF_ORPHANS*100:.0f}% of the samples were not assigned to any cluster.")
                     feature_maps_one_run = feature_maps[cluster_labels != -1]
                     cluster_labels = cluster_labels[cluster_labels != -1]
 
@@ -203,10 +207,10 @@ def compute_score_for_all_possible_configurations(
 
                 # Compute performance score and append it to the list
                 if perf_score_metric == 'silhouette':
-                    score = silhouette_score(feature_maps_one_run, cluster_labels)
+                    score = silhouette_score(feature_maps_one_run, cluster_labels, metric=metric)
                     logger.debug(f"Silhouette score: {score}")
                 elif perf_score_metric == 'calinski_harabasz':
-                    score = calinski_harabasz_score(feature_maps_one_run, cluster_labels)
+                    score = calinski_harabasz_score(feature_maps_one_run, cluster_labels, metric=metric)
                     logger.debug(f"Calinski-Harabasz score: {score}")
                 else:
                     raise ValueError(f"Invalid performance score metric: {perf_score_metric}")
@@ -242,6 +246,8 @@ def search_for_best_param(
         params: dict,
         param_to_eval: str,
         perf_score_metric: str,
+        string_for_visualization: str,
+        metric: str,
         logger: Logger,
     ) -> dict:
 
@@ -252,6 +258,7 @@ def search_for_best_param(
         params,
         param_to_eval,
         perf_score_metric,
+        metric,
         logger
     )
 
@@ -262,7 +269,7 @@ def search_for_best_param(
             params=params,
             parameter_name=param_to_eval,
             clustering_perf_metric=perf_score_metric,
-            filename=f"cluster_{perf_score_metric}_scores.png"
+            filename=f"{string_for_visualization}_cluster_{perf_score_metric}_scores.png"
         )
 
     # Select best parameters

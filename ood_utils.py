@@ -190,6 +190,19 @@ class OODMethod(ABC):
         """
         pass
 
+    #@abstractmethod
+    def compute_INDness_scores_on_results(self, results: Results, logger) -> List[List[float]]:
+        """
+        Function to be overriden by each method type to compute the OOD score for each image.
+        Parameters:
+            results: Results -> The results of the model predictions
+            logger: Logger -> The logger to print warnings or info
+        Returns:
+            ood_score: List[int] -> A list of lists, where the first list is for each image and the second list is for each bbox. 
+                The value is the OOD score of the bbox
+        """
+        pass
+
     @abstractmethod
     def compute_scores(self, activations, *args, **kwargs) -> np.ndarray:
         """
@@ -752,22 +765,6 @@ class OODMethod(ABC):
         return thresholds
     
     ### Uknown localization methods ###
-
-    # def generate_unk_prop_thr(self, ind_scores: list, tpr: float, logger) -> Union[List[float], List[List[float]]]:
-    #     # TODO: Añado un nuevo thr que se genere a partir de TODAS las clases
-    #     if self.unk_prop_threshold:
-    #         if self.per_class:
-    #             if self.per_stride:
-    #             # Take the scores of all clases for the first stride and transform them into a big array
-    #                 all_scores_first_stride = []
-    #                 for idx_cls, ind_scores_one_cls in enumerate(ind_scores):
-    #                     all_scores_first_stride.extend(ind_scores_one_cls[0])
-    #                 # Generate the threshold
-    #                 if len(all_scores_first_stride) > sufficient_samples:
-    #                     thresholds.append(float(np.percentile(all_scores_first_stride, used_tpr, method='lower')))
-    #                 else:
-    #                     logger.warning(f"Unknown threshold: has less than {sufficient_samples} samples. No threshold is generated")
-    #                 #all_scores = [score for cls_scores in ind_scores for score in cls_scores[0]]
     
     def compute_extra_possible_unkwnown_bboxes_and_decision(
             self,
@@ -1363,8 +1360,6 @@ class LogitsMethod(OODMethod):
             for idx_bbox in range(len(res.boxes.cls)):
                 cls_idx = int(res.boxes.cls[idx_bbox].cpu())
                 logits = res.extra_item[idx_bbox][4:].cpu()
-                # TODO: Probablemente haya que cambiar esto para quedarnos con el output [0]
-                #score = self.compute_score_one_bbox(logits, cls_idx)
                 score = self.compute_scores(logits, cls_idx)[0]
                 if score < self.thresholds[cls_idx]:
                     ood_decision[idx_img].append(0)  # OOD
@@ -1373,20 +1368,70 @@ class LogitsMethod(OODMethod):
 
         return ood_decision
 
-    def compute_ood_scores_on_results(self, results: Results, logger: Logger) -> List[List[int]]:
+    def compute_INDness_scores_on_results(self, results: Results, logger: Logger) -> List[List[int]]:
         scores = []  
         for idx_img, res in enumerate(results):
             scores.append([])  # Every image has a list of decisions for each bbox
             for idx_bbox in range(len(res.boxes.cls)):
                 cls_idx = int(res.boxes.cls[idx_bbox].cpu())
                 logits = res.extra_item[idx_bbox][4:].cpu()
-                # TODO: Probablemente haya que cambiar esto para quedarnos con el output [0]
-                #score = self.compute_score_one_bbox(logits, cls_idx)
                 score = self.compute_scores(logits, cls_idx)[0]
                 # AQUI hay que poner una logica para que devuelva el score entre -1 y 1.
                 # -1 significa que es OOD al maximo y 1 que es IND al maximo
-
+                scores[idx_img].append(self.compute_indness(score, cls_idx))
+                
         return scores
+
+    def compute_indness(self, score: float, cls_idx: int) -> float:
+        """
+        Compute an score between -1 and 1. -1 means that the score is the maximum OOD score, 1 means that is the maximum IND score.
+        In logits methods, it will be based on a linear function between the threshold and the minimum and maximum score.
+        The maximum is 1, as a logit cannot be greater than 1. The minimum is the minimum confidence for the predictions.
+        """
+        if CUSTOM_HYP.fusion.LOGITS_USE_PIECEWISE_FUNCTION:
+
+            if score > self.thresholds[cls_idx]:
+                a = 1 / (self.max_score[cls_idx] - self.thresholds[cls_idx])
+                b = - self.thresholds[cls_idx] / (self.max_score[cls_idx] - self.thresholds[cls_idx])
+            elif score < self.min_conf_threshold_train:
+                a = - 1 / (self.min_score[cls_idx] - self.thresholds[cls_idx])
+                b = self.thresholds[cls_idx] / (self.min_score[cls_idx] - self.thresholds[cls_idx])
+            else:
+                print("Score is equal to the threshold")
+                a = 0
+                b = 0
+
+            # if score > self.thresholds[cls_idx]:
+            #     a = -1 / (self.thresholds[cls_idx] - 1)
+            #     b = 1 - a
+            #     return a * score + b
+            # elif score < self.min_conf_threshold_train:
+            #     b = -1 / (1 - (self.min_conf_threshold_test/self.thresholds[cls_idx]))
+            #     a = -b / self.thresholds[cls_idx]
+            # else:  # score == thr
+            #     print("Score is equal to the threshold")
+            #     return 0
+            
+            return a * score + b
+        
+        else:
+            # TODO: Puede haber varias opciones mas
+            #   1. Una funcion desde el maximo score de InDness (logit=1) hasta el 0 (donde este el thr) y que la parte de OODness
+            #     sea simplemente la continuacion de la recta
+            #   2. Una funcion que sea una recta el maximo OODness (logit=conf_thr) y que vaya hasta el 0 (donde este el thr) y que
+            #     la parte de InDness sea simplemente la continuacion de la recta
+            #   3. ...
+            raise NotImplementedError("Not implemented yet")
+
+        # Check that the function is correct by plotting it 
+        # import matplotlib.pyplot as plt
+        # x = np.linspace(0, self.thresholds[cls_idx], 100)
+        # y = a * x + b
+        # plt.plot(x, y)
+        # # Plot the grid
+        # plt.grid(axis='both', linestyle='--', alpha=0.5)
+        # plt.savefig('AAA_indness_function.png')
+        # plt.close()
     
     def extract_internal_activations(self, results: Results, all_activations: List[float], targets: Dict[str, Tensor]):
         """
@@ -1430,8 +1475,25 @@ class LogitsMethod(OODMethod):
                     scores[idx_cls] = np.array([])
         else:
             raise NotImplementedError("Not implemented yet")
+
+        self.obtain_min_max_distances(scores)
         
         return scores
+
+    def obtain_min_max_distances(self, scores: List[List[float]]):
+        """
+        Obtain the minimum and maximum distances of the scores.
+        """
+        if self.per_class:
+            self.min_score = [[] for _ in range(len(scores))]
+            self.max_score = [[] for _ in range(len(scores))]
+            for idx_cls in range(len(scores)):
+                if len(scores[idx_cls]) > 0:
+                    self.min_score[idx_cls] = np.min(scores[idx_cls])
+                    self.max_score[idx_cls] = np.max(scores[idx_cls])
+                else:
+                    self.min_score[idx_cls] = 0.0
+                    self.max_score[idx_cls] = 0.0
 
     def activations_transformation(self, activations: np.array) -> np.array:
         raise NotImplementedError("This method is not needed for methods using logits")
@@ -1558,6 +1620,132 @@ class DistanceMethod(OODMethod):
     def compute_scores(self, activations: np.array, cluster: np.array) -> np.ndarray:
         return self.compute_distance(cluster, activations)
 
+    def compute_INDness_scores_on_results(self, results: Results, logger) -> List[List[int]]:
+        """
+        Compute the OOD decision for each class using the in-distribution activations, 
+        either feature maps along with the strides of the bounding boxes or 
+        already RoI aligned feature maps.
+        Parameters:
+            results: List[Results] -> List of the results of the model for each image
+            logger: Logger -> Logger object to log messages
+        Returns:
+            ood_decision: List[List[int]] -> List of decisions for each class and for each bounding box
+        """
+        ood_decision = []  # List of decisions for each image
+        for idx_img, res in enumerate(results):
+            ood_decision.append([])  # Every image has a list of decisions for each bbox
+            
+            # Extract the RoI aligned feature maps from the feature maps and the strides
+            if self.which_internal_activations == "ftmaps_and_strides":
+                ftmaps, strides = res.extra_item
+                roi_aligned_ftmaps_per_stride = extract_roi_aligned_features_from_correct_stride(
+                    ftmaps=[ft[None, ...] for ft in ftmaps],
+                    boxes=[res.boxes.xyxy],
+                    strides=[strides],
+                    img_shape=res.orig_img.shape[2:],
+                    device=res.boxes.xyxy.device,
+                    extract_all_strides=False,
+                )
+                # As we are processing one image only and the output is a list per image, we take the first element
+                roi_aligned_ftmaps_per_stride = roi_aligned_ftmaps_per_stride[0]
+
+            # RoI aligned feature maps are already extracted from the model
+            elif self.which_internal_activations == 'roi_aligned_ftmaps':
+                roi_aligned_ftmaps_per_stride = res.extra_item
+            
+            else:
+                raise ValueError(f"The method {self.which_internal_activations} is invalid implemented yet")
+
+            self._compute_indness_for_one_result_from_roi_aligned_feature_maps(
+                idx_img=idx_img,
+                one_img_bboxes_cls_idx=res.boxes.cls.cpu(),
+                roi_aligned_ftmaps_one_img_per_stride=roi_aligned_ftmaps_per_stride,  # As we are processing one image only
+                ood_decision=ood_decision,
+                logger=logger,
+            )
+
+        return ood_decision
+    
+    def _compute_indness_for_one_result_from_roi_aligned_feature_maps(
+            self, idx_img: int, one_img_bboxes_cls_idx: Tensor, roi_aligned_ftmaps_one_img_per_stride, ood_decision: List, logger: Logger
+        ):
+        """
+        Compute the OOD decision for one image using the in-distribution activations (usually feature maps).
+        Pipeline:
+            1. Loop over the strides. Each stride is a list of bboxes and their feature maps
+            2. Compute the distance between the prediction and the cluster of the predicted class
+            3. Compare the distance with the threshold
+        """
+        # Loop each stride of the image. Select the first element of the list as we are processing one image only
+        for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(roi_aligned_ftmaps_one_img_per_stride):
+            
+            # Only enter if there are any predictions in this stride
+            if len(bbox_idx_in_one_stride) > 0:
+                # Each ftmap is from a bbox prediction
+                for idx, ftmap in enumerate(ftmaps):
+                    bbox_idx = idx
+                    cls_idx = int(one_img_bboxes_cls_idx[bbox_idx])
+                    ftmap = ftmap.cpu().unsqueeze(0).numpy()  # To obtain a tensor of shape [1, C, H, W]
+                    # ftmap = ftmap.cpu().flatten().unsqueeze(0).numpy()
+                    # [None, :] is to do the same as unsqueeze(0) but with numpy
+                    # Check if there is a cluster for the class and stride
+                    if len(self.clusters[cls_idx][stride_idx]) == 0:
+                        logger.warning(
+                            f'Image {idx_img}, bbox {bbox_idx} is viewed as an OOD.' \
+                            f'It cannot be compared as there is no cluster for class {cls_idx} and stride {stride_idx}'
+                        )
+                        distance = 1000
+                    else:
+                        distance = self.compute_distance(
+                            #self.clusters[cls_idx][stride_idx][None, :],
+                            self.clusters[cls_idx][stride_idx],
+                            self.activations_transformation(ftmap)
+                        )[0]
+
+                    ood_decision.append(self.compute_indness(distance, cls_idx))
+
+
+    def compute_indness(self, score: float, cls_idx: int, stride_idx: int) -> float:
+        """
+        Compute an score between -1 and 1. -1 means that the score is the maximum OOD score, 1 means that is the maximum IND score.
+        In logits methods, it will be based on a linear function between the threshold and the minimum and maximum score.
+        The maximum is 1, as a logit cannot be greater than 1. The minimum is the minimum confidence for the predictions.
+        """
+        if CUSTOM_HYP.fusion.DISTANCE_USE_FROM_ZERO_TO_THR:
+        
+            a = -1 / (self.thresholds[cls_idx] - 1)
+            b = 1 - a
+
+        elif CUSTOM_HYP.fusion.DISTANCE_USE_IN_DISTRIBUTION_TO_DEFINE_LIMITS:
+            if self.per_class and self.per_stride:
+                # Is a piecewise function
+                if score > self.thresholds[cls_idx][stride_idx]:
+                    a = -1 / (self.max_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+                    b = self.thresholds[cls_idx][stride_idx] / (self.max_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+                elif score < self.min_conf_threshold_train:
+                    a = 1 / (self.min_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+                    b = -self.thresholds[cls_idx][stride_idx] / (self.min_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+                else:
+                    print("Score is equal to the threshold")
+                    a = 0
+                    b = 0
+                
+                return a * score + b
+
+            else:
+                raise NotImplementedError("Not implemented yet")
+
+        
+        return a * score + b
+        # else:
+        #     # TODO: Puede haber varias opciones mas
+        #     #   1. Una funcion desde el maximo score de InDness (logit=1) hasta el 0 (donde este el thr) y que la parte de OODness
+        #     #     sea simplemente la continuacion de la recta
+        #     #   2. Una funcion que sea una recta el maximo OODness (logit=conf_thr) y que vaya hasta el 0 (donde este el thr) y que
+        #     #     la parte de InDness sea simplemente la continuacion de la recta
+        #     #   3. ...
+        #     raise NotImplementedError("Not implemented yet")
+
     # TODO: Juntar las dos funciones de debajo en una sola, ya que podemos devolver una lista de floats siempre
     #   y en el caso de que solo hayamos enviado una bbox, la lista tendra un solo elemento
     @abstractmethod
@@ -1659,23 +1847,7 @@ class DistanceMethod(OODMethod):
                 roi_aligned_ftmaps_per_stride = res.extra_item
                 valid_preds = res.valid_preds
                 self._extract_valid_preds_from_one_image_roi_aligned_ftmaps(cls_idx_one_pred, roi_aligned_ftmaps_per_stride, valid_preds, all_activations)
-                
-                # # Loop each stride and get only the ftmaps of the boxes that are valid predictions
-                # for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(res.extra_item):
-                #     if len(bbox_idx_in_one_stride) > 0:  # Check if there are any predictions in this stride
-                #         for i, bbox_idx in enumerate(bbox_idx_in_one_stride):
-                #             bbox_idx = bbox_idx.item() 
-                #             if self.ind_info_creation_option == 'valid_preds_one_stride':
-                #                 # Use only predictions that are "valid", i.e., correctly predicted and asociated univocally GT
-                #                 # and use only the stride where the bbox is predicted
-                #                 if bbox_idx in res.valid_preds:
-                #                     pred_cls = int(cls_idx_one_pred[bbox_idx].item())
-                #                     all_activations[pred_cls][stride_idx].append(ftmaps[i].cpu().numpy())
-                #             elif self.ind_info_creation_option == 'valid_preds_all_strides':
-                #                 # Use only predictions that are "valid", i.e., correctly predicted and asociated univocally GT
-                #                 # and use all the strides 
-                #                 raise NotImplementedError("Not implemented yet")
-                            
+                                            
         else:
             raise NotImplementedError("The method to extract internal activations is not implemented yet")
 
@@ -1749,6 +1921,8 @@ class DistanceMethod(OODMethod):
                 scores = [[[] for _ in range(3)] for _ in range(len(activations))]
                 #if self.cluster_method == 'one':
                 self.compute_scores_clusters_per_class_and_stride(activations, scores, logger)
+
+                self.obtain_min_max_distances(scores)
                 
             else:
                 raise NotImplementedError("Not implemented yet")
@@ -1757,6 +1931,22 @@ class DistanceMethod(OODMethod):
             raise NotImplementedError("Not implemented yet")
         
         return scores
+    
+    def obtain_min_max_distances(self, scores):
+        if self.per_class and self.per_stride:
+            # Check if the class and the stride have at least one sample
+            self.min_dist = [[[] for _ in range(3)] for _ in range(len(scores))]
+            self.max_dist = [[[] for _ in range(3)] for _ in range(len(scores))]
+            for idx_cls, scores_one_cls in enumerate(scores):
+                for idx_stride, scores_one_cls_one_stride in enumerate(scores_one_cls):
+                    if len(scores_one_cls_one_stride) > 0:
+                        self.min_dist[idx_cls][idx_stride] = np.min(scores_one_cls_one_stride)
+                        self.max_dist[idx_cls][idx_stride] = np.max(scores_one_cls_one_stride)
+                    else:
+                        self.min_dist[idx_cls][idx_stride] = 0
+                        self.max_dist[idx_cls][idx_stride] = 0
+        else:
+            raise NotImplementedError("Not implemented yet")
 
     def compute_scores_from_activations_for_unk_proposals(self, activations: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger) -> List[float]:
         """
@@ -2113,62 +2303,81 @@ class DistanceMethod(OODMethod):
         ):
         np.set_printoptions(threshold=20)
 
-        if CUSTOM_HYP.VISUALIZE_CLUSTERS:
+        if CUSTOM_HYP.clusters.VISUALIZE:
             import matplotlib.pyplot as plt
             from collections import Counter
             folder_for_hist = Path('figures/histograms')
-            folder_for_hist.mkdir(parents=False, exist_ok=True)        
+            folder_for_hist.mkdir(parents=False, exist_ok=True)
+            folder_for_cluster_scores = Path('figures/cluster_scores')
+            folder_for_cluster_scores.mkdir(parents=False, exist_ok=True)
 
         for idx_cls, ftmaps_one_cls in enumerate(ind_tensors):
             #logger.info(f'Class {idx_cls:03} of {len(ind_tensors)}')
+            cluster_indices_one_class = []
             for idx_stride, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
                 
                 if len(ftmaps_one_cls_one_stride) > 1:
                     ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride)
                     # 1. Find the optimal number of clusters and obtain the labels
+                    if CUSTOM_HYP.clusters.VISUALIZE:
+                        string_for_visualization = f'class{idx_cls:03}_stride{idx_stride}'
+                        string_for_visualization = (folder_for_cluster_scores / string_for_visualization).as_posix()
+                    else:
+                        string_for_visualization = ''
                     cluster_labels = find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
                         ftmaps_one_cls_one_stride,
                         self.cluster_method,
                         self.metric,
                         self.cluster_optimization_metric,
+                        string_for_visualization,
                         logger,
                     )
                     
                     # Obtain the indices of the clusters
                     cluster_indices = set(cluster_labels)
-
-                    if CUSTOM_HYP.VISUALIZE_CLUSTERS:
-                        # Count the number of samples per cluster
-                        cluster_counts = Counter(cluster_labels)
-                        # Extracting cluster indices and their respective counts
-                        clusters = list(cluster_counts.keys())
-                        counts = list(cluster_counts.values())
-                        # Plotting the number of samples per cluster
-                        plt.figure(figsize=(10, 6))
-                        plt.bar(clusters, counts, color='skyblue')
-                        # Adding labels and title
-                        plt.xlabel('Cluster Index')
-                        plt.ylabel('Number of Samples')
-                        plt.title('Number of Samples per Cluster')
-                        plt.xticks(clusters)  # Ensuring the x-ticks correspond to cluster indices
-                        plt.grid(axis='y', linestyle='--', alpha=0.7)
-                        plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{idx_stride}_{self.cluster_optimization_metric}.png')
-                        # Plot the histogram of the clusters
-                        # plt.hist(cluster_labels, bins=len(cluster_indices))
-                        # plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{idx_stride}_{self.cluster_optimization_metric}.png')
-                        plt.close()
+                    cluster_indices_one_class.append(cluster_indices)
 
                     # 2. Aggregate the samples of each cluster using the agg method
-                    clusters = []
+                    clusters_centroids = []
                     for idx_cluster in sorted(cluster_indices):
-                        if idx_cluster != -1:  # To remove the samples that are not assigned to any cluster
-                            clusters.append(self.agg_method(ftmaps_one_cls_one_stride[cluster_labels == idx_cluster], axis=0))
-                    clusters_per_class_and_stride[idx_cls][idx_stride] = np.array(clusters)
+                        if idx_cluster == -1 and CUSTOM_HYP.clusters.REMOVE_ORPHANS:  # To remove the samples that are not assigned to any cluster
+                            logger.warning(f'WARNING: Class {idx_cls:03}, Stride {idx_stride} -> Removing {np.sum(cluster_labels == idx_cluster)} orphan samples')
+                        else:
+                            clusters_centroids.append(self.agg_method(ftmaps_one_cls_one_stride[cluster_labels == idx_cluster], axis=0))
+                    clusters_per_class_and_stride[idx_cls][idx_stride] = np.array(clusters_centroids)
 
                 else:
                     if idx_cls < 20:
                         logger.warning(f'SKIPPING Class {idx_cls:03}, Stride {idx_stride} -> NO SAMPLES')
                     clusters_per_class_and_stride[idx_cls][idx_stride] = np.empty(0)
+                    cluster_indices_one_class.append([])
+
+            if CUSTOM_HYP.clusters.VISUALIZE:
+                fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+                fig.suptitle(f'Class {idx_cls:03}')
+                for _i, cl_lbl in enumerate(cluster_indices_one_class):
+                    # Count the number of samples per cluster
+                    cluster_counts = Counter(cl_lbl)
+                    # Extracting cluster indices and their respective counts
+                    one_stride_labels = list(cluster_counts.keys())
+                    one_stride_counts = list(cluster_counts.values())
+                    if len(cl_lbl) > 0:
+                        bars = ax[_i].bar(one_stride_labels, one_stride_counts, color='skyblue')
+                        ax[_i].set_title(f'Class {idx_cls:03} - Stride {_i}')
+                        ax[_i].set_xlabel('Cluster index')
+                        ax[_i].set_ylabel('Number of samples')
+                        ax[_i].set_xticks(one_stride_labels)  # Ensuring the x-ticks correspond to cluster indices
+                        ax[_i].grid(axis='y', linestyle='--', alpha=0.7)
+                        # Adding value labels on top of the bars
+                        for bar in bars:
+                            yval = bar.get_height()
+                            ax[_i].text(bar.get_x() + bar.get_width() / 2, yval + 1, int(yval), ha='center', va='bottom')
+                plt.tight_layout()
+                plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{self.cluster_optimization_metric}.png')
+                # plt.hist(cluster_labels, bins=len(cluster_indices))
+                # plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{idx_stride}_{self.cluster_optimization_metric}.png')
+                # plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{idx_stride}_{self.cluster_optimization_metric}.png')
+                plt.close()
 
     def activations_transformation(self, activations: np.array) -> np.array:
         """
@@ -2693,7 +2902,7 @@ class FusionMethod(OODMethod):
             results_logits = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
             ### Comprobar si las cajas predichas son OoD ###
             if self.fusion_strategy == 'score':
-                ood_decision_logits = self.logits_method.compute_ood_score_on_results(results_logits, logger)
+                ood_decision_logits = self.logits_method.compute_INDness_scores_on_results(results_logits, logger)
             else:
                 ood_decision_logits = self.logits_method.compute_ood_decision_on_results(results_logits, logger)
 
@@ -2705,7 +2914,7 @@ class FusionMethod(OODMethod):
             results_distance = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
             ### Comprobar si las cajas predichas son OoD ###
             if self.fusion_strategy == 'score':
-                ood_decision_distance = self.distance_method.compute_ood_score_on_results(results_distance, logger)
+                ood_decision_distance = self.distance_method.compute_INDness_scores_on_results(results_distance, logger)
             else:
                 ood_decision_distance = self.distance_method.compute_ood_decision_on_results(results_distance, logger)
 

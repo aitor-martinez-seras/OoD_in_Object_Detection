@@ -17,7 +17,7 @@ UNKNOWN_CLASS_INDEX = 80
 # Datasets
 COCO_OOD_NAME = 'coco_ood'
 COCO_MIXED_NAME = 'coco_mixed'
-COCO_OWOD_TEST_NAME = 'coco_owod_test'
+COCO_OWOD_TEST_NAME = 'owod'
 # OOD Methods
 LOGITS_METHODS = ['MSP', 'Energy', 'ODIN', 'Sigmoid']
 DISTANCE_METHODS = ['L1_cl_stride', 'L2_cl_stride', 'GAP_L2_cl_stride', 'Cosine_cl_stride']

@@ -3,9 +3,23 @@ from typing import List
 
 
 @dataclass
+class FusionParams:
+    LOGITS_USE_PIECEWISE_FUNCTION: bool = True  # If True, the piecewise function will be used to fuse the oodness scores
+
+    DISTANCE_USE_FROM_ZERO_TO_THR: bool = False  # If True, the distance from zero to the threshold will be used to fuse the oodness scores
+    DISTANCE_USE_IN_DISTRIBUTION_TO_DEFINE_LIMITS: bool = True  # If True, the distance from the mean to the threshold will be used to define the limits of the piecewise function
+
+    # Assert only one of the two methods of distance is used
+    assert not (DISTANCE_USE_FROM_ZERO_TO_THR and DISTANCE_USE_IN_DISTRIBUTION_TO_DEFINE_LIMITS), "Only one of the two distance methods can be used"
+
+@dataclass
 class ClustersParams:
     MIN_SAMPLES: int = 10
     RANGE_OF_CLUSTERS: List[int] = field(default_factory=lambda: list(range(2, 9)))
+    # Clusters (orphans = samples whose label is -1)
+    REMOVE_ORPHANS: bool = False  # If True, orphans will not be counted as a cluster
+    MAX_PERCENT_OF_ORPHANS: float = 0.1
+    VISUALIZE: bool = False  # This is activated from ood_evaluation
 
 
 @dataclass
@@ -102,20 +116,22 @@ class UnkEnhancementParams:
 class Hyperparams:
     # For YOLO
     IOU_THRESHOLD: float = 0.5
-    # Nested dataclasses for better organization
-    unk: UnkEnhancementParams = UnkEnhancementParams()
-    clusters: ClustersParams = ClustersParams()
-
-    # Enable or disable the use of a small subset
-    USE_ONLY_SUBSET_OF_IMAGES: bool = False  # If True, only a subset of images will be used for the UNK enhancement
-
-    IMAGES_TO_SELECT: List[str] = field(default_factory=list)
 
     # For thresholds of the OOD methods
     GOOD_NUM_SAMPLES: int = 50
     SUFFICIENT_NUM_SAMPLES: int = 10
-    MAX_PERCENT_OF_ORPHANS: float = 0.1
-    VISUALIZE_CLUSTERS: bool = False  # This is activated from ood_evaluation
+    
+    # For the clustering of distance methods
+    clusters: ClustersParams = ClustersParams()   
+
+    # Fusion method
+    fusion: FusionParams = FusionParams()
+
+    # Enable or disable the use of a small subset
+    USE_ONLY_SUBSET_OF_IMAGES: bool = False  # If True, only a subset of images will be used for the UNK enhancement
+    IMAGES_TO_SELECT: List[str] = field(default_factory=list)
+    
+    unk: UnkEnhancementParams = UnkEnhancementParams()
 
     def __post_init__(self):
         if self.USE_ONLY_SUBSET_OF_IMAGES:
