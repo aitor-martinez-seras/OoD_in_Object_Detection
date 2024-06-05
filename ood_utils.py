@@ -495,11 +495,6 @@ class OODMethod(ABC):
             )
             
             number_of_images_saved += len(data['im_file'])
-            # TODO: De momento no queremos plotear todo, solo unos pocos batches
-            # if number_of_images_saved > 200:
-            #     quit()
-            # if idx_of_batch > 10:
-            #     quit()
     
     def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger: Logger, known_classes: List[int]) -> Dict[str, float]:
 
@@ -606,11 +601,6 @@ class OODMethod(ABC):
                         #processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
                     configure_extra_output_of_the_model(model, self)
                     
-                    # delattr(model.model, 'which_layers_to_extract')
-                    # delattr(model.model, 'extraction_mode')
-                    # expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
-                    # processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
-                    # configure_extra_output_of_the_model(model, self)
                 else:
                     processed_heatmaps = None
                 if CUSTOM_HYP.unk.RANK_BOXES:
@@ -633,10 +623,6 @@ class OODMethod(ABC):
             #   'conf': List[Tensor] -> Lista de tensores con las confianzas de las predicciones (en yolov8 es cls)
             #   'ood_decision': List[int] -> Lista de enteros con la decision de si la caja es OoD o no
             for img_idx, res in enumerate(results):
-                #for idx_bbox in range(len(res.boxes.cls)):
-                # if self.enhanced_unk_localization:
-                #     pass
-                # else:
                 # Parse the ood elements as the unknown class (80)
                 ood_decision_one_image = torch.tensor(ood_decision[img_idx], dtype=torch.float32)
                 unknown_mask = ood_decision_one_image == 0
@@ -1533,11 +1519,6 @@ class MSP(LogitsMethod):
         name = 'MSP'
         super().__init__(name, **kwargs)
     
-    # def compute_score_one_bbox(self, logits: Tensor, cls_idx: int) -> float:
-    #     logits = logits.numpy()
-    #     assert cls_idx == logits.argmax(), "The max logit is not the one of the predicted class"
-    #     return logits[cls_idx]
-    
     def compute_scores(self, logits: Tensor, cls_idx: int) -> np.ndarray:
         if len(logits.shape) == 1:  # In case we only have one bbox
             logits = logits.unsqueeze(0)
@@ -1552,11 +1533,6 @@ class Energy(LogitsMethod):
         name = 'Energy'
         super().__init__(name, **kwargs)
         self.temper = temper
-    
-    # def compute_score_one_bbox(self, logits, cls_idx) -> float:
-    #     if len(logits.shape) == 1:
-    #         return self.temper * torch.logsumexp(logits.unsqueeze(0) / self.temper, dim=0)
-    #     return self.temper * torch.logsumexp(logits / self.temper, dim=0).item()
     
     def compute_scores(self, logits: Tensor, cls_idx: int) -> np.ndarray:
         if len(logits.shape) == 1:  # In case we only have one bbox
@@ -2424,9 +2400,6 @@ class DistanceMethod(OODMethod):
                 if class_has_at_least_one_stride_with_clusters:
                     plt.tight_layout()
                     plt.savefig(folder_for_hist / f'histogram_{self.name}_{self.cluster_method}_{idx_cls:03}_{self.cluster_optimization_metric}.png')
-                    # plt.hist(cluster_labels, bins=len(cluster_indices))
-                    # plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{idx_stride}_{self.cluster_optimization_metric}.png')
-                    # plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{idx_stride}_{self.cluster_optimization_metric}.png')
                     plt.close()
                 else:
                     plt.close()
@@ -2481,75 +2454,6 @@ class CosineDistanceOneClusterPerStride(_PairwiseDistanceClustersPerClassPerStri
             metric = 'cosine'
             name = 'CosineDistancePerStride'
             super().__init__(name, metric, **kwargs)
-
-
-# class L1DistanceOneClusterPerStride(DistanceMethod):
-    
-#         # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
-#         def __init__(self, **kwargs):
-#             name = 'L1DistancePerStride'
-#             per_class = True
-#             per_stride = True
-#             cluster_method = 'one'
-#             cluster_optimization_metric = 'silhouette'
-#             super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
-        
-#         def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
-
-#             distances = pairwise_distances(
-#                 cluster,
-#                 activations,
-#                 metric='l1'
-#                 )
-
-#             #return distances[0]
-#             return distances.min(axis=0)
-        
-
-# class L2DistanceOneClusterPerStride(DistanceMethod):
-    
-#         # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
-#         def __init__(self,  **kwargs):
-#             name = 'L2DistancePerStride'
-#             per_class = True
-#             per_stride = True
-#             cluster_method = 'one'
-#             cluster_optimization_metric = 'silhouette'
-#             super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
-        
-#         def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
-
-#             distances = pairwise_distances(
-#                 cluster,
-#                 activations,
-#                 metric='l2'
-#                 )
-
-#             #return distances[0]
-#             return distances.min(axis=0)
-
-# class CosineDistanceOneClusterPerStride(DistanceMethod):
-    
-#         # name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str, cluster_optimization_metric: str
-#         #def __init__(self, agg_method, **kwargs):
-#         def __init__(self, **kwargs):
-#             self.metric = 'cosine'
-#             name = 'CosineDistancePerStride'
-#             per_class = True
-#             per_stride = True
-#             #cluster_method = 'one'
-#             cluster_optimization_metric = 'silhouette'
-#             #super().__init__(name, per_class, per_stride, cluster_method, cluster_optimization_metric, **kwargs)
-#             super().__init__(name, per_class, per_stride, cluster_optimization_metric=cluster_optimization_metric, **kwargs)
-        
-#         def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
-#             distances = pairwise_distances(
-#                 cluster,
-#                 activations,
-#                 metric='cosine'
-#                 )
-#             #return distances[0]
-#             return distances.min(axis=0)
         
 
 class GAPL2DistanceOneClusterPerStride(DistanceMethod):
@@ -3011,13 +2915,6 @@ class FusionMethod(OODMethod):
             ### Añadir posibles cajas desconocidas a las predicciones ###
             if self.enhanced_unk_localization:
                 if CUSTOM_HYP.unk.USE_XAI:
-                    # TODO: Aqui pruebo lo de la explicabilidad, que tiene que sacar un mapa de valores por imagen, siendo cada mapa una imagen de 80x80
-                    #   con los valores de la importancia de cada pixel, que luego se restaran al saliency map correspondiente, escalando los valores al rango
-                    #   del saliency map
-                    # Crear carpeta
-                    # directory_name = f'{now}_{self.name}'
-                    # imgs_folder_path = folder_path / directory_name
-                    # imgs_folder_path.mkdir(exist_ok=True)
                     delattr(model.model, 'which_layers_to_extract')
                     delattr(model.model, 'extraction_mode')
                     # Heatmaps in shape (M, H, W), M being the batch size an in form of a tensor in cpu
@@ -3044,11 +2941,6 @@ class FusionMethod(OODMethod):
                         #processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
                     configure_extra_output_of_the_model(model, self)
                     
-                    # delattr(model.model, 'which_layers_to_extract')
-                    # delattr(model.model, 'extraction_mode')
-                    # expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
-                    # processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
-                    # configure_extra_output_of_the_model(model, self)
                 else:
                     processed_heatmaps = None
                 if CUSTOM_HYP.unk.RANK_BOXES:
