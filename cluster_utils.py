@@ -24,7 +24,8 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         metric: str,
         perf_score_metric: str,
         string_for_visualization: str,
-        logger: Logger
+        logger: Logger,
+        visualize: Optional[bool] = False
     ) -> np.ndarray:
     assert cluster_method in AVAILABLE_CLUSTERING_METHODS, f"Invalid clustering method: {cluster_method}"
     if cluster_method == 'one':
@@ -34,14 +35,21 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
     elif cluster_method == 'DBSCAN':
         cluster_class = DBSCAN
         param_to_eval = 'eps'
-        if metric == 'l1':
-            eps = np.linspace(10, 100, 100)
-        elif metric == 'l2':
-            eps = np.linspace(0.1, 10, 100)
-        elif metric == 'cosine':
-            eps = np.linspace(0.001, 0.1, 100)
-        else:
-            raise ValueError('')
+        # if metric == 'l1':
+        #     eps = np.linspace(10, 100, 100)
+        # elif metric == 'l2':
+        #     eps = np.linspace(0.1, 10, 100)
+        # elif metric == 'cosine':
+        #     eps = np.linspace(0.001, 0.1, 100)
+        # else:
+        #     raise ValueError('')
+        a00 = np.linspace(0.0001, 0.001, 100)
+        a0 = np.linspace(0.001, 0.01, 100)
+        a = np.linspace(0.01, 0.1, 100)
+        b = np.linspace(0.1, 1, 100)
+        c = np.linspace(1, 10, 100)
+        d = np.linspace(10, 100, 100)
+        eps = np.concatenate((a00,a0,a,b,c,d))
         params = {
             'eps': eps,
             'min_samples': [MIN_SAMPLES],
@@ -62,8 +70,8 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         cluster_class = HDBSCAN
         param_to_eval = 'min_cluster_size'
         params = {
-            'min_cluster_size': list(range(5,105, 5)),
-            'min_samples': [MIN_SAMPLES],
+            'min_cluster_size': list(range(10,50, 10)),
+            #'min_samples': [MIN_SAMPLES],
             'metric': [metric],
         }
         # params = optimize_hdbscan(feature_maps, logger, metric)
@@ -73,11 +81,11 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         param_to_eval = 'n_clusters'
         params = {
             'n_clusters': RANGE_OF_CLUSTERS,
-            # 'metric': [metric],
-            # 'linkage': ['complete']
+            'metric': [metric],
+            'linkage': ['complete']
             # Or
-            'metric': ['euclidean'],
-            'linkage': ['ward']
+            # 'metric': ['euclidean'],
+            # 'linkage': ['ward']
         }
         # params = optimize_agglomerative_clustering(feature_maps, logger, metric)
         # return AgglomerativeClustering(**params).fit_predict(feature_maps)
@@ -86,7 +94,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         param_to_eval = 'threshold'
         # Params: threshold=0.5, branching_factor=50, n_clusters=3, compute_labels=True, copy=True
         params = {
-            'threshold': np.linspace(0.1, 10, 50),
+            'threshold': np.linspace(0.1, 5, 100),
             'branching_factor': [50],
             'n_clusters': [None],
             'compute_labels': [True],
@@ -94,9 +102,11 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
     elif cluster_method == 'MeanShift':
         cluster_class = MeanShift
         param_to_eval = 'bandwidth'
+        cluster_all = False if CUSTOM_HYP.clusters.REMOVE_ORPHANS else True
         params = {
-            'bandwidth': [None, 1],
-            'cluster_all': [False],
+            'bandwidth': [None],
+            #'bandwidth': np.linspace(0.5, 4.25, 20),
+            'cluster_all': [cluster_all],
         }
 
     elif cluster_method == 'GMM':
@@ -128,7 +138,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
     else:
         raise ValueError(f"Invalid clustering method: {cluster_method}")
     
-    best_params = search_for_best_param(
+    best_params, clustering_performance_scores = search_for_best_param(
         feature_maps=feature_maps,
         cluster_class=cluster_class,
         params=params,
@@ -136,19 +146,19 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         perf_score_metric=perf_score_metric,
         string_for_visualization=string_for_visualization,
         metric=metric,
-        logger=logger
+        logger=logger,
+        visualize=visualize,
+        cluster_method=cluster_method,
     )
 
-    cluster_labels = cluster_class(**best_params).fit_predict(feature_maps)
-
-    if VISUALIZE:
-        # Plot histogram
-        plt.hist(cluster_labels, bins=len(set(cluster_labels)))
-        plt.xlabel('Cluster')
-        plt.ylabel('Number of samples')
-        plt.title('Cluster distribution')
-        plt.savefig(f'{string_for_visualization}_cluster_distribution.png')
-        plt.close()
+    if (np.array(clustering_performance_scores) == -1).all():
+        try:
+            logger.warning(f"{string_for_visualization.split('/')[-1]} -> All configurations resulted in a single cluster. Assigning all samples to the same cluster.")
+        except Exception as e:
+            logger.warning(f"All configurations resulted in a single cluster. Assigning all samples to the same cluster.")
+        cluster_labels = np.zeros(len(feature_maps))
+    else:
+        cluster_labels = cluster_class(**best_params).fit_predict(feature_maps)
 
     return cluster_labels
     
@@ -180,6 +190,7 @@ def compute_score_for_all_possible_configurations(
     param_configs = []
     # Generate all combinations of parameters
     keys, values = zip(*parameters_to_search.items())
+    total_number_of_samples = len(feature_maps)
     for param_combination in product(*values):
         params = dict(zip(keys, param_combination))
         logger.debug(f"Testing parameters: {params}")
@@ -190,8 +201,11 @@ def compute_score_for_all_possible_configurations(
             #print(set(cluster_labels))
             # Check if the clustering was successful (i.e., more than one cluster)
 
-            # Check if there are orphan samples
-            if len(set(cluster_labels)) > 1:
+            ### Check if there is at least 2 clusters and no more than n_samples-1
+            if total_number_of_samples-1 > len(set(cluster_labels)) > 1:
+
+                ### Check if there are orphan samples ###
+                total_number_of_orphan_samples = 0
                 if -1 in set(cluster_labels) and CUSTOM_HYP.clusters.REMOVE_ORPHANS:
                     logger.debug("Some samples were not assigned to any cluster (label = -1).")
                     
@@ -205,17 +219,29 @@ def compute_score_for_all_possible_configurations(
                 else:  # No orphan samples
                     feature_maps_one_run = feature_maps
 
-                # Compute performance score and append it to the list
-                if perf_score_metric == 'silhouette':
-                    score = silhouette_score(feature_maps_one_run, cluster_labels, metric=metric)
-                    logger.debug(f"Silhouette score: {score}")
-                elif perf_score_metric == 'calinski_harabasz':
-                    score = calinski_harabasz_score(feature_maps_one_run, cluster_labels, metric=metric)
-                    logger.debug(f"Calinski-Harabasz score: {score}")
+                ### Check that at least each cluster has MIN_SAMPLES samples, except for orphans (-1) which are not counted
+                unique_labels, counts = np.unique(cluster_labels, return_counts=True)
+                for label, count in zip(unique_labels, counts):
+                    if count < MIN_SAMPLES and label != -1:
+                        raise ValueError(f"Cluster {label} has less than {MIN_SAMPLES} samples.")
+
+                ### Compute performance score and append it to the list
+                if total_number_of_samples-1 > len(set(cluster_labels)) > 1:
+                    if perf_score_metric == 'silhouette':
+                        score = silhouette_score(feature_maps_one_run, cluster_labels, metric=metric)
+                        logger.debug(f"Silhouette score: {score}")
+                    elif perf_score_metric == 'calinski_harabasz':
+                        score = calinski_harabasz_score(feature_maps_one_run, cluster_labels)
+                        logger.debug(f"Calinski-Harabasz score: {score}")
+                    else:
+                        raise ValueError(f"Invalid performance score metric: {perf_score_metric}")
+                    if CUSTOM_HYP.clusters.WEIGHT_SCORE_WITH_PERCENT_ORPHANS:
+                        score = score * (1 - total_number_of_orphan_samples / total_number_of_samples)
+                    clustering_performance_scores.append(score)
+                    param_configs.append(params)
                 else:
-                    raise ValueError(f"Invalid performance score metric: {perf_score_metric}")
-                clustering_performance_scores.append(score)
-                param_configs.append(params)
+                    clustering_performance_scores.append(defalut_score)
+                    param_configs.append(params)
             
             # If there is only one cluster, assign the default score to the configuration
             else:
@@ -249,6 +275,8 @@ def search_for_best_param(
         string_for_visualization: str,
         metric: str,
         logger: Logger,
+        visualize: Optional[bool] = False,
+        cluster_method: Optional[str] = ''
     ) -> dict:
 
     # Compute silhouette scores for all possible configurations
@@ -259,20 +287,20 @@ def search_for_best_param(
         param_to_eval,
         perf_score_metric,
         metric,
-        logger
+        logger,
     )
 
-    if VISUALIZE:
+    if VISUALIZE or visualize:
         #plot_scores(clustering_performance_scores, params, param_to_eval, f"{perf_score_metric}_scores.png")
         plot_scores(
             clustering_performance_scores=clustering_performance_scores,
             params=params,
             parameter_name=param_to_eval,
             clustering_perf_metric=perf_score_metric,
-            filename=f"{string_for_visualization}_cluster_{perf_score_metric}_scores.png"
+            filename=f"{string_for_visualization}_{cluster_method}_{perf_score_metric}_scores.png"
         )
 
     # Select best parameters
     best_param_config = param_configs[np.argmax(clustering_performance_scores)]
     logger.info(f"Best parameters: {best_param_config}")
-    return best_param_config
+    return best_param_config, clustering_performance_scores

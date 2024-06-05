@@ -43,7 +43,9 @@ PREDICTIONS_RELATED_OPTIONS = [  # Valid predictions = correctly predicted bboxe
 IND_INFO_CREATION_OPTIONS = TARGETS_RELATED_OPTIONS + PREDICTIONS_RELATED_OPTIONS
 
 ### Benchmarks ###
-COMMON_COLUMNS = ['Method', 'Conf_threshold', 'tpr_thr', 'cluster_method']
+COMMON_COLUMNS = ['Method', 'conf_thr_train', 'conf_thr_test', 'tpr_thr', 'cluster_method', 'mean_n_clus', 'std_n_clus',
+                  #'mean_num_samples_per_clus', 'std_num_samples_per_clus',
+                  'fusion_strat']
 VOC_TEST_COLUMN = ['mAP']
 COCO_OOD_COLUMNS = ['U-AP_(COOD)', 'U-F1_(COOD)', 'U-PRE_(COOD)', 'U-REC_(COOD)']
 COCO_MIX_COLUMNS = ['mAP', 'U-AP_(CMIX)', 'U-F1_(CMIX)', 'U-PRE_(CMIX)', 'U-REC_(CMIX)','A-OSE', 'WI-08']
@@ -54,9 +56,10 @@ AVAILABLE_BENCHMARKS = ['best_methods', 'conf_thr_test', 'clusters', 'logits_met
 BENCHMARKS = {
     'best_methods': OOD_METHOD_CHOICES,
     'conf_thr_test': [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001],
-    'cluster_methods': ['one', 'DBSCAN', 'KMeans', 'HDBSCAN', 'AgglomerativeClustering', 'Birch', 'MeanShift'],
+    'cluster_methods': ['one', 'DBSCAN', 'KMeans', 'HDBSCAN', 'AgglomerativeClustering', 'Birch'],
     'cluster_perf_metric': AVAILABLE_CLUSTER_OPTIMIZATION_METRICS,
     'logits_methods': LOGITS_METHODS,
+    'fusion_strategies': ['and', 'or', 'score']
 }
 # Benchmark configurations
 # CONF_THR_TEST_BENCHMARK = [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001]

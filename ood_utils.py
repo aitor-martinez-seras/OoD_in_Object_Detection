@@ -695,7 +695,23 @@ class OODMethod(ABC):
             number_of_images_saved += len(data['im_file'])
 
         # All predictions collected, now compute metrics
-        results_dict = compute_metrics(all_preds, all_targets, class_names, known_classes, logger)
+        try:
+            results_dict = compute_metrics(all_preds, all_targets, class_names, known_classes, logger)
+        except Exception as e:
+            logger.error("*********************************************")
+            logger.error("")
+            logger.error(f"Error computing metrics: {e}")
+            logger.error("")
+            logger.error("*********************************************")
+            results_dict = {
+                'mAP': 0,
+                'U-AP': 0,
+                'U-F1': 0,
+                'U-PRE': 0,
+                'U-REC': 0,
+                'A-OSE': 0,
+                'WI-08': 0,   
+            }
 
         # Count the number of non-unknown instances and the number of unknown instances
         number_of_known_boxes = 0 
@@ -724,7 +740,7 @@ class OODMethod(ABC):
             # we need to get the lower bound, the (1-tpr)*100%
             used_tpr = (1 - tpr)*100
 
-        sufficient_samples = CUSTOM_HYP.SUFFICIENT_NUM_SAMPLES
+        min_number_of_samples = CUSTOM_HYP.MIN_NUMBER_OF_SAMPLES_FOR_THR
         good_number_of_samples = CUSTOM_HYP.GOOD_NUM_SAMPLES
 
         # One threshold per class
@@ -737,26 +753,26 @@ class OODMethod(ABC):
                 thresholds = [[[] for _ in range(3)] for _ in range(len(ind_scores))]
                 for idx_cls, ind_scores_one_cls in enumerate(ind_scores):
                     for idx_stride, ind_scores_one_cls_one_stride in enumerate(ind_scores_one_cls):
-                        if len(ind_scores_one_cls_one_stride) > sufficient_samples:
+                        if len(ind_scores_one_cls_one_stride) > min_number_of_samples:
                             thresholds[idx_cls][idx_stride] = float(np.percentile(ind_scores_one_cls_one_stride, used_tpr, method='lower'))
                             if len(ind_scores_one_cls_one_stride) < good_number_of_samples:
                                 logger.warning(f"Class {idx_cls:03}, Stride {idx_stride}: has {len(ind_scores_one_cls_one_stride)} samples. The threshold may not be accurate")
                         else:
                             if idx_cls < 20:
-                                logger.warning(f'Class {idx_cls:03}, Stride {idx_stride} -> Has less than {sufficient_samples} samples. No threshold is generated')
+                                logger.warning(f'Class {idx_cls:03}, Stride {idx_stride} -> Has less than {min_number_of_samples} samples. No threshold is generated')
             
             # Same threshold for all strides
             else:
                 # Per class with no stride differentiation
                 thresholds = [0 for _ in range(len(ind_scores))]
                 for idx_cls, cl_scores in enumerate(ind_scores):
-                    if len(cl_scores) > sufficient_samples:
+                    if len(cl_scores) > min_number_of_samples:
                         thresholds[idx_cls] = float(np.percentile(cl_scores, used_tpr, method='lower'))
                         if len(cl_scores) < good_number_of_samples:
                             logger.warning(f"Class {idx_cls}: {len(cl_scores)} samples. The threshold may not be accurate")
                     else:
                         if idx_cls < 20:
-                            logger.warning(f"Class {idx_cls} has less than {sufficient_samples} samples. No threshold is generated")
+                            logger.warning(f"Class {idx_cls} has less than {min_number_of_samples} samples. No threshold is generated")
 
         # One threshold for all classes
         else:
@@ -1412,7 +1428,10 @@ class LogitsMethod(OODMethod):
             #     print("Score is equal to the threshold")
             #     return 0
             
-            return a * score + b
+            indness = a * score + b
+            if CUSTOM_HYP.fusion.CLIP_FUSION_SCORES:
+                return max(-1, min(indness, 1))
+            return indness
         
         else:
             # TODO: Puede haber varias opciones mas
@@ -1425,9 +1444,15 @@ class LogitsMethod(OODMethod):
 
         # Check that the function is correct by plotting it 
         # import matplotlib.pyplot as plt
-        # x = np.linspace(0, self.thresholds[cls_idx], 100)
-        # y = a * x + b
-        # plt.plot(x, y)
+        # x = np.linspace(self.min_score[cls_idx], self.max_score[cls_idx], 100)
+        # a = 1 / (self.max_score[cls_idx] - self.thresholds[cls_idx])
+        # b = - self.thresholds[cls_idx] / (self.max_score[cls_idx] - self.thresholds[cls_idx])
+        # y1 = a * x + b
+        # plt.plot(x, y1, color='red')
+        # a = - 1 / (self.min_score[cls_idx] - self.thresholds[cls_idx])
+        # b = self.thresholds[cls_idx] / (self.min_score[cls_idx] - self.thresholds[cls_idx])
+        # y2 = a * x + b
+        # plt.plot(x, y2, color='blue')
         # # Plot the grid
         # plt.grid(axis='both', linestyle='--', alpha=0.5)
         # plt.savefig('AAA_indness_function.png')
@@ -1702,7 +1727,7 @@ class DistanceMethod(OODMethod):
                             self.activations_transformation(ftmap)
                         )[0]
 
-                    ood_decision.append(self.compute_indness(distance, cls_idx))
+                    ood_decision[idx_img].append(self.compute_indness(distance, cls_idx, stride_idx))
 
 
     def compute_indness(self, score: float, cls_idx: int, stride_idx: int) -> float:
@@ -1729,14 +1754,31 @@ class DistanceMethod(OODMethod):
                     print("Score is equal to the threshold")
                     a = 0
                     b = 0
-                
-                return a * score + b
 
             else:
                 raise NotImplementedError("Not implemented yet")
 
-        
-        return a * score + b
+        indness = a * score + b
+        if CUSTOM_HYP.fusion.CLIP_FUSION_SCORES:
+            return max(-1, min(indness, 1))
+        return indness
+
+        # Check that the function is correct by plotting it 
+        # import matplotlib.pyplot as plt
+        # x = np.linspace(self.min_dist[cls_idx][stride_idx], self.max_dist[cls_idx][stride_idx], 100)
+        # a = -1 / (self.max_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+        # b = self.thresholds[cls_idx][stride_idx] / (self.max_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+        # y1 = a * x + b
+        # plt.plot(x, y1, color='red')
+        # a = 1 / (self.min_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+        # b = -self.thresholds[cls_idx][stride_idx] / (self.min_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+        # y2 = a * x + b
+        # plt.plot(x, y2, color='blue')
+        # # Plot the grid
+        # plt.grid(axis='both', linestyle='--', alpha=0.5)
+        # plt.savefig('AAA_indness_function.png')
+        # plt.close()
+
         # else:
         #     # TODO: Puede haber varias opciones mas
         #     #   1. Una funcion desde el maximo score de InDness (logit=1) hasta el 0 (donde este el thr) y que la parte de OODness
@@ -2285,7 +2327,7 @@ class DistanceMethod(OODMethod):
             #logger.info(f'Class {idx_cls:03} of {len(ind_tensors)}')
             for idx_stride, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
                 
-                if len(ftmaps_one_cls_one_stride) > 1:
+                if len(ftmaps_one_cls_one_stride) > CUSTOM_HYP.clusters.MIN_SAMPLES:
                     ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride)
                     #clusters_per_class_and_stride[idx_cls][idx_stride] = self.agg_method(ftmaps_one_cls_one_stride, axis=0)
                     clusters_per_class_and_stride[idx_cls][idx_stride] = self.agg_method(ftmaps_one_cls_one_stride, axis=0)[None, :]
@@ -2313,14 +2355,17 @@ class DistanceMethod(OODMethod):
 
         for idx_cls, ftmaps_one_cls in enumerate(ind_tensors):
             #logger.info(f'Class {idx_cls:03} of {len(ind_tensors)}')
-            cluster_indices_one_class = []
+            # Log when every 25% is completed
+            if (idx_cls+1) % (20 // 4) == 0:
+                logger.info(f'*** {idx_cls+1}/20 classes done ***')
+            cluster_labels_one_class = []
             for idx_stride, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
                 
-                if len(ftmaps_one_cls_one_stride) > 1:
+                if len(ftmaps_one_cls_one_stride) > CUSTOM_HYP.clusters.MIN_SAMPLES:
                     ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride)
                     # 1. Find the optimal number of clusters and obtain the labels
                     if CUSTOM_HYP.clusters.VISUALIZE:
-                        string_for_visualization = f'class{idx_cls:03}_stride{idx_stride}'
+                        string_for_visualization = f'{self.name}_class{idx_cls:03}_stride{idx_stride}'
                         string_for_visualization = (folder_for_cluster_scores / string_for_visualization).as_posix()
                     else:
                         string_for_visualization = ''
@@ -2331,11 +2376,12 @@ class DistanceMethod(OODMethod):
                         self.cluster_optimization_metric,
                         string_for_visualization,
                         logger,
+                        visualize=CUSTOM_HYP.clusters.VISUALIZE,
                     )
                     
                     # Obtain the indices of the clusters
                     cluster_indices = set(cluster_labels)
-                    cluster_indices_one_class.append(cluster_indices)
+                    cluster_labels_one_class.append(cluster_labels)
 
                     # 2. Aggregate the samples of each cluster using the agg method
                     clusters_centroids = []
@@ -2350,18 +2396,20 @@ class DistanceMethod(OODMethod):
                     if idx_cls < 20:
                         logger.warning(f'SKIPPING Class {idx_cls:03}, Stride {idx_stride} -> NO SAMPLES')
                     clusters_per_class_and_stride[idx_cls][idx_stride] = np.empty(0)
-                    cluster_indices_one_class.append([])
+                    cluster_labels_one_class.append([])
 
             if CUSTOM_HYP.clusters.VISUALIZE:
                 fig, ax = plt.subplots(1, 3, figsize=(15, 5))
-                fig.suptitle(f'Class {idx_cls:03}')
-                for _i, cl_lbl in enumerate(cluster_indices_one_class):
+                #fig.suptitle(f'Class {idx_cls:03}')
+                class_has_at_least_one_stride_with_clusters = False
+                for _i, cl_lbl in enumerate(cluster_labels_one_class):
                     # Count the number of samples per cluster
                     cluster_counts = Counter(cl_lbl)
                     # Extracting cluster indices and their respective counts
                     one_stride_labels = list(cluster_counts.keys())
                     one_stride_counts = list(cluster_counts.values())
                     if len(cl_lbl) > 0:
+                        class_has_at_least_one_stride_with_clusters = True
                         bars = ax[_i].bar(one_stride_labels, one_stride_counts, color='skyblue')
                         ax[_i].set_title(f'Class {idx_cls:03} - Stride {_i}')
                         ax[_i].set_xlabel('Cluster index')
@@ -2372,12 +2420,16 @@ class DistanceMethod(OODMethod):
                         for bar in bars:
                             yval = bar.get_height()
                             ax[_i].text(bar.get_x() + bar.get_width() / 2, yval + 1, int(yval), ha='center', va='bottom')
-                plt.tight_layout()
-                plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{self.cluster_optimization_metric}.png')
-                # plt.hist(cluster_labels, bins=len(cluster_indices))
-                # plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{idx_stride}_{self.cluster_optimization_metric}.png')
-                # plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{idx_stride}_{self.cluster_optimization_metric}.png')
-                plt.close()
+
+                if class_has_at_least_one_stride_with_clusters:
+                    plt.tight_layout()
+                    plt.savefig(folder_for_hist / f'histogram_{self.name}_{self.cluster_method}_{idx_cls:03}_{self.cluster_optimization_metric}.png')
+                    # plt.hist(cluster_labels, bins=len(cluster_indices))
+                    # plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{idx_stride}_{self.cluster_optimization_metric}.png')
+                    # plt.savefig(folder_for_hist / f'histogram_{self.cluster_method}_{idx_cls:03}_{idx_stride}_{self.cluster_optimization_metric}.png')
+                    plt.close()
+                else:
+                    plt.close()
 
     def activations_transformation(self, activations: np.array) -> np.array:
         """
@@ -2927,6 +2979,34 @@ class FusionMethod(OODMethod):
 
             ### Fuse the results of the logits and distance methods ###
             ood_decision = self.fuse_ood_decisions(ood_decision_logits, ood_decision_distance)
+
+            # for _i, dec in enumerate(ood_decision):
+            #     one_img_dec_log = np.array(ood_decision_logits[_i])
+            #     one_img_dec_dist = np.array(ood_decision_distance[_i])
+            #     sum_dec = one_img_dec_log + one_img_dec_dist
+            #     print(one_img_dec_log, '-', one_img_dec_dist,'-', sum_dec,'-', dec)
+
+            # Plot the image _i=15 with the bboxes
+            # from torchvision.utils import draw_bounding_boxes
+            # import matplotlib.pyplot as plt
+            # _i = 13
+            # figures_fusion_folder = Path('./figures/fusion')
+            # figures_fusion_folder.mkdir(exist_ok=True, parents=False)
+            # for _i in range(len(results)):
+            #     _conf = results[_i].boxes.conf
+            #     confidences = []
+            #     for _i_conf, _c in enumerate(_conf):
+            #         _sc_log = ood_decision_logits[_i][_i_conf]
+            #         _sc_dist = ood_decision_distance[_i][_i_conf]
+            #         _cls = class_names[results[_i].boxes.cls[_i_conf].to(torch.int).item()]
+            #         _decision = 'ood' if ood_decision[_i][_i_conf] < 0 else 'ind'
+            #         confidences.append(f"{_c.item():.2f}-{_cls}\n{_decision}\n{_sc_log:.2f}\n{_sc_dist:.2f}")
+            #     # _conf = [f'{_c.item():.2f}' for _c in _conf]  # Se podria poner los dos scores
+            #     img = draw_bounding_boxes(imgs[_i], results[_i].boxes.xyxy, confidences)
+            #     plt.imshow(img.cpu().permute(1, 2, 0).numpy())
+            #     plt.tight_layout()
+            #     plt.savefig(figures_fusion_folder / f'{(number_of_images_saved + _i):03}.png', dpi=300)
+            #     plt.close()
 
             ### Añadir posibles cajas desconocidas a las predicciones ###
             if self.enhanced_unk_localization:

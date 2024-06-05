@@ -4,6 +4,10 @@ from typing import List
 
 @dataclass
 class FusionParams:
+    
+    # Score fusion strategy
+    CLIP_FUSION_SCORES: bool = True  # If True, the fusion scores will be clipped to the range [0, 1]
+
     LOGITS_USE_PIECEWISE_FUNCTION: bool = True  # If True, the piecewise function will be used to fuse the oodness scores
 
     DISTANCE_USE_FROM_ZERO_TO_THR: bool = False  # If True, the distance from zero to the threshold will be used to fuse the oodness scores
@@ -12,13 +16,15 @@ class FusionParams:
     # Assert only one of the two methods of distance is used
     assert not (DISTANCE_USE_FROM_ZERO_TO_THR and DISTANCE_USE_IN_DISTRIBUTION_TO_DEFINE_LIMITS), "Only one of the two distance methods can be used"
 
+
 @dataclass
 class ClustersParams:
-    MIN_SAMPLES: int = 10
+    MIN_SAMPLES: int = 5  # Should be equal to the MIN_NUMBER_OF_SAMPLES_FOR_THR
     RANGE_OF_CLUSTERS: List[int] = field(default_factory=lambda: list(range(2, 9)))
     # Clusters (orphans = samples whose label is -1)
-    REMOVE_ORPHANS: bool = False  # If True, orphans will not be counted as a cluster
-    MAX_PERCENT_OF_ORPHANS: float = 0.1
+    REMOVE_ORPHANS: bool = True  # If True, orphans will not be counted as a cluster
+    WEIGHT_SCORE_WITH_PERCENT_ORPHANS: bool = True  # If True, the score will be weighted by the percentage of orphans in the cluster
+    MAX_PERCENT_OF_ORPHANS: float = 0.95  # The maximum percentage of orphans per class and stride
     VISUALIZE: bool = False  # This is activated from ood_evaluation
 
 
@@ -118,8 +124,8 @@ class Hyperparams:
     IOU_THRESHOLD: float = 0.5
 
     # For thresholds of the OOD methods
-    GOOD_NUM_SAMPLES: int = 50
-    SUFFICIENT_NUM_SAMPLES: int = 10
+    GOOD_NUM_SAMPLES: int = 25
+    MIN_NUMBER_OF_SAMPLES_FOR_THR: int = 5
     
     # For the clustering of distance methods
     clusters: ClustersParams = ClustersParams()   

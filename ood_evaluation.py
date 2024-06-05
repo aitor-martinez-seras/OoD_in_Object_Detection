@@ -31,7 +31,7 @@ class SimpleArgumentParser(Tap):
     ood_method: str  # OOD detection method to use. If it is a fusion method, it must be passed as 'fusion-logits_method-distance_method'.
     visualize_oods: bool = False  # visualize the OoD detection
     compute_metrics: bool = False  # compute the metrics
-    benchmark: Literal['', 'best_methods', 'conf_thr_test', 'cluster_methods', 'logits_methods'] = ''  # Benchmark to run
+    benchmark: str = ''  # Benchmark to run
     # Visualization options
     visualize_clusters: bool = False  # visualize the clusters
     # Model options
@@ -104,15 +104,19 @@ class SimpleArgumentParser(Tap):
                 raise ValueError("You must select a valid OOD method")
         
         # Check benchmarks
-        if not self.visualize_oods and not self.compute_metrics and not self.benchmark:
-            raise ValueError("You must pass either visualize_oods or compute_metrics or define a benchmark")
-        
-        if self.benchmark and not len(self.benchmark_datasets) > 0:
-            raise ValueError("You must pass benchmark_datasets to run a benchmark")
-        
-        if self.benchmark == 'cluster_methods':
-            if self.ood_method not in DISTANCE_METHODS:
-                raise ValueError("You must select a distance method to run this benchmark")
+        if self.benchmark:
+            if self.benchmark not in BENCHMARKS.keys():
+                raise ValueError("You must select a valid benchmark")
+
+            if not self.visualize_oods and not self.compute_metrics and not self.benchmark:
+                raise ValueError("You must pass either visualize_oods or compute_metrics or define a benchmark")
+            
+            if self.benchmark and not len(self.benchmark_datasets) > 0:
+                raise ValueError("You must pass benchmark_datasets to run a benchmark")
+            
+            if self.benchmark == 'cluster_methods':
+                if self.ood_method not in DISTANCE_METHODS:
+                    raise ValueError("You must select a distance method to run this benchmark")
             
         if self.visualize_clusters:
             print('-- Visualizing clusters activated --')
@@ -559,9 +563,16 @@ def main(args: SimpleArgumentParser):
         global_start_time = time.perf_counter()
 
         ### Benchmaks ###
+
+        #########
+        # Best methods benchmark
+        #########
         if args.benchmark == 'best_methods':
             raise NotImplementedError("Not implemented yet")
 
+        #########
+        # Confidence threshold test benchmark
+        #########
         elif args.benchmark == 'conf_thr_test':
             ## 1. Name results file
             if args.ood in DISTANCE_METHODS:
@@ -590,10 +601,15 @@ def main(args: SimpleArgumentParser):
                 ood_method.min_conf_threshold_test = conf_threshold
 
                 ## 3.2. Add info
+                mean_n_clusters, std_n_clusters = get_mean_and_std_n_clusters(ood_method)
                 results_one_run['Method'] = args.ood_method
-                results_one_run['Conf_threshold'] = conf_threshold
+                results_one_run['conf_thr_train'] = args.conf_thr_train
+                results_one_run['conf_thr_test'] = args.conf_thr_test
                 results_one_run["tpr_thr"] = args.tpr_thr
                 results_one_run["cluster_method"] = ood_method.cluster_method
+                results_one_run["mean_n_clus"] = mean_n_clusters
+                results_one_run["std_n_clus"] = std_n_clusters
+                results_one_run["fusion_strat"] = 'None'
 
                 ## 3.3. Run configuration for every dataset
                 for dataloader in ood_dataloaders:
@@ -614,8 +630,9 @@ def main(args: SimpleArgumentParser):
                 final_results_df.loc[len(final_results_df)] = results_one_run
                 print("-"*50, '\n')
 
-        ###
-        ##
+        #########
+        # Cluster methods benchmark
+        #########
         elif args.benchmark == 'cluster_methods':
             ## 1. Name results file
             results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}_{args.cluster_optimization_metric}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
@@ -646,10 +663,15 @@ def main(args: SimpleArgumentParser):
                 ood_method.thresholds = ood_method.generate_thresholds(ind_scores, tpr=args.tpr_thr, logger=logger)
                 
                 ## 3.2. Add info
+                mean_n_clusters, std_n_clusters = get_mean_and_std_n_clusters(ood_method)
                 results_one_run['Method'] = args.ood_method
-                results_one_run['Conf_threshold'] = args.conf_thr_test
+                results_one_run['conf_thr_train'] = args.conf_thr_train
+                results_one_run['conf_thr_test'] = args.conf_thr_test
                 results_one_run["tpr_thr"] = args.tpr_thr
                 results_one_run["cluster_method"] = ood_method.cluster_method
+                results_one_run["mean_n_clus"] = mean_n_clusters
+                results_one_run["std_n_clus"] = std_n_clusters
+                results_one_run["fusion_strat"] = 'None'
 
                 ## 3.3. Run configuration for every dataset
                 for dataloader in ood_dataloaders:
@@ -670,6 +692,9 @@ def main(args: SimpleArgumentParser):
                 final_results_df.loc[len(final_results_df)] = results_one_run
                 print("-"*50, '\n')
         
+        #########
+        # Logits methods benchmark
+        #########
         elif args.benchmark == 'logits_methods':
             ## 1. Name results file
             results_file_name = f'{NOW}_{args.benchmark}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
@@ -695,10 +720,15 @@ def main(args: SimpleArgumentParser):
                 execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
                 
                 ## 3.2. Add info
+                mean_n_clusters, std_n_clusters = get_mean_and_std_n_clusters(ood_method)
                 results_one_run['Method'] = args.ood_method
-                results_one_run['Conf_threshold'] = args.conf_thr_test
+                results_one_run['conf_thr_train'] = args.conf_thr_train
+                results_one_run['conf_thr_test'] = args.conf_thr_test
                 results_one_run["tpr_thr"] = args.tpr_thr
                 results_one_run["cluster_method"] = ood_method.cluster_method
+                results_one_run["mean_n_clus"] = mean_n_clusters
+                results_one_run["std_n_clus"] = std_n_clusters
+                results_one_run["fusion_strat"] = 'None'
 
                 ## 3.3. Run configuration for every dataset
                 for dataloader in ood_dataloaders:
@@ -718,6 +748,67 @@ def main(args: SimpleArgumentParser):
                 add_args_and_hyperparams_info(results_one_run, args, CUSTOM_HYP)
                 final_results_df.loc[len(final_results_df)] = results_one_run
                 print("-"*50, '\n')
+
+        #########
+        # Fusion strategies benchmark
+        #########
+        elif args.benchmark == 'fusion_strategies':
+            ## 1. Name results file
+            results_file_name = f"{NOW}_{args.benchmark}_{args.ood_method}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}"
+            FUSION_STRATS_TO_TEST = BENCHMARKS[args.benchmark]
+            logger.info(f"Running benchmark for methods {FUSION_STRATS_TO_TEST}")
+
+            ## 2. Load common assets for the benchmark if any
+            logger.info(f"First configure and train the OOD detection method")
+            # Load the OOD detection method
+            ood_method = select_ood_detection_method(args)
+            # Modify internal attributes of the model to obtain the desired outputs in the extra_item
+            configure_extra_output_of_the_model(model, ood_method)
+            execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
+            
+            ## 3. Run the benchmark
+            final_results_df = pd.DataFrame(columns=results_colums)
+            for strat in FUSION_STRATS_TO_TEST:
+                print("-"*50)
+                results_one_run = {}
+                ## 3.1. Modify what is going to be benchmarked
+                logger.info(f" *** Fusion strategy: {strat} ***")
+                # Change to the new strat
+                args.fusion_strategy = strat
+                ood_method.fusion_strategy = strat
+                
+                ## 3.2. Add info
+                mean_n_clusters, std_n_clusters = get_mean_and_std_n_clusters(ood_method.distance_method)
+                results_one_run['Method'] = args.ood_method
+                results_one_run['conf_thr_train'] = args.conf_thr_train
+                results_one_run['conf_thr_test'] = args.conf_thr_test
+                results_one_run["tpr_thr"] = args.tpr_thr
+                results_one_run["cluster_method"] = ood_method.distance_method.cluster_method
+                results_one_run["mean_n_clus"] = mean_n_clusters
+                results_one_run["std_n_clus"] = std_n_clusters
+                # results_one_run["mean_num_samples_per_clus"] = mean_num_samples_per_clus
+                # results_one_run["std_num_samples_per_clus"] = std_num_samples_per_clus
+                results_one_run["fusion_strat"] = args.fusion_strategy
+
+                ## 3.3. Run configuration for every dataset
+                for dataloader in ood_dataloaders:
+                    # Extract metrics
+                    results_one_run_one_dataset = run_eval(ood_method, model, device, dataloader, known_classes, logger)
+                    if coco_ood_dataloader == dataloader:
+                        dataset_name = COCO_OOD_NAME    
+                    elif coco_mixed_dataloader == dataloader:
+                        dataset_name = COCO_MIXED_NAME
+                    elif coco_owod_test_dataloader == dataloader:
+                        dataset_name = COCO_OWOD_TEST_NAME
+                    else:
+                        raise ValueError("Unknown dataset")
+                    fill_dict_with_results(results_one_run, results_one_run_one_dataset, dataset_name)
+                
+                ## 3.4. Collect results
+                add_args_and_hyperparams_info(results_one_run, args, CUSTOM_HYP)
+                final_results_df.loc[len(final_results_df)] = results_one_run
+                print("-"*50, '\n')
+
         else:
             raise ValueError(f"Unknown benchmark {args.benchmark}")
         
@@ -752,6 +843,24 @@ def add_args_and_hyperparams_info(results_dict: Dict[str, float], args: SimpleAr
     results_dict['Model'] = args.model_path if args.model_path else f'yolov8{args.model}.pt'
     results_dict['args'] = str(args)
     results_dict['custom_hyp'] = str(custom_hyp)
+
+def get_mean_and_std_n_clusters(ood_method: OODMethod) -> Tuple[float, float]:
+    if ood_method.is_distance_method:
+        if ood_method.per_class and ood_method.per_stride:
+            n_clusters_per_class_per_stride = []
+            for cluster_one_class in ood_method.clusters:
+                for cluster_one_class_one_stride in cluster_one_class:
+                    if len(cluster_one_class_one_stride) > 0:
+                        n_clusters_one_class_one_stride = len(cluster_one_class_one_stride)
+                        n_clusters_per_class_per_stride.append(n_clusters_one_class_one_stride)
+            # Num clusters
+            n_clusters_per_class_per_stride = np.array(n_clusters_per_class_per_stride)
+            mean_n_clusters = np.mean(n_clusters_per_class_per_stride)
+            std_n_clusters = np.std(n_clusters_per_class_per_stride)
+    else:
+        mean_n_clusters = 0
+        std_n_clusters = 0
+    return mean_n_clusters, std_n_clusters
 
 
 if __name__ == "__main__":
