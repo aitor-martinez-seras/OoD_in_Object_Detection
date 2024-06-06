@@ -13,7 +13,7 @@ To install the package:
 ├── datasets
 │   ├── coco
 │   └── TAO
-└── source_code_folder
+└── < source_code_folder >
     ├── datasets_utils
     ├── data_utils.py
     ├── examples
@@ -33,9 +33,13 @@ The code has been only tested on Linux and some of the code may not work, as som
 
 # Download datasets
 
-## TAO
+## OWOD (Open World Object Detection)
 
-Follow instructions inside ```datasets_utils/tao/instructions.md```
+Follow instructions in [datasets_utils/owod/instructions.md](datasets_utils/owod/instructions.md).
+
+## COCO OOD and COCO Mixed
+
+Follow instructions in [datasets_utils/coco_ood/instructions.md](datasets_utils/coco_ood/instructions.md).
 
 ### Dataset description
 
