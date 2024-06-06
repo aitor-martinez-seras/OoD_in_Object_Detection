@@ -13,7 +13,7 @@ import log
 from ultralytics import YOLO
 from ultralytics.yolo.data.build import InfiniteDataLoader
 
-from ood_utils import configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, MSP, Energy, ODIN, Sigmoid, \
+from ood_utils import configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, NoMethod, MSP, Energy, ODIN, Sigmoid, \
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride, \
     FusionMethod
 from data_utils import read_json, write_json, load_dataset_and_dataloader
@@ -44,13 +44,15 @@ class SimpleArgumentParser(Tap):
     logdir: str = 'logs'  # Where to log test info (small).
     name: str = 'prueba'  # Name of this run. Used for monitoring and checkpointing
     # Benchmarks
-    benchmark_datasets: List[str] = []  # Datasets to use for the benchmark. Options: 'coco_ood', 'coco_mixed', 'coco_owod'
+    benchmark_datasets: List[str] = []  # Datasets to use for the benchmark. Options: 'coco_ood', 'coco_mixed', 'owod'
     # Hyperparameters for YOLO
     conf_thr_train: float = 0.15  # Confidence threshold for the In-Distribution configuration
     conf_thr_test: float = 0.15  # Confidence threshold for the detections
     # Hyperparameters for the OOD detection
     tpr_thr: float = 0.95  # TPR threshold for the OoD detection
+    use_val_split_for_thresholds: bool = False  # Whether to use the validation split to generate the thresholds
     cluster_method: str = 'one'  # Clustering method to use for the distance methods
+    remove_orphans: bool = False  # Whether to remove orphans from the clusters
     cluster_optimization_metric: Literal['silhouette', 'calinski_harabasz'] = 'silhouette'  # Metric to use for the optimization of the clusters
     ind_info_creation_option: str = 'valid_preds_one_stride'  # How to create the in-distribution information for the distance methods
     enhanced_unk_localization: bool = False  # Whether to use enhanced unknown localization
@@ -122,6 +124,10 @@ class SimpleArgumentParser(Tap):
             print('-- Visualizing clusters activated --')
             CUSTOM_HYP.clusters.VISUALIZE = True
 
+        if self.remove_orphans:
+            print('-- Removing orphans activated --')
+            CUSTOM_HYP.clusters.REMOVE_ORPHANS = True
+
 
 
 def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMethod, DistanceMethod]:
@@ -156,6 +162,8 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
         args.ood_method = complete_name
         return FusionMethod(ood_method_logits, ood_method_distance, args.fusion_strategy, **common_kwargs)
 
+    if args.ood_method == 'NoMethod':
+        return NoMethod(per_class=True, per_stride=False, **common_kwargs)
     if args.ood_method == 'MSP':
         return MSP(per_class=True, per_stride=False, **common_kwargs)
     elif args.ood_method == 'Energy':
@@ -176,28 +184,31 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
         raise NotImplementedError("Not implemented yet")
 
 
-def define_activations_thresholds_and_clusters_paths(ood_method: OODMethod, model: YOLO, args: SimpleArgumentParser):
+def define_paths_of_activations_thresholds_and_clusters(ood_method: OODMethod, model: YOLO, args: SimpleArgumentParser):
     """
     Define the paths where the activations, thresholds and clusters will be stored.
     """
     clusters_path = None  # Only for distance methods
     activations_str =   f'{ood_method.which_internal_activations}_conf{ood_method.min_conf_threshold_train}_{model.ckpt["train_args"]["name"]}_activations'
+    activations_str_val =   f'{activations_str}_val'
     thresholds_str =    f'{ood_method.name}_conf{ood_method.min_conf_threshold_train}_{model.ckpt["train_args"]["name"]}_thresholds'
     if args.ood_method in DISTANCE_METHODS:
         clusters_str = f'{ood_method.name}_conf{ood_method.min_conf_threshold_train}_{model.ckpt["train_args"]["name"]}_clusters_{ood_method.cluster_method}_{ood_method.cluster_optimization_metric}'
         thresholds_str += f'_{ood_method.cluster_method}'
     if args.ood_method in TARGETS_RELATED_OPTIONS:
         activations_str += f'_{args.ind_info_creation_option}'
+        activations_str_val += f'_{args.ind_info_creation_option}'
         thresholds_str += f'_{args.ind_info_creation_option}'
         if args.ood_method in DISTANCE_METHODS:
             clusters_str += f'_{args.ind_info_creation_option}'
     
     activations_path = STORAGE_PATH / f'{activations_str}.pt'
+    activations_val_path = STORAGE_PATH / f'{activations_str_val}.pt'
     thresholds_path = STORAGE_PATH / f'{thresholds_str}.json'
     if args.ood_method in DISTANCE_METHODS:
         clusters_path = STORAGE_PATH / f'{clusters_str}.pt'
 
-    return activations_path, thresholds_path, clusters_path
+    return activations_path, thresholds_path, clusters_path, activations_val_path
 
 
 def load_or_generate_and_save_activations(activations_path: Path, ood_method: Union[LogitsMethod, DistanceMethod],
@@ -216,8 +227,56 @@ def load_or_generate_and_save_activations(activations_path: Path, ood_method: Un
     return ind_activations
 
 
+def obtain_ind_activations(ood_method: OODMethod, model: YOLO, device: str, in_loader: InfiniteDataLoader, activations_paths: Union[Path, List[Path]], logger: Logger, args: SimpleArgumentParser):
+    """
+    Load the in-distribution activations from disk if they exist. If not, generate them and save them.
+    """
+    # Parse the paths
+    if isinstance(activations_paths, Path):
+        activations_path = activations_paths
+    elif isinstance(activations_paths, List):
+        activations_path_logits, activations_path_distance = activations_paths 
+    else:
+        raise ValueError("Invalid number of activations paths")
+    
+    # Load activations
+    if args.load_ind_activations:
+        # Load in_distribution activations from disk
+        logger.info("Loading in-distribution activations...")
+        if args.ood_method.startswith('fusion'):  # For fusion methods
+            configure_extra_output_of_the_model(model, ood_method.logits_method)
+            ind_activations_logits = load_or_generate_and_save_activations(activations_path_logits, ood_method.logits_method, in_loader, model, device, logger)
+            configure_extra_output_of_the_model(model, ood_method.distance_method)
+            ind_activations_distance = load_or_generate_and_save_activations(activations_path_distance, ood_method.distance_method, in_loader, model, device, logger)
+            ind_activations = [ind_activations_logits, ind_activations_distance]
+        # For the rest of the methods
+        else:
+            ind_activations = load_or_generate_and_save_activations(activations_path, ood_method, in_loader, model, device, logger)
+
+    # Generate in_distribution activations to generate thresholds
+    else:
+        if args.ood_method.startswith('fusion'):  # For fusion methods
+            logger.info("Processing in-distribution data for BOTH fused methods...")
+            ind_activations = ood_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
+            torch.save(ind_activations[0], activations_path_logits, pickle_protocol=5)
+            torch.save(ind_activations[1], activations_path_distance, pickle_protocol=5)
+            logger.info("In-distribution data processed and saved")
+
+        # Rest of the methods
+        else:
+            logger.info("Processing in-distribution data...")
+            ind_activations = ood_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
+            logger.info("In-distribution data processed")
+            logger.info("Saving in-distribution activations...")
+            torch.save(ind_activations, activations_path, pickle_protocol=5)
+            logger.info(f"In-distribution activations succesfully saved in {activations_path}")
+
+    return ind_activations
+
+
+
 def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsMethod, DistanceMethod, FusionMethod], model: YOLO, device: str, 
-                                               in_loader: InfiniteDataLoader, logger: Logger, args: SimpleArgumentParser):
+                                               in_loader_train: InfiniteDataLoader, ind_dataloader_val: InfiniteDataLoader, logger: Logger, args: SimpleArgumentParser):
     """
     Execute the pipeline for the OOD evaluation. This includes the following steps:
     1. Extract activations from the in-distribution data
@@ -233,25 +292,33 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
     logger.info("Obtaining thresholds...")
     logger.flush()
 
+    # ALL method must use validation split in order no to collapse all the thresholds to 0
+    original_value_of_use_val_split = args.use_val_split_for_thresholds
+    if args.cluster_method == 'all' and ood_method.is_distance_method and not args.use_val_split_for_thresholds:
+        logger.warning(f"Setting use_val_split_for_thresholds to True as the OOD method is {args.cluster_method}")
+        args.use_val_split_for_thresholds = True
+
     if args.ood_method.startswith('fusion'):
-        activations_path, thresholds_path = [], []
+        activations_path_train, activations_path_val, thresholds_path = [], [], []
         complete_name = args.ood_method
         _, logits_method, distance_method = complete_name.split('-')
         args.ood_method = logits_method
-        activations_path_logits, thresholds_path_logits, _ = define_activations_thresholds_and_clusters_paths(ood_method.logits_method, model, args)
+        activations_path_logits_train, thresholds_path_logits, _, activations_path_logits_val = define_paths_of_activations_thresholds_and_clusters(ood_method.logits_method, model, args)
         args.ood_method = distance_method
-        activations_path_distance, thresholds_path_distance, clusters_path = define_activations_thresholds_and_clusters_paths(
+        activations_path_distance_train, thresholds_path_distance, clusters_path, activations_path_distance_val = define_paths_of_activations_thresholds_and_clusters(
             ood_method.distance_method, model, args
         )
-        activations_path.append(activations_path_logits)
-        activations_path.append(activations_path_distance)
+        activations_path_train.append(activations_path_logits_train)
+        activations_path_train.append(activations_path_distance_train)
+        activations_path_val.append(activations_path_logits_val)
+        activations_path_val.append(activations_path_distance_val)
         thresholds_path.append(thresholds_path_logits)
         thresholds_path.append(thresholds_path_distance)
         # Maintain original name
         args.ood_method = complete_name
         
     else:
-        activations_path, thresholds_path, clusters_path = define_activations_thresholds_and_clusters_paths(ood_method, model, args)
+        activations_path_train, thresholds_path, clusters_path, activations_path_val = define_paths_of_activations_thresholds_and_clusters(ood_method, model, args)
 
     # activations_str =   f'{ood_method.which_internal_activations}_conf{ood_method.min_conf_threshold_train}_{model.ckpt["train_args"]["name"]}_activations'
     # thresholds_str =    f'{ood_method.name}_conf{ood_method.min_conf_threshold_train}_{model.ckpt["train_args"]["name"]}_thresholds'
@@ -284,58 +351,65 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
     else:
         
         ### 1. Obtain activations ###
-        # Load activations for the thresholds
-        if args.load_ind_activations:
-            # Load in_distribution activations from disk
-            logger.info("Loading in-distribution activations...")
-            if args.ood_method.startswith('fusion'):  # For fusion methods
-                configure_extra_output_of_the_model(model, ood_method.logits_method)
-                ind_activations_logits = load_or_generate_and_save_activations(activations_path_logits, ood_method.logits_method, in_loader, model, device, logger)
-                configure_extra_output_of_the_model(model, ood_method.distance_method)
-                ind_activations_distance = load_or_generate_and_save_activations(activations_path_distance, ood_method.distance_method, in_loader, model, device, logger)
-                ind_activations = [ind_activations_logits, ind_activations_distance]
-            # For the rest of the methods
-            else:
-                ind_activations = load_or_generate_and_save_activations(activations_path, ood_method, in_loader, model, device, logger)
-
-            # if activations_path.exists():
-            #     ind_activations = torch.load(activations_path)
-            #     logger.info(f"In-distribution activations succesfully loaded from {activations_path}")
-            # else:
-            #     # Generate in_distribution activations to generate thresholds
-            #     logger.error(f"File {activations_path} does not exist. Generating in-distribution activations by iterating over the data...")
-            #     ind_activations = ood_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
-            #     logger.info("In-distribution data processed")
-            #     logger.info("Saving in-distribution activations...")
-            #     torch.save(ind_activations, activations_path, pickle_protocol=5)
-            #     logger.info(f"In-distribution activations succesfully saved in {activations_path}")
-
-        # Generate in_distribution activations to generate thresholds
+        ind_activations_train = obtain_ind_activations(ood_method, model, device, in_loader_train, activations_path_train, logger, args)
+        if args.use_val_split_for_thresholds:
+            ind_activations_val = obtain_ind_activations(ood_method, model, device, ind_dataloader_val, activations_path_val, logger, args)
         else:
-            if args.ood_method.startswith('fusion'):  # For fusion methods
-                logger.info("Processing in-distribution data for BOTH fused methods...")
-                ind_activations = ood_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
-                torch.save(ind_activations[0], activations_path_logits, pickle_protocol=5)
-                torch.save(ind_activations[1], activations_path_distance, pickle_protocol=5)
+            ind_activations_val = None
+        
+        # # Load activations for the thresholds
+        # if args.load_ind_activations:
+        #     # Load in_distribution activations from disk
+        #     logger.info("Loading in-distribution activations...")
+        #     if args.ood_method.startswith('fusion'):  # For fusion methods
+        #         configure_extra_output_of_the_model(model, ood_method.logits_method)
+        #         ind_activations_logits = load_or_generate_and_save_activations(activations_path_logits, ood_method.logits_method, in_loader, model, device, logger)
+        #         configure_extra_output_of_the_model(model, ood_method.distance_method)
+        #         ind_activations_distance = load_or_generate_and_save_activations(activations_path_distance, ood_method.distance_method, in_loader, model, device, logger)
+        #         ind_activations = [ind_activations_logits, ind_activations_distance]
+        #     # For the rest of the methods
+        #     else:
+                
+        #         ind_activations = load_or_generate_and_save_activations(activations_path, ood_method, in_loader, model, device, logger)
 
-                # configure_extra_output_of_the_model(model, ood_method.ood_method_logits)
-                # ind_activations_logits = ood_method.logits_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
-                # torch.save(ind_activations_logits, activations_path_logits, pickle_protocol=5)
-                # configure_extra_output_of_the_model(model, ood_method.ood_method_distance)
-                # ind_activations_distance = ood_method.distance_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
-                # torch.save(ind_activations_distance, activations_path_distance, pickle_protocol=5)                
-                # ind_activations = [ind_activations_logits, ind_activations_distance]
+        #     # if activations_path.exists():
+        #     #     ind_activations = torch.load(activations_path)
+        #     #     logger.info(f"In-distribution activations succesfully loaded from {activations_path}")
+        #     # else:
+        #     #     # Generate in_distribution activations to generate thresholds
+        #     #     logger.error(f"File {activations_path} does not exist. Generating in-distribution activations by iterating over the data...")
+        #     #     ind_activations = ood_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
+        #     #     logger.info("In-distribution data processed")
+        #     #     logger.info("Saving in-distribution activations...")
+        #     #     torch.save(ind_activations, activations_path, pickle_protocol=5)
+        #     #     logger.info(f"In-distribution activations succesfully saved in {activations_path}")
 
-                logger.info("In-distribution data processed and saved")
+        # # Generate in_distribution activations to generate thresholds
+        # else:
+        #     if args.ood_method.startswith('fusion'):  # For fusion methods
+        #         logger.info("Processing in-distribution data for BOTH fused methods...")
+        #         ind_activations = ood_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
+        #         torch.save(ind_activations[0], activations_path_logits, pickle_protocol=5)
+        #         torch.save(ind_activations[1], activations_path_distance, pickle_protocol=5)
 
-            # Rest of the methods
-            else:
-                logger.info("Processing in-distribution data...")
-                ind_activations = ood_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
-                logger.info("In-distribution data processed")
-                logger.info("Saving in-distribution activations...")
-                torch.save(ind_activations, activations_path, pickle_protocol=5)
-                logger.info(f"In-distribution activations succesfully saved in {activations_path}")
+        #         # configure_extra_output_of_the_model(model, ood_method.ood_method_logits)
+        #         # ind_activations_logits = ood_method.logits_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
+        #         # torch.save(ind_activations_logits, activations_path_logits, pickle_protocol=5)
+        #         # configure_extra_output_of_the_model(model, ood_method.ood_method_distance)
+        #         # ind_activations_distance = ood_method.distance_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
+        #         # torch.save(ind_activations_distance, activations_path_distance, pickle_protocol=5)                
+        #         # ind_activations = [ind_activations_logits, ind_activations_distance]
+
+        #         logger.info("In-distribution data processed and saved")
+
+        #     # Rest of the methods
+        #     else:
+        #         logger.info("Processing in-distribution data...")
+        #         ind_activations = ood_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
+        #         logger.info("In-distribution data processed")
+        #         logger.info("Saving in-distribution activations...")
+        #         torch.save(ind_activations, activations_path, pickle_protocol=5)
+        #         logger.info(f"In-distribution activations succesfully saved in {activations_path}")
 
         ### 2. Obtain scores ###
         # Distance methods need to have clusters representing the In-Distribution data and then compute the scores
@@ -350,7 +424,7 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
                     ood_method.clusters = torch.load(clusters_path)
                 else:
                     logger.error(f"File {clusters_path} does not exist. Generating clusters by using the activations...")
-                    ood_method.clusters = ood_method.generate_clusters(ind_activations, logger)
+                    ood_method.clusters = ood_method.generate_clusters(ind_activations_train, logger)
                     logger.info("Saving clusters...")
                     torch.save(ood_method.clusters, clusters_path, pickle_protocol=5)
                     logger.info(f"Clusters succesfully saved in {clusters_path}")
@@ -360,23 +434,32 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
             else:
                 # Generate in_distribution clusters to generate thresholds for OOD method
                 logger.info("Generating clusters...")
-                ood_method.clusters = ood_method.generate_clusters(ind_activations, logger)
+                ood_method.clusters = ood_method.generate_clusters(ind_activations_train, logger)
                 logger.info("Saving clusters...")
                 torch.save(ood_method.clusters, clusters_path, pickle_protocol=5)
 
             # Generate the scores that are necessary to create the thresholds by using the clusters and the activations
             logger.info("Generating in-distribution scores...")
-            ind_scores = ood_method.compute_scores_from_activations(ind_activations, logger)
+            if args.use_val_split_for_thresholds:
+                ind_scores = ood_method.compute_scores_from_activations(ind_activations_val, logger)
+            else:
+                ind_scores = ood_method.compute_scores_from_activations(ind_activations_train, logger)
 
             if hasattr(CUSTOM_HYP.unk, 'rank'):
                 if CUSTOM_HYP.unk.rank.USE_UNK_PROPOSALS_THR:
                     logger.info("Generating scores to evaluate UNK proposals...")
-                    scores_for_unk_prop = ood_method.compute_scores_from_activations_for_unk_proposals(ind_activations, logger)
+                    if args.use_val_split_for_thresholds:
+                        scores_for_unk_prop = ood_method.compute_scores_from_activations_for_unk_proposals(ind_activations_val, logger)
+                    else:
+                        scores_for_unk_prop = ood_method.compute_scores_from_activations_for_unk_proposals(ind_activations_train, logger)
                     logger.info("Saving UNK proposals...")
         
         # For the rest of the methods activations are the scores themselves
         else:
-            ind_scores = ood_method.compute_scores_from_activations(ind_activations, logger)
+            if args.use_val_split_for_thresholds:
+                ind_scores = ood_method.compute_scores_from_activations(ind_activations_val, logger)
+            else:
+                ind_scores = ood_method.compute_scores_from_activations(ind_activations_train, logger)
 
         ### 3. Obtain thresholds ###
         # Finally generate and save the thresholds
@@ -393,6 +476,10 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
             write_json(ood_method.thresholds[1], thresholds_path_distance)
         else:
             write_json(ood_method.thresholds, thresholds_path)
+
+    # Restore the original value for 'all' cluster method in case it was changed
+    if args.cluster_method == 'all' and ood_method.is_distance_method and original_value_of_use_val_split != args.use_val_split_for_thresholds:
+        args.use_val_split_for_thresholds = original_value_of_use_val_split
 
 
 def save_images_with_ood_detection(ood_method: OODMethod, model: YOLO, device: str, ood_loader: InfiniteDataLoader, logger: Logger):
@@ -467,6 +554,15 @@ def main(args: SimpleArgumentParser):
         workers=args.workers,
         owod_task=args.owod_task_ind
     )
+
+    ind_val_dataset, ind_val_dataloader = load_dataset_and_dataloader(
+        dataset_name=args.ind_dataset,
+        data_split='val',
+        batch_size=args.batch_size,
+        workers=args.workers,
+        owod_task=args.owod_task_ind
+    )
+
     # TODO: Si metemos otro dataset habra que hacer esto de forma mas general
     known_classes = [x for x in range(ind_dataset.number_of_classes)]
 
@@ -493,7 +589,7 @@ def main(args: SimpleArgumentParser):
         ### OOD evaluation ###
 
         # Main function that executes the pipeline for the OOD evaluation (explained inside the function)
-        execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
+        execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, ind_val_dataloader, logger, args)
 
         if args.visualize_oods:    
             # Save images with OoD detection (Green for In-Distribution, Red for Out-of-Distribution, Violet the Ground Truth)
@@ -589,7 +685,7 @@ def main(args: SimpleArgumentParser):
             # Modify internal attributes of the model to obtain the desired outputs in the extra_item
             configure_extra_output_of_the_model(model, ood_method)
             # Create all the info for the configuration of the OOD detection method
-            execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
+            execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, ind_val_dataloader, logger, args)
 
             ## 3. Run the benchmark
             final_results_df = pd.DataFrame(columns=results_colums)
@@ -646,8 +742,12 @@ def main(args: SimpleArgumentParser):
             # Modify internal attributes of the model to obtain the desired outputs in the extra_item
             configure_extra_output_of_the_model(model, ood_method)
             # Load the in-distribution activations
-            activations_path, _, _ = define_activations_thresholds_and_clusters_paths(ood_method, model, args)
-            ind_activations = load_or_generate_and_save_activations(activations_path, ood_method, ind_dataloader, model, device, logger)
+            activations_path_train, _, _, activations_path_val  = define_paths_of_activations_thresholds_and_clusters(ood_method, model, args)
+            ind_activations_train = obtain_ind_activations(ood_method, model, device, ind_dataloader, activations_path_train, logger, args)
+            if args.use_val_split_for_thresholds:
+                ind_activations_val = obtain_ind_activations(ood_method, model, device, ind_val_dataloader, activations_path_val, logger, args)
+            else:
+                ind_activations_val = None
                         
             ## 3. Run the benchmark
             final_results_df = pd.DataFrame(columns=results_colums)
@@ -658,8 +758,11 @@ def main(args: SimpleArgumentParser):
                 logger.info(f"*** Cluster method: {cluster_method_one_run} ***")
                 ood_method.cluster_method = cluster_method_one_run
                 # Create all the info for the configuration of the OOD detection method
-                ood_method.clusters = ood_method.generate_clusters(ind_activations, logger)
-                ind_scores = ood_method.compute_scores_from_activations(ind_activations, logger)
+                ood_method.clusters = ood_method.generate_clusters(ind_activations_train, logger)
+                if args.use_val_split_for_thresholds:
+                    ind_scores = ood_method.compute_scores_from_activations(ind_activations_val, logger)
+                else:
+                    ind_scores = ood_method.compute_scores_from_activations(ind_activations_train, logger)
                 ood_method.thresholds = ood_method.generate_thresholds(ind_scores, tpr=args.tpr_thr, logger=logger)
                 
                 ## 3.2. Add info
@@ -717,7 +820,7 @@ def main(args: SimpleArgumentParser):
                 # Modify internal attributes of the model to obtain the desired outputs in the extra_item
                 configure_extra_output_of_the_model(model, ood_method)
                 # Create all the info for the configuration of the OOD detection method
-                execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
+                execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader,  ind_val_dataloader, logger, args)
                 
                 ## 3.2. Add info
                 mean_n_clusters, std_n_clusters = get_mean_and_std_n_clusters(ood_method)
@@ -764,7 +867,7 @@ def main(args: SimpleArgumentParser):
             ood_method = select_ood_detection_method(args)
             # Modify internal attributes of the model to obtain the desired outputs in the extra_item
             configure_extra_output_of_the_model(model, ood_method)
-            execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, logger, args)
+            execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, ind_val_dataloader, logger, args)
             
             ## 3. Run the benchmark
             final_results_df = pd.DataFrame(columns=results_colums)

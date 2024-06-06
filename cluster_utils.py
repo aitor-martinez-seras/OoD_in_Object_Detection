@@ -13,9 +13,9 @@ import matplotlib.pyplot as plt
 from constants import AVAILABLE_CLUSTERING_METHODS
 from custom_hyperparams import CUSTOM_HYP
 
-VISUALIZE = CUSTOM_HYP.clusters.VISUALIZE
-MIN_SAMPLES = CUSTOM_HYP.clusters.MIN_SAMPLES
-RANGE_OF_CLUSTERS = CUSTOM_HYP.clusters.RANGE_OF_CLUSTERS
+# VISUALIZE = CUSTOM_HYP.clusters.VISUALIZE
+# MIN_SAMPLES = CUSTOM_HYP.clusters.MIN_SAMPLES
+# RANGE_OF_CLUSTERS = CUSTOM_HYP.clusters.RANGE_OF_CLUSTERS
 
 
 def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
@@ -31,7 +31,10 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
     if cluster_method == 'one':
         raise ValueError("The 'one' method is not allowed for this function")
     elif cluster_method == 'all':
-        return ValueError("The 'all' method is not allowed for this function")
+        # If the method is 'all', every sample is a cluster, 
+        # so return one label for each individual sample or feature map
+        return np.arange(len(feature_maps))
+        
     elif cluster_method == 'DBSCAN':
         cluster_class = DBSCAN
         param_to_eval = 'eps'
@@ -52,16 +55,28 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         eps = np.concatenate((a00,a0,a,b,c,d))
         params = {
             'eps': eps,
-            'min_samples': [MIN_SAMPLES],
+            'min_samples': [CUSTOM_HYP.clusters.MIN_SAMPLES],
             'metric': [metric],
         }
         # params = optimize_dbscan(feature_maps, logger, metric)
         # return DBSCAN(**params).fit_predict(feature_maps)
-    elif cluster_method == 'KMeans':
+    elif cluster_method.startswith('KMeans'):
+        if cluster_method.split('_')[-1].isdigit():
+            n_clusters = int(cluster_method.split('_')[-1])
+            if n_clusters < 2:
+                raise ValueError("The number of clusters must be greater than 1")
+            if n_clusters > len(feature_maps):
+                n_clusters = len(feature_maps)
+            params = {
+            'n_clusters': n_clusters,
+            'random_state': 10,
+            }
+            return KMeans(**params).fit_predict(feature_maps)
+            
         cluster_class = KMeans
         param_to_eval = 'n_clusters'
         params = {
-            'n_clusters': RANGE_OF_CLUSTERS,
+            'n_clusters': CUSTOM_HYP.clusters.RANGE_OF_CLUSTERS,
             'random_state': [10],
         }
         # params = optimize_kmeans(feature_maps, logger)
@@ -71,7 +86,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         param_to_eval = 'min_cluster_size'
         params = {
             'min_cluster_size': list(range(10,50, 10)),
-            #'min_samples': [MIN_SAMPLES],
+            #'min_samples': [CUSTOM_HYP.clusters.MIN_SAMPLES],
             'metric': [metric],
         }
         # params = optimize_hdbscan(feature_maps, logger, metric)
@@ -80,7 +95,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         cluster_class = AgglomerativeClustering
         param_to_eval = 'n_clusters'
         params = {
-            'n_clusters': RANGE_OF_CLUSTERS,
+            'n_clusters': CUSTOM_HYP.clusters.RANGE_OF_CLUSTERS,
             'metric': [metric],
             'linkage': ['complete']
             # Or
@@ -113,7 +128,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         cluster_class = GaussianMixture
         param_to_eval = 'n_components'
         params = {
-            'n_components': RANGE_OF_CLUSTERS,
+            'n_components': CUSTOM_HYP.clusters.RANGE_OF_CLUSTERS,
         }
         #raise NotImplementedError("GMM is not implemented yet")
         # params = optimize_gmm(feature_maps, logger)
@@ -122,7 +137,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         cluster_class = BayesianGaussianMixture
         param_to_eval = 'n_components'
         params = {
-            'n_components': RANGE_OF_CLUSTERS,
+            'n_components': CUSTOM_HYP.clusters.RANGE_OF_CLUSTERS,
         }
         #raise NotImplementedError("GMM is not implemented yet")
         # params = optimize_bgmm(feature_maps, logger)
@@ -219,11 +234,11 @@ def compute_score_for_all_possible_configurations(
                 else:  # No orphan samples
                     feature_maps_one_run = feature_maps
 
-                ### Check that at least each cluster has MIN_SAMPLES samples, except for orphans (-1) which are not counted
+                ### Check that at least each cluster has CUSTOM_HYP.clusters.MIN_SAMPLES samples, except for orphans (-1) which are not counted
                 unique_labels, counts = np.unique(cluster_labels, return_counts=True)
                 for label, count in zip(unique_labels, counts):
-                    if count < MIN_SAMPLES and label != -1:
-                        raise ValueError(f"Cluster {label} has less than {MIN_SAMPLES} samples.")
+                    if count < CUSTOM_HYP.clusters.MIN_SAMPLES and label != -1:
+                        raise ValueError(f"Cluster {label} has less than {CUSTOM_HYP.clusters.MIN_SAMPLES} samples.")
 
                 ### Compute performance score and append it to the list
                 if total_number_of_samples-1 > len(set(cluster_labels)) > 1:
@@ -236,7 +251,7 @@ def compute_score_for_all_possible_configurations(
                     else:
                         raise ValueError(f"Invalid performance score metric: {perf_score_metric}")
                     if CUSTOM_HYP.clusters.WEIGHT_SCORE_WITH_PERCENT_ORPHANS:
-                        score = score * (1 - total_number_of_orphan_samples / total_number_of_samples)
+                        score = score * (1 - (total_number_of_orphan_samples / total_number_of_samples))
                     clustering_performance_scores.append(score)
                     param_configs.append(params)
                 else:
@@ -290,7 +305,7 @@ def search_for_best_param(
         logger,
     )
 
-    if VISUALIZE or visualize:
+    if CUSTOM_HYP.clusters.VISUALIZE:  # or visualize:
         #plot_scores(clustering_performance_scores, params, param_to_eval, f"{perf_score_metric}_scores.png")
         plot_scores(
             clustering_performance_scores=clustering_performance_scores,

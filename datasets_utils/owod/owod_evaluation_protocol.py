@@ -61,7 +61,11 @@ def compute_WI_at_many_recall_level(recalls, tp_plus_fp_cs, fp_os, known_classes
     wi_at_recall = {}
     for r in range(1, 10):
         r = r/10
-        wi = compute_WI_at_a_recall_level(recalls, tp_plus_fp_cs, fp_os, recall_level=r, known_classes=known_classes)
+        try:
+            wi = compute_WI_at_a_recall_level(recalls, tp_plus_fp_cs, fp_os, recall_level=r, known_classes=known_classes)
+        except TypeError as e:  # Added this to avoid errors when there are no predictions for a class
+            print(e)
+            wi = 100
         wi_at_recall[r] = wi
     return wi_at_recall
 
@@ -158,12 +162,15 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     
     # Compute metrics for UNK as in UnkSniffer
     detections_unksniffer = {}
+    there_are_unk_preds = False
     for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
         one_class_preds ={}
         if cls_name == 'unknown':
             cls_id = UNKNOWN_CLASS_INDEX
         for one_img_preds in all_predictions:
             current_cls_preds_mask = one_img_preds['cls'] == cls_id
+            if cls_id == UNKNOWN_CLASS_INDEX and current_cls_preds_mask.sum() > 0:
+                there_are_unk_preds = True
             # Obtain an array of shape [N,5], where N is the number of predictions for this class
             # and 5 is the format [x1, y1, x2, y2, conf]
             one_class_preds[one_img_preds['img_name']] = np.concatenate([one_img_preds['bboxes'][current_cls_preds_mask], one_img_preds['conf'][current_cls_preds_mask][:, None]], axis=1)
@@ -172,14 +179,38 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     annotations_unksniffer = {}
     for one_img_targets in all_targets:
         annotations_unksniffer[one_img_targets['img_name']] = np.concatenate([one_img_targets['bboxes'], one_img_targets['cls'][:, None]], axis=1)
+
+    # Compute metrics for Known classes
+    aps_unksniffer = defaultdict(list)  # iou -> ap per class
+    # _all_recs = defaultdict(list)
+    # _all_precs = defaultdict(list)
+    # _tp_plus_fp_cs = defaultdict(list)
+    # _fp_os = defaultdict(list)
+    for cls_id, cls_name in enumerate(class_names[:len(known_classes)]):
+        _rec, _prec, _ap, _d, _e, _tp_plus_fp_closed_set, _fp_open_set = voc_eval_unksniffer_WI_file(
+                    detections=detections_unksniffer,
+                    annotations=annotations_unksniffer,
+                    classname=cls_id,
+                )
+        aps_unksniffer[thresh].append(_ap * 100)
+        # _all_precs[thresh].append(_prec)
+        # _all_recs[thresh].append(_rec)
+        # _tp_plus_fp_cs[thresh].append(_tp_plus_fp_closed_set)
+        # _fp_os[thresh].append(_fp_open_set)
+        #logger.info(f"Class: {cls_name}, AP: {_ap * 100:.2f}, Recall: {_rec * 100:.2f}, Precision: {_prec * 100:.2f}")
+    known_ap50_unksniffer = np.mean(aps_unksniffer[50])
     
     # Compute metrics for UNK
-    recall_unksniff, precision_unksniff, ap_unksniff, rec, prec, state, det_image_files = voc_evaluate_as_unksniffer(
-            detections=detections_unksniffer,
-            annotations=annotations_unksniffer,
-            cid=UNKNOWN_CLASS_INDEX,
-        )
-    f1_unksniff = 2 * (precision_unksniff * recall_unksniff) / (precision_unksniff + recall_unksniff)
+    if there_are_unk_preds:
+        recall_unksniff, precision_unksniff, ap_unksniff, _, _, state, det_image_files = voc_evaluate_as_unksniffer(
+                detections=detections_unksniffer,
+                annotations=annotations_unksniffer,
+                cid=UNKNOWN_CLASS_INDEX,
+            )
+        
+    else:
+        recall_unksniff, precision_unksniff, ap_unksniff, f1_unksniff = 0, 0, 0, 0
+    f1_unksniff = 2 * (precision_unksniff * recall_unksniff) / (precision_unksniff + recall_unksniff) if precision_unksniff + recall_unksniff > 0 else 0
     print("---------------")
     logger.info(f"Class: UNK from UnkSniffer\nU-AP:\t{ap_unksniff * 100:.3f}\nU-F1':\t{f1_unksniff * 100:.3f}\nU-PRE:\t{precision_unksniff * 100:.3f}\nU-REC:\t{recall_unksniff * 100:.3f}")
     print("---------------")
@@ -200,7 +231,6 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
         }
     
     # WI is calculated for all_test?? Or only for WI split?
-    #if n_clases_wout_preds < 19:
     wi = compute_WI_at_many_recall_level(all_recs, tp_plus_fp_cs, fp_os, known_classes=known_classes)
     logger.info('----------------- Calculations as per Towards Open World Object Detection paper -----------------')
     logger.info('Wilderness Impact: ' + str(wi))
@@ -238,9 +268,9 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     unknown_recall = recs[50][-1]
     wilderness_impact_recall_08 = wi[0.8][50]
     total_num_unk_det_as_known = total_num_unk_det_as_known[50]
-    # Reporting metrics from UnkSniffer code except for mAP, A-OSE and WI
+    # Reporting metrics from UnkSniffer code except for A-OSE and WI
     results_dict = {
-        'mAP': known_ap50/100,
+        'mAP': known_ap50_unksniffer/100,
         'U-AP': ap_unksniff,
         'U-F1': f1_unksniff,
         'U-PRE': precision_unksniff,
@@ -248,9 +278,9 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
         'A-OSE': total_num_unk_det_as_known,
         'WI-08': wilderness_impact_recall_08,
     }
-    logger.info('Summary using UnkSniffer code for eval (except mAP, A-OSE and WI):')
+    logger.info('Summary using UnkSniffer code for eval (except A-OSE and WI):')
     logger.info('-----------------')
-    logger.info('Known mAP50 [%]: ' + str(known_ap50))
+    logger.info('Known mAP50 [%]: ' + str(known_ap50_unksniffer))
     logger.info('Unknown AP50 [%]: ' + str(ap_unksniff))
     logger.info('Unknown F1 score [%]: ' + str(f1_unksniff))
     logger.info('Unknown Precision [%]: ' + str(precision_unksniff))
@@ -631,7 +661,7 @@ def plot_pr_curve(precision, recall, filename, base_path='/home/fk1/workspace/OW
     plt.savefig(base_path + filename)
 
 
-# Below code is obtained and modified from https://github.com/Went-Liang/UnSniffer 
+# Below code is obtained and modified from https://github.com/Went-Liang/UnSniffer/blob/main/detection/evaluator/voc_eval_offical.py#L51 
 
 def voc_evaluate_as_unksniffer(detections, annotations, cid, ovthresh=0.5, use_07_metric=True):
     """
@@ -688,7 +718,7 @@ def voc_evaluate_as_unksniffer(detections, annotations, cid, ovthresh=0.5, use_0
     fp = np.zeros(num_dets)
 
     if det_bboxes.shape[0] == 0:
-        return 0., 0., 0.
+        return 0., 0., 0., 0., 0., None, None
 
     # sort detections by confidence
     sorted_ind = np.argsort(-confidences)
@@ -748,3 +778,212 @@ def voc_evaluate_as_unksniffer(detections, annotations, cid, ovthresh=0.5, use_0
     ap = voc_ap(rec, prec, use_07_metric)
 
     return recall, precision, ap, rec, prec, state, det_image_files
+
+
+# Below code is obtained and modified from https://github.com/Went-Liang/UnSniffer/blob/main/detection/evaluator/WI.py#L63
+
+def voc_eval_unksniffer_WI_file(detections, annotations, classname, ovthresh=0.5, use_07_metric=True, known_classes=None):
+    # detections {81: [np, np, np...]}, np = np.array([[x1,y1,x2,y2,score], [...],...])
+    # annotations [np, np, np], np = np.array([[x1,y1,x2,y2,class_id], [...],...])
+    # classname = 81
+    # extract ground truth objects from the annotations for this class
+    import copy
+    class_gt_bboxes = {}
+    npos = 0  # number of ground truth bboxes having label classname
+    # annotations keyed on image file names or paths or anything that is unique for each image
+    for image_name in annotations:
+        # for each image list of objects: [[x1,y1, x2,y2, classname], [], ...]
+        R = [obj[:4] for obj in annotations[image_name] if int(obj[-1]) == classname]
+        bbox = np.array(R)
+        # difficult is not stored: take it as 0/false
+        difficult = np.array([0] * len(R)).astype(np.bool_)
+        det = [False] * len(R)
+        npos = npos + sum(~difficult)
+        class_gt_bboxes[image_name] = {'bbox': bbox, 'difficult': difficult, 'det': det}
+
+    # detections' image file names/paths
+    det_image_files = []
+    confidences = []
+    det_bboxes = []
+    # detections should be keyed on class_id (classname)
+    class_dict = detections[classname]
+    for image_file in class_dict:
+        dets = class_dict[image_file]
+        for k in range(dets.shape[0]):
+            det_image_files.append(image_file)
+            det_bboxes.append(dets[k, 0:4])
+            confidences.append(dets[k, -1])
+    det_bboxes = np.array(det_bboxes)
+    confidences = np.array(confidences)
+
+    # number of detections
+    num_dets = len(det_image_files)
+    tp = np.zeros(num_dets)
+    fp = np.zeros(num_dets)
+
+    if det_bboxes.shape[0] == 0:
+        unknown_class_recs = {}
+        n_unk = 0
+        if classname == 80:
+            for image_name in annotations:
+                R = [obj[:4] for obj in annotations[image_name] if int(obj[-1]) == 81]
+                bbox = np.array(R)
+                difficult = np.array([0] * len(R)).astype(np.bool_)
+                det = [False] * len(R)
+                n_unk = n_unk + sum(~difficult)
+                unknown_class_recs[image_name] = {"bbox": bbox, "difficult": difficult, "det": det}
+        return 0., 0., 0., 0, n_unk, None, None
+
+    # sort detections by confidence
+    sorted_ind = np.argsort(-confidences)
+    det_bboxes = det_bboxes[sorted_ind, :]
+    det_image_files = [det_image_files[x] for x in sorted_ind]
+
+    # go down dets and mark TPs and FPs
+    for d in range(num_dets):
+        if det_image_files[d] not in class_gt_bboxes:
+            continue
+        R = class_gt_bboxes[det_image_files[d]]
+        bb = det_bboxes[d, :].astype(float)
+        ovmax = -np.inf
+        BBGT = R['bbox'].astype(float)
+
+        if BBGT.size > 0:
+            ## compute overlaps
+            # intersection
+            ixmin = np.maximum(BBGT[:, 0], bb[0])
+            iymin = np.maximum(BBGT[:, 1], bb[1])
+            ixmax = np.minimum(BBGT[:, 2], bb[2])
+            iymax = np.minimum(BBGT[:, 3], bb[3])
+            iw = np.maximum(ixmax - ixmin + 1., 0.)
+            ih = np.maximum(iymax - iymin + 1., 0.)
+            inters = iw * ih
+
+            # union
+            uni = ((bb[2] - bb[0] + 1.) * (bb[3] - bb[1] + 1.) +
+                   (BBGT[:, 2] - BBGT[:, 0] + 1.) *
+                   (BBGT[:, 3] - BBGT[:, 1] + 1.) - inters)
+
+            # IoU
+            overlaps = inters / uni
+            ovmax = np.max(overlaps)
+            jmax = np.argmax(overlaps)
+
+        if ovmax > ovthresh:
+            if not R['difficult'][jmax]:
+                if not R['det'][jmax]:
+                    tp[d] = 1.
+                    R['det'][jmax] = 1
+                else:
+                    fp[d] = 1.
+        else:
+            fp[d] = 1.
+
+    state = [copy.deepcopy(tp), copy.deepcopy(fp)]
+    # compute precision recall
+    stp = sum(tp)
+    recall = stp / npos
+    precision = stp / (stp + sum(fp))
+
+    # compute average precision
+    fp = np.cumsum(fp)
+    tp = np.cumsum(tp)
+    rec = tp / float(npos)
+    # avoid divide by zero in case the first detection matches a difficult ground truth
+    prec = tp / np.maximum(tp + fp, np.finfo(np.float64).eps)
+    ap = voc_ap(rec, prec, use_07_metric)
+
+    '''
+    Computing Absolute Open-Set Error (A-OSE) and Wilderness Impact (WI)
+                                    ===========    
+    Absolute OSE = # of unknown objects classified as known objects of class 'classname'
+    WI = FP_openset / (TP_closed_set + FP_closed_set)
+    '''
+
+    # Finding GT of unknown objects
+    unknown_class_recs = {}
+    n_unk = 0
+    for image_name in annotations:
+        R = [obj[:4] for obj in annotations[image_name] if int(obj[-1]) == 81]
+        bbox = np.array(R)
+        difficult = np.array([0] * len(R)).astype(np.bool_)
+        det = [False] * len(R)
+        n_unk = n_unk + sum(~difficult)
+        unknown_class_recs[image_name] = {"bbox": bbox, "difficult": difficult, "det": det}
+
+    if classname == 80:
+        return rec, prec, ap, 0, n_unk, None, None
+
+    # Go down each detection and see if it has an overlap with an unknown object.
+    # If so, it is an unknown object that was classified as known.
+    is_unk = np.zeros(num_dets)
+
+    for d in range(num_dets):
+        R = unknown_class_recs[det_image_files[d]]
+        bb = det_bboxes[d, :].astype(float)
+        ovmax = -np.inf
+        BBGT = R["bbox"].astype(float)
+
+        if BBGT.size > 0:
+            # compute overlaps
+            # intersection
+            ixmin = np.maximum(BBGT[:, 0], bb[0])
+            iymin = np.maximum(BBGT[:, 1], bb[1])
+            ixmax = np.minimum(BBGT[:, 2], bb[2])
+            iymax = np.minimum(BBGT[:, 3], bb[3])
+            iw = np.maximum(ixmax - ixmin + 1.0, 0.0)
+            ih = np.maximum(iymax - iymin + 1.0, 0.0)
+            inters = iw * ih
+
+            # union
+            uni = (
+                (bb[2] - bb[0] + 1.0) * (bb[3] - bb[1] + 1.0)
+                + (BBGT[:, 2] - BBGT[:, 0] + 1.0) * (BBGT[:, 3] - BBGT[:, 1] + 1.0)
+                - inters
+            )
+
+            overlaps = inters / uni
+            ovmax = np.max(overlaps)
+            jmax = np.argmax(overlaps)
+
+        if ovmax > ovthresh:
+            is_unk[d] = 1.0
+
+    is_unk_sum = np.sum(is_unk)
+    # OSE = is_unk / n_unk
+    # logger.info('Number of unknowns detected knowns (for class '+ classname + ') is ' + str(is_unk))
+    # logger.info("Num of unknown instances: " + str(n_unk))
+    # logger.info('OSE: ' + str(OSE))
+
+    tp_plus_fp_closed_set = tp+fp
+    fp_open_set = np.cumsum(is_unk)
+    # print(fp_open_set)
+    # print(len(fp_open_set))
+
+    return rec, prec, ap, is_unk_sum, n_unk, tp_plus_fp_closed_set, fp_open_set
+
+# _aps = defaultdict(list)  # iou -> ap per class
+# _all_recs = defaultdict(list)
+# _all_precs = defaultdict(list)
+# _tp_plus_fp_cs = defaultdict(list)
+# _fp_os = defaultdict(list)
+# for cls_id, cls_name in enumerate(class_names[:len(known_classes)] + ['unknown']):
+#     if cls_name == 'unknown':
+#         cls_id = UNKNOWN_CLASS_INDEX
+#     _rec, _prec, _ap, _d, _e, _tp_plus_fp_closed_set, _fp_open_set = voc_eval_unksniffer_WI_file(
+#                 detections=detections_unksniffer,
+#                 annotations=annotations_unksniffer,
+#                 classname=cls_id,
+#             )
+    
+#     _aps[thresh].append(_ap * 100)
+#     _all_precs[thresh].append(_prec)
+#     _all_recs[thresh].append(_rec)
+#     _tp_plus_fp_cs[thresh].append(_tp_plus_fp_closed_set)
+#     _fp_os[thresh].append(_fp_open_set)
+#     #logger.info(f"Class: {cls_name}, AP: {_ap * 100:.2f}, Recall: {_rec * 100:.2f}, Precision: {_prec * 100:.2f}")
+# print(np.mean(_aps[50][:-1]))
+# _tp_plus_fp_cs[50] = _tp_plus_fp_cs[50][:-1]
+# _fp_os[50] = _fp_os[50][:-1]
+# _all_recs[50] = _all_recs[50][:-1]
+# wi_unksniffer = compute_WI_at_many_recall_level(_all_recs, _tp_plus_fp_cs, _fp_os, known_classes=known_classes)

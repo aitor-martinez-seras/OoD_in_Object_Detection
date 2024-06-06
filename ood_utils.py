@@ -681,23 +681,23 @@ class OODMethod(ABC):
             number_of_images_saved += len(data['im_file'])
 
         # All predictions collected, now compute metrics
-        try:
-            results_dict = compute_metrics(all_preds, all_targets, class_names, known_classes, logger)
-        except Exception as e:
-            logger.error("*********************************************")
-            logger.error("")
-            logger.error(f"Error computing metrics: {e}")
-            logger.error("")
-            logger.error("*********************************************")
-            results_dict = {
-                'mAP': 0,
-                'U-AP': 0,
-                'U-F1': 0,
-                'U-PRE': 0,
-                'U-REC': 0,
-                'A-OSE': 0,
-                'WI-08': 0,   
-            }
+        #try:
+        results_dict = compute_metrics(all_preds, all_targets, class_names, known_classes, logger)
+        # except Exception as e:
+        #     logger.error("*********************************************")
+        #     logger.error("")
+        #     logger.error(f"Error computing metrics: {e}")
+        #     logger.error("")
+        #     logger.error("*********************************************")
+        #     results_dict = {
+        #         'mAP': 0,
+        #         'U-AP': 0,
+        #         'U-F1': 0,
+        #         'U-PRE': 0,
+        #         'U-REC': 0,
+        #         'A-OSE': 0,
+        #         'WI-08': 0,   
+        #     }
 
         # Count the number of non-unknown instances and the number of unknown instances
         number_of_known_boxes = 0 
@@ -1513,6 +1513,28 @@ class LogitsMethod(OODMethod):
         raise NotImplementedError("This method is not needed for methods using logits")
 
 
+class NoMethod(LogitsMethod):
+
+    def __init__(self, **kwargs):
+        name = 'No OoD method'
+        super().__init__(name, **kwargs)
+    
+    def compute_scores(self, logits: Tensor, cls_idx: int) -> np.ndarray:
+        # Output a score of 1 for all the predictions
+        if len(logits.shape) == 1:  # In case we only have one bbox
+            logits = logits.unsqueeze(0)
+        return np.ones(logits.shape[0])
+    
+    def compute_ood_decision_on_results(self, results: Results, logger: Logger) -> List[List[int]]:
+        # Output a decision of 1 for all the predictions
+        ood_decision = []
+        for idx_img, res in enumerate(results):
+            ood_decision.append([])  # Every image has a list of decisions for each bbox
+            for idx_bbox in range(len(res.boxes.cls)):
+                ood_decision[idx_img].append(1)  # InD
+        return ood_decision
+    
+
 class MSP(LogitsMethod):
 
     def __init__(self, **kwargs):
@@ -2278,15 +2300,15 @@ class DistanceMethod(OODMethod):
                 if self.cluster_method == 'one':
                     self.generate_one_cluster_per_class_and_stride(ind_tensors, clusters_per_class_and_stride, logger)
 
-                elif self.cluster_method == 'all':
-                    raise NotImplementedError("As the amount of In-Distribution data is too big," \
-                                            "ir would be intractable to treat each sample as a cluster")
+                # elif self.cluster_method == 'all':
+                #     raise NotImplementedError("As the amount of In-Distribution data is too big," \
+                #                             "ir would be intractable to treat each sample as a cluster")
 
                 elif self.cluster_method in AVAILABLE_CLUSTERING_METHODS:
                     self.generate_multiple_cluster_per_class_per_stride(ind_tensors, clusters_per_class_and_stride, logger)
 
                 else:
-                    raise NameError(f"The clustering_opt must be one of the following: 'one', 'all', or one of {AVAILABLE_CLUSTERING_METHODS}." \
+                    raise NameError(f"The clustering_opt must be one of the following: {AVAILABLE_CLUSTERING_METHODS}." \
                                     f"Current value: {self.cluster_method}")
                 
             else:
@@ -2321,7 +2343,7 @@ class DistanceMethod(OODMethod):
         ):
         np.set_printoptions(threshold=20)
 
-        if CUSTOM_HYP.clusters.VISUALIZE:
+        if CUSTOM_HYP.clusters.VISUALIZE and not self.cluster_method == 'all':
             import matplotlib.pyplot as plt
             from collections import Counter
             folder_for_hist = Path('figures/histograms')
@@ -2340,7 +2362,7 @@ class DistanceMethod(OODMethod):
                 if len(ftmaps_one_cls_one_stride) > CUSTOM_HYP.clusters.MIN_SAMPLES:
                     ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride)
                     # 1. Find the optimal number of clusters and obtain the labels
-                    if CUSTOM_HYP.clusters.VISUALIZE:
+                    if CUSTOM_HYP.clusters.VISUALIZE and not self.cluster_method == 'all':
                         string_for_visualization = f'{self.name}_class{idx_cls:03}_stride{idx_stride}'
                         string_for_visualization = (folder_for_cluster_scores / string_for_visualization).as_posix()
                     else:
@@ -2374,7 +2396,7 @@ class DistanceMethod(OODMethod):
                     clusters_per_class_and_stride[idx_cls][idx_stride] = np.empty(0)
                     cluster_labels_one_class.append([])
 
-            if CUSTOM_HYP.clusters.VISUALIZE:
+            if CUSTOM_HYP.clusters.VISUALIZE and not self.cluster_method == 'all':
                 fig, ax = plt.subplots(1, 3, figsize=(15, 5))
                 #fig.suptitle(f'Class {idx_cls:03}')
                 class_has_at_least_one_stride_with_clusters = False

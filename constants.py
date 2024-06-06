@@ -19,7 +19,7 @@ COCO_OOD_NAME = 'coco_ood'
 COCO_MIXED_NAME = 'coco_mixed'
 COCO_OWOD_TEST_NAME = 'owod'
 # OOD Methods
-LOGITS_METHODS = ['MSP', 'Energy', 'ODIN', 'Sigmoid']
+LOGITS_METHODS = ['NoMethod', 'MSP', 'Energy', 'ODIN', 'Sigmoid']
 DISTANCE_METHODS = ['L1_cl_stride', 'L2_cl_stride', 'GAP_L2_cl_stride', 'Cosine_cl_stride']
 OOD_METHOD_CHOICES = LOGITS_METHODS + DISTANCE_METHODS
 
@@ -27,7 +27,7 @@ FTMAPS_RELATED_OPTIONS = ['roi_aligned_ftmaps','all_ftmaps', 'ftmaps_and_strides
 LOGITS_RELATED_OPTIONS = ['logits']
 INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS = FTMAPS_RELATED_OPTIONS + LOGITS_RELATED_OPTIONS + ['none']  # None for fusion methods, that implement it internally
 
-AVAILABLE_CLUSTERING_METHODS = ['one', 'DBSCAN', 'KMeans', 'HDBSCAN', 'AgglomerativeClustering', 'OPTICS', 'Birch', 'MeanShift', 'SpectralClustering', 'OPTICS', 'GMM', 'BGMM']
+AVAILABLE_CLUSTERING_METHODS = ['one', 'all', 'DBSCAN', 'KMeans', 'KMeans_4', 'KMeans_10', 'HDBSCAN', 'AgglomerativeClustering', 'OPTICS', 'Birch', 'MeanShift', 'SpectralClustering', 'OPTICS', 'GMM', 'BGMM']
 AVAILABLE_CLUSTER_OPTIMIZATION_METRICS = ['silhouette', 'calinski_harabasz']
 
 TARGETS_RELATED_OPTIONS = [
@@ -49,14 +49,14 @@ COMMON_COLUMNS = ['Method', 'conf_thr_train', 'conf_thr_test', 'tpr_thr', 'clust
 VOC_TEST_COLUMN = ['mAP']
 COCO_OOD_COLUMNS = ['U-AP_(COOD)', 'U-F1_(COOD)', 'U-PRE_(COOD)', 'U-REC_(COOD)']
 COCO_MIX_COLUMNS = ['mAP', 'U-AP_(CMIX)', 'U-F1_(CMIX)', 'U-PRE_(CMIX)', 'U-REC_(CMIX)','A-OSE', 'WI-08']
-COCO_OWOD_COLUMNS = ['mAP', 'U-AP_(OWOD)', 'U-F1_(OWOD)', 'U-PRE_(OWOD)', 'U-REC_(OWOD)','A-OSE_(OWOD)', 'WI-08_(OWOD)']
+COCO_OWOD_COLUMNS = ['mAP_(OWOD)', 'U-AP_(OWOD)', 'U-F1_(OWOD)', 'U-PRE_(OWOD)', 'U-REC_(OWOD)','A-OSE_(OWOD)', 'WI-08_(OWOD)']
 FINAL_COLUMNS = ['Model', 'args', 'custom_hyp']
 # Benchmark options
 AVAILABLE_BENCHMARKS = ['best_methods', 'conf_thr_test', 'clusters', 'logits_methods']
 BENCHMARKS = {
     'best_methods': OOD_METHOD_CHOICES,
     'conf_thr_test': [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001],
-    'cluster_methods': ['one', 'DBSCAN', 'KMeans', 'HDBSCAN', 'AgglomerativeClustering', 'Birch'],
+    'cluster_methods': ['one', 'all', 'DBSCAN', 'KMeans', 'KMeans_4', 'KMeans_10', 'HDBSCAN', 'AgglomerativeClustering', 'Birch'],
     'cluster_perf_metric': AVAILABLE_CLUSTER_OPTIMIZATION_METRICS,
     'logits_methods': LOGITS_METHODS,
     'fusion_strategies': ['and', 'or', 'score']
