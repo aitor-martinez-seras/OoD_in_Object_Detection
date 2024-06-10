@@ -1026,7 +1026,7 @@ def main(args: SimpleArgumentParser):
                     # args.use_val_split_for_thresholds = True
                     # args.use_train_and_val_for_thresholds = False
                 if args.which_split == 'train_val':
-                    ind_activations = concat_arrays_inside_list_of_lists(ind_activations_train, ind_activations_val)
+                    ind_activations = concat_arrays_inside_list_of_lists(ind_activations_train, ind_activations_val, per_class=ood_method.per_class, per_stride=ood_method.per_stride)
                 elif args.which_split == 'val':
                     ind_activations = ind_activations_val
                 elif args.which_split == 'train':

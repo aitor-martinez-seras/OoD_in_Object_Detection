@@ -14,10 +14,6 @@ import hdbscan
 from constants import AVAILABLE_CLUSTERING_METHODS
 from custom_hyperparams import CUSTOM_HYP
 
-# VISUALIZE = CUSTOM_HYP.clusters.VISUALIZE
-# MIN_SAMPLES = CUSTOM_HYP.clusters.MIN_SAMPLES
-# RANGE_OF_CLUSTERS = CUSTOM_HYP.clusters.RANGE_OF_CLUSTERS
-
 
 def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         feature_maps: np.ndarray,
@@ -29,6 +25,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         visualize: Optional[bool] = False
     ) -> np.ndarray:
     assert cluster_method in AVAILABLE_CLUSTERING_METHODS, f"Invalid clustering method: {cluster_method}"
+    density_based = False
     if cluster_method == 'one':
         raise ValueError("The 'one' method is not allowed for this function")
     elif cluster_method == 'all':

@@ -22,7 +22,7 @@ class ClustersParams:
     MIN_SAMPLES: int = 3  # Should be equal to the MIN_NUMBER_OF_SAMPLES_FOR_THR
     RANGE_OF_CLUSTERS: List[int] = field(default_factory=lambda: list(range(2, 15)))
     # Clusters (orphans = samples whose label is -1)
-    REMOVE_ORPHANS: bool = True  # If True, orphans will not be counted as a cluster
+    REMOVE_ORPHANS: bool = False  # If True, orphans will not be counted as a cluster
     WEIGHT_SCORE_WITH_PERCENT_ORPHANS: bool = True  # If True, the score will be weighted by the percentage of orphans in the cluster
     MAX_PERCENT_OF_ORPHANS: float = 0.95  # The maximum percentage of orphans per class and stride
     VISUALIZE: bool = False  # This is activated from ood_evaluation

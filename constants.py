@@ -27,7 +27,7 @@ FTMAPS_RELATED_OPTIONS = ['roi_aligned_ftmaps','all_ftmaps', 'ftmaps_and_strides
 LOGITS_RELATED_OPTIONS = ['logits']
 INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS = FTMAPS_RELATED_OPTIONS + LOGITS_RELATED_OPTIONS + ['none']  # None for fusion methods, that implement it internally
 
-AVAILABLE_CLUSTERING_METHODS = ['one', 'all', 'DBSCAN', 'KMeans', 'KMeans_4', 'KMeans_10', 'HDBSCAN', 'AgglomerativeClustering', 'OPTICS', 'Birch', 'MeanShift', 'SpectralClustering', 'OPTICS', 'GMM', 'BGMM']
+AVAILABLE_CLUSTERING_METHODS = ['one', 'all', 'DBSCAN', 'KMeans', 'KMeans_3', 'KMeans_5', 'KMeans_10', 'HDBSCAN', 'AgglomerativeClustering', 'OPTICS', 'Birch', 'MeanShift', 'SpectralClustering', 'OPTICS', 'GMM', 'BGMM']
 AVAILABLE_CLUSTER_OPTIMIZATION_METRICS = ['silhouette', 'calinski_harabasz']
 
 TARGETS_RELATED_OPTIONS = [
@@ -59,12 +59,8 @@ BENCHMARKS = {
     'conf_thr_train': [0.50, 0.40, 0.35, 0.25, 0.15, 0.05, 0.01, 0.001],
     'conf_thr_test': [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001],
     'which_split_for_ind_scores': ['train', 'val', 'train_val'],
-    'cluster_methods': ['one', 'all', 'DBSCAN', 'KMeans', 'KMeans_4', 'KMeans_10', 'HDBSCAN', 'AgglomerativeClustering', 'Birch'],
+    'cluster_methods': ['one', 'all', 'DBSCAN', 'KMeans', 'KMeans_3', 'KMeans_5', 'KMeans_10', 'HDBSCAN', 'AgglomerativeClustering', 'Birch'],
     'cluster_perf_metric': AVAILABLE_CLUSTER_OPTIMIZATION_METRICS,
     'logits_methods': LOGITS_METHODS,
     'fusion_strategies': [['fusion-MSP-Energy', 'fusion-MSP-Cosine_cl_stride', 'fusion-Cosine_cl_stride-Cosine_cl_stride'], ['and', 'or', 'score']]
 }
-# Benchmark configurations
-# CONF_THR_TEST_BENCHMARK = [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001]
-# ALL_METHODS_BENCHMARK = ['MSP', 'Energy', 'ODIN', 'Sigmoid', 'L1_cl_stride', 'L2_cl_stride', 'Cosine_cl_stride']
-# CLUSTER_METHODS_BENCHMARK = ['one', 'DBSCAN', 'KMeans', 'HDBSCAN', 'AgglomerativeClustering', 'OPTICS', 'Birch', 'MeanShift']
