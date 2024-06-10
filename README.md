@@ -41,9 +41,19 @@ Follow instructions in [datasets_utils/owod/instructions.md](datasets_utils/owod
 
 Follow instructions in [datasets_utils/coco_ood/instructions.md](datasets_utils/coco_ood/instructions.md).
 
-### Dataset description
+# Usage
 
-Each frame of the annotated dataset is corresponding with the frame number ```(n * 30) - 1```
+## Replicate results
+
+TODO
+
+## Using the OOD methods
+
+TODO
+
+## Training a YOLO model
+
+TODO
 
 # YOLO Sizes an architecture
 

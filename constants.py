@@ -43,7 +43,7 @@ PREDICTIONS_RELATED_OPTIONS = [  # Valid predictions = correctly predicted bboxe
 IND_INFO_CREATION_OPTIONS = TARGETS_RELATED_OPTIONS + PREDICTIONS_RELATED_OPTIONS
 
 ### Benchmarks ###
-COMMON_COLUMNS = ['Method', 'conf_thr_train', 'conf_thr_test', 'tpr_thr', 'cluster_method', 'mean_n_clus', 'std_n_clus',
+COMMON_COLUMNS = ['Method', 'which_split', 'conf_thr_train', 'conf_thr_test', 'tpr_thr', 'cluster_method', 'mean_n_clus', 'std_n_clus',
                   #'mean_num_samples_per_clus', 'std_num_samples_per_clus',
                   'fusion_strat']
 VOC_TEST_COLUMN = ['mAP']
@@ -55,11 +55,14 @@ FINAL_COLUMNS = ['Model', 'args', 'custom_hyp']
 AVAILABLE_BENCHMARKS = ['best_methods', 'conf_thr_test', 'clusters', 'logits_methods']
 BENCHMARKS = {
     'best_methods': OOD_METHOD_CHOICES,
+    'used_tpr': [0.99, 0.95, 0.90, 0.85, 0.80],
+    'conf_thr_train': [0.50, 0.40, 0.35, 0.25, 0.15, 0.05, 0.01, 0.001],
     'conf_thr_test': [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001],
+    'which_split_for_ind_scores': ['train', 'val', 'train_val'],
     'cluster_methods': ['one', 'all', 'DBSCAN', 'KMeans', 'KMeans_4', 'KMeans_10', 'HDBSCAN', 'AgglomerativeClustering', 'Birch'],
     'cluster_perf_metric': AVAILABLE_CLUSTER_OPTIMIZATION_METRICS,
     'logits_methods': LOGITS_METHODS,
-    'fusion_strategies': ['and', 'or', 'score']
+    'fusion_strategies': [['fusion-MSP-Energy', 'fusion-MSP-Cosine_cl_stride', 'fusion-Cosine_cl_stride-Cosine_cl_stride'], ['and', 'or', 'score']]
 }
 # Benchmark configurations
 # CONF_THR_TEST_BENCHMARK = [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001]

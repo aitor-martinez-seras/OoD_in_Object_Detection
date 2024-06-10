@@ -9,6 +9,7 @@ from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
 from sklearn.cluster._hdbscan.hdbscan import HDBSCAN
 from sklearn.metrics import silhouette_score, calinski_harabasz_score
 import matplotlib.pyplot as plt
+import hdbscan
 
 from constants import AVAILABLE_CLUSTERING_METHODS
 from custom_hyperparams import CUSTOM_HYP
@@ -38,6 +39,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
     elif cluster_method == 'DBSCAN':
         cluster_class = DBSCAN
         param_to_eval = 'eps'
+        density_based = True
         # if metric == 'l1':
         #     eps = np.linspace(10, 100, 100)
         # elif metric == 'l2':
@@ -52,7 +54,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         b = np.linspace(0.1, 1, 100)
         c = np.linspace(1, 10, 100)
         d = np.linspace(10, 100, 100)
-        eps = np.concatenate((a00,a0,a,b,c,d))
+        eps = np.concatenate((a,b,c,d))
         params = {
             'eps': eps,
             'min_samples': [CUSTOM_HYP.clusters.MIN_SAMPLES],
@@ -82,10 +84,11 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         # params = optimize_kmeans(feature_maps, logger)
         # return KMeans(**params).fit_predict(feature_maps)
     elif cluster_method == 'HDBSCAN':
+        density_based = True
         cluster_class = HDBSCAN
         param_to_eval = 'min_cluster_size'
         params = {
-            'min_cluster_size': list(range(10,50, 10)),
+            'min_cluster_size': list(range(CUSTOM_HYP.clusters.MIN_SAMPLES, 50, 1)),
             #'min_samples': [CUSTOM_HYP.clusters.MIN_SAMPLES],
             'metric': [metric],
         }
@@ -144,8 +147,12 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         # return BayesianGaussianMixture(**params).fit_predict(feature_maps)
     elif cluster_method == 'OPTICS':
         raise NotImplementedError("OPTICS is not implemented yet")
-        # params = optimize_optics(feature_maps, logger, metric)
-        # return OPTICS(**params).fit_predict(feature_maps)
+        density_based = True
+        cluster_class = OPTICS
+        param_to_eval = 'min_samples'
+        params = {
+            'min_samples': [2, 5, 10, 15, 20],
+        }
     elif cluster_method == 'SpectralClustering':
         raise NotImplementedError("SpectralClustering is not implemented yet")
         # params = optimize_spectral_clustering(feature_maps, logger)
@@ -164,6 +171,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         logger=logger,
         visualize=visualize,
         cluster_method=cluster_method,
+        density_based=density_based,
     )
 
     if (np.array(clustering_performance_scores) == -1).all():
@@ -185,7 +193,8 @@ def compute_score_for_all_possible_configurations(
         param_to_eval: str,
         perf_score_metric: str,
         metric: str,
-        logger: Logger
+        logger: Logger,
+        density_based: Optional[bool] = False,
     ) -> Tuple[List[float], List[dict]]:
     # Assert first than the only parameter that has a lenght greater than 1 is the one to be evaluated
     for param_name, param_values in parameters_to_search.items():
@@ -242,16 +251,19 @@ def compute_score_for_all_possible_configurations(
 
                 ### Compute performance score and append it to the list
                 if total_number_of_samples-1 > len(set(cluster_labels)) > 1:
-                    if perf_score_metric == 'silhouette':
-                        score = silhouette_score(feature_maps_one_run, cluster_labels, metric=metric)
-                        logger.debug(f"Silhouette score: {score}")
-                    elif perf_score_metric == 'calinski_harabasz':
-                        score = calinski_harabasz_score(feature_maps_one_run, cluster_labels)
-                        logger.debug(f"Calinski-Harabasz score: {score}")
+                    if density_based and CUSTOM_HYP.clusters.REMOVE_ORPHANS:
+                        score = hdbscan.validity.validity_index(feature_maps_one_run.astype(np.float64), cluster_labels, metric=metric, d=feature_maps_one_run.shape[1])
                     else:
-                        raise ValueError(f"Invalid performance score metric: {perf_score_metric}")
-                    if CUSTOM_HYP.clusters.WEIGHT_SCORE_WITH_PERCENT_ORPHANS:
-                        score = score * (1 - (total_number_of_orphan_samples / total_number_of_samples))
+                        if perf_score_metric == 'silhouette':
+                            score = silhouette_score(feature_maps_one_run, cluster_labels, metric=metric)
+                            logger.debug(f"Silhouette score: {score}")
+                        elif perf_score_metric == 'calinski_harabasz':
+                            score = calinski_harabasz_score(feature_maps_one_run, cluster_labels)
+                            logger.debug(f"Calinski-Harabasz score: {score}")
+                        else:
+                            raise ValueError(f"Invalid performance score metric: {perf_score_metric}")
+                    # if CUSTOM_HYP.clusters.WEIGHT_SCORE_WITH_PERCENT_ORPHANS:
+                    #     score = score * (1 - (total_number_of_orphan_samples / total_number_of_samples))
                     clustering_performance_scores.append(score)
                     param_configs.append(params)
                 else:
@@ -272,9 +284,11 @@ def compute_score_for_all_possible_configurations(
     return clustering_performance_scores, param_configs
 
 
-def plot_scores(clustering_performance_scores: List[float], params: dict, parameter_name: str, clustering_perf_metric: str,  filename: str):
+def plot_scores(clustering_performance_scores: List[float], params: dict, parameter_name: str, clustering_perf_metric: str,  filename: str, density_based: bool = False):
     plt.plot(params[parameter_name], clustering_performance_scores, marker='o')
     plt.xlabel(parameter_name)
+    if density_based and CUSTOM_HYP.clusters.REMOVE_ORPHANS:
+        clustering_perf_metric = f"DBCV"
     plt.ylabel(f"{clustering_perf_metric} Score")
     plt.title(f"{clustering_perf_metric} Analysis")
     plt.savefig(filename)
@@ -291,7 +305,8 @@ def search_for_best_param(
         metric: str,
         logger: Logger,
         visualize: Optional[bool] = False,
-        cluster_method: Optional[str] = ''
+        cluster_method: Optional[str] = '',
+        density_based: Optional[bool] = False,
     ) -> dict:
 
     # Compute silhouette scores for all possible configurations
@@ -303,6 +318,7 @@ def search_for_best_param(
         perf_score_metric,
         metric,
         logger,
+        density_based,
     )
 
     if CUSTOM_HYP.clusters.VISUALIZE:  # or visualize:
@@ -312,7 +328,8 @@ def search_for_best_param(
             params=params,
             parameter_name=param_to_eval,
             clustering_perf_metric=perf_score_metric,
-            filename=f"{string_for_visualization}_{cluster_method}_{perf_score_metric}_scores.png"
+            filename=f"{string_for_visualization}_{cluster_method}_{perf_score_metric}_scores.png",
+            density_based=density_based,
         )
 
     # Select best parameters
