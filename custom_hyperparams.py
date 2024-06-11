@@ -1,5 +1,35 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Any, Dict
+
+
+def hyperparams_to_dict(hyperparams: Any) -> Dict:
+    data = {}
+    # Helper function to extract fields recursively
+    def extract_fields(prefix: str, obj: Any):
+        if hasattr(obj, '__dataclass_fields__'):
+            for field_name, field_value in obj.__dataclass_fields__.items():
+                value = getattr(obj, field_name)
+                if hasattr(value, '__dataclass_fields__'):
+                    extract_fields(f"{prefix}{field_name}.", value)
+                else:
+                    data[f"{prefix}{field_name}"] = value
+
+    extract_fields("", hyperparams)
+    return data
+
+
+@dataclass
+class IvisParams:
+    # For Ivis
+    EMBEDDING_DIMS: int = 16
+    N_EPOCHS_WITHOUT_PROGRESS: int = 20
+    K: int = 15
+    MODEL: str = 'maaten'
+
+
+@dataclass
+class DimensionalityReductionParams:
+    ivis: IvisParams = IvisParams()
 
 
 @dataclass
@@ -72,7 +102,7 @@ class RankParams:
     USE_OOD_THR_TO_REMOVE_PROPS: bool = False  # If True, the boxes with a lower OOD score than the threshold will be removed, 
 
     # Used with all operations
-    USE_UNK_PROPOSALS_THR: bool = True  # If True, the UNK proposals will be selected using a threshold
+    USE_UNK_PROPOSALS_THR: bool = False  # If True, the UNK proposals will be selected using a threshold
 
     # Checks
     if USE_UNK_PROPOSALS_THR or USE_OOD_THR_TO_REMOVE_PROPS:
@@ -107,7 +137,7 @@ class UnkEnhancementParams:
     MAX_INTERSECTION_W_PREDS: float = 0.0  # If above 0, the proposals with an intersection with the predicted bboxes over the threshold will be removed
 
     # Enable or disable ranking the prosals. if USE_HEURISTICS is False, no ranking will be done
-    RANK_BOXES: bool = False
+    RANK_BOXES: bool = True
     
     if USE_XAI_TO_MODIFY_SALIENCY or USE_XAI_TO_REMOVE_PROPOSALS:
         USE_XAI: bool = True  # If True, the XAI method will be used to enhance the localization of the UNK proposals
@@ -128,7 +158,10 @@ class Hyperparams:
     MIN_NUMBER_OF_SAMPLES_FOR_THR: int = 5
     
     # For the clustering of distance methods
-    clusters: ClustersParams = ClustersParams()   
+    clusters: ClustersParams = ClustersParams()
+
+    # For the dimensionality reduction methods
+    dr: DimensionalityReductionParams = DimensionalityReductionParams()
 
     # Fusion method
     fusion: FusionParams = FusionParams()

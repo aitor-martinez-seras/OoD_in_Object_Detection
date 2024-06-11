@@ -214,7 +214,7 @@ class OODMethod(ABC):
         pass
 
     @abstractmethod
-    def activations_transformation(self, activations: np.array) -> np.array:
+    def activations_transformation(self, activations: np.array, **kwargs) -> np.array:
         """
         Transform the activations to the format needed to compute the distance to the centroids. Only in DistanceMethods.
         """
@@ -1220,7 +1220,7 @@ class OODMethod(ABC):
                             distances_one_cls_per_bbox = self.compute_distance(
                                 #cluster[selected_stride][None, :],
                                 cluster[selected_stride],
-                                self.activations_transformation(features_per_proposal)
+                                self.activations_transformation(features_per_proposal, cls_idx=idx_cls, stride_idx=selected_stride)
                                 #self.activations_transformation(activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1))
                                 #activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1)  # Flatten the activations
                             )
@@ -1517,7 +1517,7 @@ class LogitsMethod(OODMethod):
                     self.min_score[idx_cls] = 0.0
                     self.max_score[idx_cls] = 0.0
 
-    def activations_transformation(self, activations: np.array) -> np.array:
+    def activations_transformation(self, activations: np.array, **kwargs) -> np.array:
         raise NotImplementedError("This method is not needed for methods using logits")
 
     def compute_distance(self, centroids: np.array, features: np.array) -> np.array:
@@ -1733,7 +1733,7 @@ class DistanceMethod(OODMethod):
                         distance = self.compute_distance(
                             #self.clusters[cls_idx][stride_idx][None, :],
                             self.clusters[cls_idx][stride_idx],
-                            self.activations_transformation(ftmap)
+                            self.activations_transformation(ftmap, cls_idx=cls_idx, stride_idx=stride_idx)
                         )[0]
 
                     ood_decision[idx_img].append(self.compute_indness(distance, cls_idx, stride_idx))
@@ -2014,7 +2014,7 @@ class DistanceMethod(OODMethod):
                     scores_one_class = []
                     activations_one_cls_one_stride = activations_one_cls[0]
                     if len(activations_one_cls_one_stride) > 0:
-                        activations_one_cls_one_stride_transformed = self.activations_transformation(activations_one_cls_one_stride)
+                        activations_one_cls_one_stride_transformed = self.activations_transformation(activations_one_cls_one_stride, cls_idx=idx_cls, stride_idx=0)
                         #logger.info(f'Class {idx_cls:03} of {len(activations)}')
                         for clusters_one_class in self.clusters:
                             cluster_one_class_first_stride = clusters_one_class[0]
@@ -2098,7 +2098,7 @@ class DistanceMethod(OODMethod):
                         scores[idx_cls][idx_stride] = self.compute_scores_one_class_one_stride(
                             #self.clusters[idx_cls][idx_stride][None, :],
                             self.clusters[idx_cls][idx_stride],
-                            self.activations_transformation(activations_one_cls_one_stride)
+                            self.activations_transformation(activations_one_cls_one_stride, cls_idx=idx_cls, stride_idx=idx_stride)
                             # activations_one_cls_one_stride.reshape(activations_one_cls_one_stride.shape[0], -1)
                         )
 
@@ -2201,7 +2201,7 @@ class DistanceMethod(OODMethod):
                         distance = self.compute_distance(
                             #self.clusters[cls_idx][stride_idx][None, :],
                             self.clusters[cls_idx][stride_idx],
-                            self.activations_transformation(ftmap)
+                            self.activations_transformation(ftmap, cls_idx=cls_idx, stride_idx=stride_idx)
                         )[0]
 
                     # Check if the distance is lower than the threshold
@@ -2312,10 +2312,6 @@ class DistanceMethod(OODMethod):
                 if self.cluster_method == 'one':
                     self.generate_one_cluster_per_class_and_stride(ind_tensors, clusters_per_class_and_stride, logger)
 
-                # elif self.cluster_method == 'all':
-                #     raise NotImplementedError("As the amount of In-Distribution data is too big," \
-                #                             "ir would be intractable to treat each sample as a cluster")
-
                 elif self.cluster_method in AVAILABLE_CLUSTERING_METHODS:
                     self.generate_multiple_cluster_per_class_per_stride(ind_tensors, clusters_per_class_and_stride, logger)
 
@@ -2340,7 +2336,7 @@ class DistanceMethod(OODMethod):
             for idx_stride, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
                 
                 if len(ftmaps_one_cls_one_stride) > CUSTOM_HYP.clusters.MIN_SAMPLES:
-                    ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride)
+                    ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride, cls_idx=idx_cls, stride_idx=idx_stride)
                     #clusters_per_class_and_stride[idx_cls][idx_stride] = self.agg_method(ftmaps_one_cls_one_stride, axis=0)
                     clusters_per_class_and_stride[idx_cls][idx_stride] = self.agg_method(ftmaps_one_cls_one_stride, axis=0)[None, :]
 
@@ -2374,7 +2370,7 @@ class DistanceMethod(OODMethod):
             for idx_stride, ftmaps_one_cls_one_stride in enumerate(ftmaps_one_cls):
                 
                 if len(ftmaps_one_cls_one_stride) > CUSTOM_HYP.clusters.MIN_SAMPLES:
-                    ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride)
+                    ftmaps_one_cls_one_stride = self.activations_transformation(ftmaps_one_cls_one_stride, cls_idx=idx_cls, stride_idx=idx_stride)
                     # 1. Find the optimal number of clusters and obtain the labels
                     if CUSTOM_HYP.clusters.VISUALIZE and not self.cluster_method == 'all':
                         string_for_visualization = f'{self.name}_class{idx_cls:03}_stride{idx_stride}'
@@ -2440,7 +2436,7 @@ class DistanceMethod(OODMethod):
                 else:
                     plt.close()
 
-    def activations_transformation(self, activations: np.array) -> np.array:
+    def activations_transformation(self, activations: np.array, **kwargs) -> np.array:
         """
         Transform the activations to the shape needed to compute the distance.
         By default, it flattens the activations leaving the batch dimension as the first dimension.
@@ -2451,9 +2447,9 @@ class DistanceMethod(OODMethod):
 class _PairwiseDistanceClustersPerClassPerStride(DistanceMethod):
     def __init__(self, name: str, metric: str, **kwargs):
             AVAILABLE_PAIRWISE_METRICS = ['cosine', 'l1', 'l2']
+            #cluster_optimization_metric = 'silhouette'
             per_class = True
             per_stride = True
-            #cluster_optimization_metric = 'silhouette'
             super().__init__(name=name, metric=metric, per_class=per_class, per_stride=per_stride, **kwargs)
             assert self.per_class and self.per_stride, "This method is only compatible with per_class and per_stride"
             assert self.metric in AVAILABLE_PAIRWISE_METRICS, f"The metric must be one of {AVAILABLE_PAIRWISE_METRICS}. Current value: {self.metric}"
@@ -2467,6 +2463,116 @@ class _PairwiseDistanceClustersPerClassPerStride(DistanceMethod):
             )
 
         return distances.min(axis=0)
+
+
+class _DimensionalityReductionMethod(_PairwiseDistanceClustersPerClassPerStride):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def train_dimensionality_reduction_module(self, activations: List[np.ndarray], logger: Logger):
+        pass
+
+    def activations_transformation(self, activations: np.array, cls_idx: int, stride_idx: int) -> np.array:
+
+        # Transform the activations to the new space by using the dimensionality reduction function
+        pass
+
+    def generate_clusters(self, ind_tensors: List[np.ndarray] | List[List[np.ndarray]], logger: Logger) -> List[np.ndarray] | List[List[np.ndarray]]:
+        
+        self.train_dimensionality_reduction_module(ind_tensors, logger)
+
+        return super().generate_clusters(ind_tensors, logger)
+
+class UmapMethod(_DimensionalityReductionMethod):
+    
+    def __init__(self, **kwargs):
+        import umap 
+        per_stride = True
+        if per_stride:
+            kwargs = {
+                'n_components': 32,
+                'n_neighbors': 15,
+                'min_dist': 0.1,
+                'metric': 'cosine',
+            }
+            self.umap = [
+                umap.UMAP(n_components=32, n_neighbors=15, min_dist=0.1, metric='cosine'), # random_state=42),
+                umap.UMAP(n_components=32, n_neighbors=15, min_dist=0.1, metric='cosine'),
+                umap.UMAP(n_components=32, n_neighbors=15, min_dist=0.1, metric='cosine')
+                ]
+        metric = 'cosine'
+        name = 'CosineDistancePerStride'
+        super().__init__(name=name, metric=metric, **kwargs)
+
+    def train_dimensionality_reduction_module(self, activations: List[np.ndarray], logger: Logger):
+        
+        if self.per_class and self.per_stride:
+            # Obtain the concatenated arrays of each stride, and apply a UMAP per stride
+            concatenated_arrays_per_stride = [[] for _ in range(3)]
+            for idx_cls, activations_one_cls in enumerate(activations):
+                for idx_stride, activations_one_cls_one_stride in enumerate(activations_one_cls):
+                    if len(activations_one_cls_one_stride) > 0:
+                        concatenated_arrays_per_stride[idx_stride].append(activations_one_cls_one_stride)
+
+            concatenated_arrays_per_stride = [np.concatenate(arr, axis=0) for arr in concatenated_arrays_per_stride]
+
+            for idx_stride, concatenated_array in enumerate(concatenated_arrays_per_stride):
+                self.umap[idx_stride].fit(concatenated_array.reshape(concatenated_array.shape[0], -1))
+                logger.info(f'UMAP fitted for stride {idx_stride}')
+
+    def activations_transformation(self, activations: np.array, cls_idx: int, stride_idx: int) -> np.array:
+        # Depending on the stride, apply the corresponding UMAP
+        return self.umap[stride_idx].transform(activations.reshape(activations.shape[0], -1))
+
+
+class IvisMethod(_DimensionalityReductionMethod):
+    
+    def __init__(self, **kwargs):
+        import ivis
+        per_stride = True
+        if per_stride:
+            dims_reduction_kwargs = {
+                'embedding_dims': CUSTOM_HYP.dr.ivis.EMBEDDING_DIMS,
+                'n_epochs_without_progress': CUSTOM_HYP.dr.ivis.N_EPOCHS_WITHOUT_PROGRESS,
+                'k': CUSTOM_HYP.dr.ivis.K,
+                'model': CUSTOM_HYP.dr.ivis.MODEL,
+                'distance': self.metric, 
+            }
+            self.ivis = [
+                ivis.Ivis(**dims_reduction_kwargs),
+                ivis.Ivis(**dims_reduction_kwargs),
+                ivis.Ivis(**dims_reduction_kwargs),
+                ]
+        metric = 'cosine'
+        name = 'CosineDistancePerStride'
+        super().__init__(name=name, metric=metric, **kwargs)
+
+    def train_dimensionality_reduction_module(self, activations: List[np.ndarray], logger: Logger):
+        from sklearn.utils import shuffle
+
+        if self.per_class and self.per_stride:
+            # Obtain the concatenated arrays of each stride, and apply a UMAP per stride
+            concatenated_arrays_per_stride = [[] for _ in range(3)]
+            concatenated_targets_per_stride = [[] for _ in range(3)]
+            for idx_cls, activations_one_cls in enumerate(activations):
+                for idx_stride, activations_one_cls_one_stride in enumerate(activations_one_cls):
+                    if len(activations_one_cls_one_stride) > 0:
+                        concatenated_arrays_per_stride[idx_stride].append(activations_one_cls_one_stride)
+                        concatenated_targets_per_stride[idx_stride].append(np.ones(activations_one_cls_one_stride.shape[0]) * idx_cls)
+
+            concatenated_arrays_per_stride = [np.concatenate(arr, axis=0) for arr in concatenated_arrays_per_stride]
+            concatenated_targets_per_stride = [np.concatenate(arr, axis=0) for arr in concatenated_targets_per_stride]
+
+            for idx_stride, concatenated_array in enumerate(concatenated_arrays_per_stride):
+                concatenated_array, concatenated_targets  = shuffle(concatenated_array.reshape(concatenated_array.shape[0], -1), concatenated_targets_per_stride[idx_stride].astype(np.uint8), random_state=15)
+                self.ivis[idx_stride].fit(concatenated_array, concatenated_targets, shuffle_mode=True)
+                logger.info(f'IVIS fitted for stride {idx_stride}')
+
+    def activations_transformation(self, activations: np.array, cls_idx: int, stride_idx: int) -> np.array:
+        # Depending on the stride, apply the corresponding UMAP
+        return self.ivis[stride_idx].transform(activations.reshape(activations.shape[0], -1))
+
 
 class L1DistanceOneClusterPerStride(_PairwiseDistanceClustersPerClassPerStride):
 
@@ -2514,7 +2620,7 @@ class GAPL2DistanceOneClusterPerStride(DistanceMethod):
             #return distances[0]
             return distances.min(axis=0)
         
-        def activations_transformation(self, activations: np.array) -> np.array:
+        def activations_transformation(self, activations: np.array, **kwargs) -> np.array:
             """
             Transform the activations to the shape needed to compute the distance.
             By default, it flattens the activations leaving the batch dimension as the first dimension.
@@ -2537,7 +2643,7 @@ class ActivationsExtractor(DistanceMethod):
     def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
         raise NotImplementedError("Not implemented yet")
     
-    def activations_transformation(self, activations: np.array) -> np.array:
+    def activations_transformation(self, activations: np.array, **kwargs) -> np.array:
         """
         Transform the activations to the shape needed to compute the distance.
         By default, it flattens the activations leaving the batch dimension as the first dimension.
@@ -2615,7 +2721,7 @@ class FeaturemapExtractor(DistanceMethod):
     def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
         raise NotImplementedError("Not implemented yet")
     
-    def activations_transformation(self, activations: np.array) -> np.array:
+    def activations_transformation(self, activations: np.array, **kwargs) -> np.array:
         """
         Transform the activations to the shape needed to compute the distance.
         By default, it flattens the activations leaving the batch dimension as the first dimension.
@@ -2779,7 +2885,7 @@ class FusionMethod(OODMethod):
         """
         pass
 
-    def activations_transformation(self, activations: np.array) -> np.array:
+    def activations_transformation(self, activations: np.array, **kwargs) -> np.array:
         raise NotImplementedError("This method is not going to be called directly")
 
     def compute_distance(self, centroids: np.array, features: np.array) -> np.array:
@@ -3079,403 +3185,3 @@ def configure_extra_output_of_the_model(model: YOLO, ood_method: Type[OODMethod]
             raise ValueError(f"The option {ood_method.which_internal_activations} is not valid.")
         # 2. Select the extraction mode for the ultralytics/yolo/v8/detect/predict.py
         model.model.extraction_mode = ood_method.which_internal_activations  # This attribute is created in the DetectionModel class
-
-
-
-# class FusionMethod(OODMethod):
-
-#     logits_method: LogitsMethod
-#     distance_method: DistanceMethod
-#     fusion_strategy: str
-
-#     def __init__(self, logits_method: LogitsMethod, distance_method: DistanceMethod, fusion_strategy: str,  **kwargs):
-
-#         name = f'fusion_{logits_method.name}_{distance_method.name}'
-#         self.logits_method = logits_method
-#         self.distance_method = distance_method
-#         self.fusion_strategy = fusion_strategy
-#         super().__init__(name=name, per_class=True, per_stride=True, is_distance_method=True, which_internal_activations="none", **kwargs)
-
-#         # Define as properties the clusters and thresholds
-#         self._clusters = None
-#         self._thresholds = None
-    
-#     # Clusters
-#     @property
-#     def clusters(self):
-#         return self.distance_method.clusters
-    
-#     @clusters.setter
-#     def clusters(self, clusters):
-#         self.distance_method.clusters = clusters
-
-#     # Thresholds
-#     @property
-#     def thresholds(self):
-#         return self.logits_method.thresholds, self.distance_method.thresholds
-    
-#     @thresholds.setter
-#     def thresholds(self, thresholds):
-#         if thresholds is not None:
-#             if len(thresholds) == 2:
-#                 self.logits_method.thresholds = thresholds[0]
-#                 self.distance_method.thresholds = thresholds[1]
-#             else:
-#                 raise ValueError("The thresholds must be a tuple with two elements, one for the logits and one for the distance")
-#         else:
-#             print("The thresholds must be a tuple with two elements, one for the logits and one for the distance")
-#             self.logits_method.thresholds = None
-#             self.distance_method.thresholds = None
-
-
-#     def extract_internal_activations(self, results: Results, all_activations: Union[List[float], List[List[np.ndarray]]], targets: Dict[str, Tensor]):
-#         """
-#         Function to be overriden by each method to extract the internal activations of the model. In the logits
-#         methods, it will be the logits, and in the ftmaps methods, it will be the ftmaps.
-#         The extracted activations will be stored in the list all_activations
-#         """
-#         pass
-
-#     def format_internal_activations(self, all_activations: Union[List[float], List[List[np.ndarray]]]):
-#         """
-#         Function to be overriden by each method to format the internal activations of the model.
-#         The extracted activations will be stored in the list all_activations
-#         """
-#         pass
-
-#     def compute_ood_decision_on_results(self, results: Results, logger) -> List[List[int]]:
-#         """
-#         Function to be overriden by each method type to compute the OOD decision for each image.
-#         Parameters:
-#             results: Results -> The results of the model predictions
-#             logger: Logger -> The logger to print warnings or info
-#         Returns:
-#             ood_decision: List[int] -> A list of lists, where the first list is for each image and the second list is for each bbox. 
-#                 The value is 1 if the bbox is In-Distribution, 0 if it is Out-of-Distribution
-#         """
-#         pass
-    
-#     def compute_scores(self, activations, *args, **kwargs) -> np.ndarray:
-#         """
-#         Function to compute the scores of the activations. Either for one box or multiple boxes.
-#         The function should be overriden by each method and should try to vectorize the computation as much as possible.
-#         """
-#         pass
-
-#     def activations_transformation(self, activations: np.array) -> np.array:
-#         raise NotImplementedError("This method is not going to be called directly")
-
-#     def compute_distance(self, centroids: np.array, features: np.array) -> np.array:
-#         raise NotImplementedError("This method is not going to be called directly")
-
-#     def iterate_data_to_extract_ind_activations(self, data_loader, model: YOLO, device: str, logger: Logger):
-        
-#         configure_extra_output_of_the_model(model, which_internal_activations=self.logits_method.which_internal_activations)
-#         all_activations_logits = self.logits_method.iterate_data_to_extract_ind_activations(data_loader, model, device, logger)
-#         configure_extra_output_of_the_model(model, which_internal_activations=self.distance_method.which_internal_activations)
-#         all_activations_ftmaps = self.distance_method.iterate_data_to_extract_ind_activations(data_loader, model, device, logger)
-
-#         return all_activations_logits, all_activations_ftmaps
-
-#     def generate_thresholds(self, ind_scores: list, tpr: float, logger: Logger) -> Union[List[float], List[List[float]]]:
-        
-#         logits, ftmaps = ind_scores
-#         logits_thrs = self.logits_method.generate_thresholds(logits, tpr, logger)
-#         distance_thrs = self.distance_method.generate_thresholds(ftmaps, tpr, logger)
-
-#         return logits_thrs, distance_thrs
-
-#     def generate_clusters(self, ind_tensors: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger) -> Union[List[np.ndarray], List[List[np.ndarray]]]:
-#         ftmaps = ind_tensors[1]
-#         return self.distance_method.generate_clusters(ftmaps, logger)
-    
-#     def compute_scores_from_activations(self, activations: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger) -> Tuple[List[List[float]], List[List[float]]]:
-        
-#         logits, ftmaps = activations
-#         logit_scores = self.logits_method.compute_scores_from_activations(logits, logger)
-#         distance_scores = self.distance_method.compute_scores_from_activations(ftmaps, logger)
-
-#         return logit_scores, distance_scores
-
-#     def fuse_ood_decisions(self, ood_decision_logits: List[List[int]], ood_decision_distance: List[List[int]]) -> List[List[int]]:
-#         # 1 is InD, 0 is OoD
-#         ood_decision = []
-#         if self.fusion_strategy == "and":
-#             # AND strategy: If one of methods say that the bbox is InD (decision = 1), then it is InD
-#             for idx_img in range(len(ood_decision_logits)):
-#                 ood_decision.append(
-#                     [max(ood_decision_logits[idx_img][idx_bbox], ood_decision_distance[idx_img][idx_bbox]) for idx_bbox in range(len(ood_decision_logits[idx_img]))]
-#                 )
-
-#         elif self.fusion_strategy == "or":
-#             # OR strategy: If one of the methods says that the bbox is OoD (decision = 0), then it is OoD
-#             for idx_img in range(len(ood_decision_logits)):
-#                 ood_decision.append(
-#                     [min(ood_decision_logits[idx_img][idx_bbox], ood_decision_distance[idx_img][idx_bbox]) for idx_bbox in range(len(ood_decision_logits[idx_img]))]
-#                 )
-        
-#         elif self.fusion_strategy == "score":
-#             # SCORE strategy: The score is the sum of the scores of the two methods. If the score is greater than 0, it is InD
-#             for idx_img in range(len(ood_decision_logits)):
-#                 ood_score_one_img = [ood_decision_logits[idx_img][idx_bbox] + ood_decision_distance[idx_img][idx_bbox] for idx_bbox in range(len(ood_decision_logits[idx_img]))]
-#                 ood_decision.append(
-#                     [1 if score > 0 else 0 for score in ood_score_one_img]                    
-#                 )
-            
-#         else:
-#             raise NotImplementedError("Not implemented yet")
-        
-#         # Assert that the number of bboxes is the same after the decision
-#         for idx_img in range(len(ood_decision)):
-#             assert len(ood_decision[idx_img]) == len(ood_decision_logits[idx_img]), "The number of bboxes is different"
-#             assert len(ood_decision[idx_img]) == len(ood_decision_distance[idx_img]), "The number of bboxes is different"
-
-#         return ood_decision
-
-#     def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger: Logger, known_classes: List[int]) -> Dict[str, float]:
-        
-#         logger.warning(f"Using a confidence threshold of {self.min_conf_threshold_test} for tests")
-#         number_of_images_processed = 0
-#         number_of_batches = len(dataloader)
-#         all_preds = []
-#         all_targets = []
-#         assert hasattr(dataloader.dataset, "number_of_classes"), "The dataset does not have the attribute number_of_classes to know the number of classes known in the dataset"
-#         class_names = list(dataloader.dataset.data['names'].values())[:dataloader.dataset.number_of_classes]
-#         class_names.append('unknown')
-#         known_classes_tensor = torch.tensor(known_classes, dtype=torch.float32)
-
-#         # TODO: XAI
-#         if CUSTOM_HYP.unk.USE_XAI and self.enhanced_unk_localization:
-#             if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
-#                 from yolo_drise.xai.drise import DRISE
-#                 import os
-#                 input_size = (640, 640)
-#                 gpu_batch = CUSTOM_HYP.unk.xai.drise.GPU_BATCH
-#                 number_of_masks = CUSTOM_HYP.unk.xai.drise.NUMBER_OF_MASKS
-#                 stride = CUSTOM_HYP.unk.xai.drise.STRIDE
-#                 p1 = CUSTOM_HYP.unk.xai.drise.P1
-#                 expl_model = DRISE(model=model, 
-#                                   input_size=input_size, 
-#                                   device=device,
-#                                   gpu_batch=gpu_batch)
-                
-#                 generate_new = CUSTOM_HYP.unk.xai.drise.GENERATE_NEW_MASKS
-#                 mask_file = f"./yolo_drise/masks/masks_640x640_{p1:.2f}.npy"
-#                 if generate_new or not os.path.isfile(mask_file):
-#                     expl_model.generate_masks(N=number_of_masks, s=stride, p1=p1, savepath=mask_file)
-#                 else:
-#                     expl_model.load_masks(mask_file)
-#                     print('Masks are loaded.')
-#             else:
-#                 expl_model = yolov8_heatmap(
-#                     weight=model.ckpt_path,
-#                     method=CUSTOM_HYP.unk.xai.XAI_METHOD,
-#                     layer=CUSTOM_HYP.unk.xai.XAI_TARGET_LAYERS,
-#                     ratio=0.05,
-#                     conf_threshold=self.min_conf_threshold_test,
-#                     renormalize=CUSTOM_HYP.unk.xai.XAI_RENORMALIZE,
-#                     show_box=False,
-#                 )
-
-#         number_of_images_saved = 0
-#         count_of_images = 0
-#         for idx_of_batch, data in enumerate(dataloader):
-#             count_of_images += len(data['im_file'])
-
-#             if idx_of_batch % 50 == 0 or idx_of_batch == number_of_batches - 1:
-#                 logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch+1} of {number_of_batches}") 
-
-#             ### Preparar imagenes y targets ###
-#             imgs, targets = self.prepare_data_for_model(data, device)
-
-#             ###
-#             # Logits method
-#             ###
-#             configure_extra_output_of_the_model(model, ood_method=self.logits_method)
-#             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
-#             results_logits = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
-#             ### Comprobar si las cajas predichas son OoD ###
-#             if self.fusion_strategy == 'score':
-#                 ood_decision_logits = self.logits_method.compute_INDness_scores_on_results(results_logits, logger)
-#             else:
-#                 ood_decision_logits = self.logits_method.compute_ood_decision_on_results(results_logits, logger)
-
-#             ###
-#             # Distance method
-#             ###
-#             configure_extra_output_of_the_model(model, ood_method=self.distance_method)
-#             ### Procesar imagenes en el modelo para obtener las caracteristicas y las cajas ###
-#             results_distance = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
-#             ### Comprobar si las cajas predichas son OoD ###
-#             if self.fusion_strategy == 'score':
-#                 ood_decision_distance = self.distance_method.compute_INDness_scores_on_results(results_distance, logger)
-#             else:
-#                 ood_decision_distance = self.distance_method.compute_ood_decision_on_results(results_distance, logger)
-
-#             # Assert deeply that results are the same and assign the results as one of them (either logits or distance)
-#             for idx_r in range(len(results_logits)):
-#                 assert torch.allclose(results_logits[idx_r].boxes.xyxy, results_distance[idx_r].boxes.xyxy), f"Results are not the same for image {idx_r}"
-#                 assert torch.allclose(results_logits[idx_r].boxes.cls, results_distance[idx_r].boxes.cls), f"Results are not the same for image {idx_r}"
-#                 assert torch.allclose(results_logits[idx_r].boxes.conf, results_distance[idx_r].boxes.conf), f"Results are not the same for image {idx_r}"
-#             results = results_logits
-
-#             ### Fuse the results of the logits and distance methods ###
-#             ood_decision = self.fuse_ood_decisions(ood_decision_logits, ood_decision_distance)
-
-#             # for _i, dec in enumerate(ood_decision):
-#             #     one_img_dec_log = np.array(ood_decision_logits[_i])
-#             #     one_img_dec_dist = np.array(ood_decision_distance[_i])
-#             #     sum_dec = one_img_dec_log + one_img_dec_dist
-#             #     print(one_img_dec_log, '-', one_img_dec_dist,'-', sum_dec,'-', dec)
-
-#             # Plot the image _i=15 with the bboxes
-#             # from torchvision.utils import draw_bounding_boxes
-#             # import matplotlib.pyplot as plt
-#             # _i = 13
-#             # figures_fusion_folder = Path('./figures/fusion')
-#             # figures_fusion_folder.mkdir(exist_ok=True, parents=False)
-#             # for _i in range(len(results)):
-#             #     _conf = results[_i].boxes.conf
-#             #     confidences = []
-#             #     for _i_conf, _c in enumerate(_conf):
-#             #         _sc_log = ood_decision_logits[_i][_i_conf]
-#             #         _sc_dist = ood_decision_distance[_i][_i_conf]
-#             #         _cls = class_names[results[_i].boxes.cls[_i_conf].to(torch.int).item()]
-#             #         _decision = 'ood' if ood_decision[_i][_i_conf] < 0 else 'ind'
-#             #         confidences.append(f"{_c.item():.2f}-{_cls}\n{_decision}\n{_sc_log:.2f}\n{_sc_dist:.2f}")
-#             #     # _conf = [f'{_c.item():.2f}' for _c in _conf]  # Se podria poner los dos scores
-#             #     img = draw_bounding_boxes(imgs[_i], results[_i].boxes.xyxy, confidences)
-#             #     plt.imshow(img.cpu().permute(1, 2, 0).numpy())
-#             #     plt.tight_layout()
-#             #     plt.savefig(figures_fusion_folder / f'{(number_of_images_saved + _i):03}.png', dpi=300)
-#             #     plt.close()
-
-#             ### Añadir posibles cajas desconocidas a las predicciones ###
-#             if self.enhanced_unk_localization:
-#                 if CUSTOM_HYP.unk.USE_XAI:
-#                     delattr(model.model, 'which_layers_to_extract')
-#                     delattr(model.model, 'extraction_mode')
-#                     # Heatmaps in shape (M, H, W), M being the batch size an in form of a tensor in cpu
-#                     # and in the range [0, 1]
-#                     if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
-#                         from skimage.transform import downscale_local_mean
-#                         if p1 == 0.5:
-#                             save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}.npy'
-#                         else:
-#                             save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}_p1_{p1:.2f}.npy'
-#                         if not os.path.exists(save_name):
-#                             expl_heatmaps = expl_model(x=imgs, results=results, mode='object_detection')
-#                             # Save the heatmaps
-#                             np.save(save_name, expl_heatmaps.numpy())
-#                         else:
-#                             # Load the heatmaps and downscale them
-#                             print('***** LOADING HEATMAPS *****')
-#                             expl_heatmaps = torch.tensor(np.load(save_name), dtype=torch.float32)
-#                         processed_heatmaps = downscale_local_mean(expl_heatmaps.numpy(), (1, 8, 8))
-#                         processed_heatmaps = [torch.tensor(hm, dtype=torch.float32) for hm in processed_heatmaps]
-#                     else:
-#                         expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
-#                         processed_heatmaps = expl_heatmaps
-#                         #processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
-#                     configure_extra_output_of_the_model(model, self)
-                    
-#                 else:
-#                     processed_heatmaps = None
-#                 if CUSTOM_HYP.unk.RANK_BOXES:
-#                         possible_unk_bboxes, ood_decision_on_unknown, distances_per_image = self.compute_extra_possible_unkwnown_bboxes_and_decision(
-#                             results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
-#                             folder_path=None, origin_of_idx=idx_of_batch*dataloader.batch_size
-#                         )
-#                 else:
-#                     distances_per_image = None
-#                     possible_unk_bboxes, ood_decision_on_unknown = self.compute_extra_possible_unkwnown_bboxes_and_decision(
-#                         results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
-#                         folder_path=None, origin_of_idx=idx_of_batch*dataloader.batch_size
-#                     )
-
-#             # Cada prediccion va a ser un diccionario con las siguientes claves:
-#             #   'img_idx': int -> Indice de la imagen
-#             #   'img_name': str -> Nombre del archivo de la imagen
-#             #   'bboxes': List[Tensor] -> Lista de tensores con las cajas predichas
-#             #   'cls': List[Tensor] -> Lista de tensores con las clases predichas
-#             #   'conf': List[Tensor] -> Lista de tensores con las confianzas de las predicciones (en yolov8 es cls)
-#             #   'ood_decision': List[int] -> Lista de enteros con la decision de si la caja es OoD o no
-#             for img_idx, res in enumerate(results):
-#                 #for idx_bbox in range(len(res.boxes.cls)):
-#                 # if self.enhanced_unk_localization:
-#                 #     pass
-#                 # else:
-#                 # Parse the ood elements as the unknown class (80)
-#                 ood_decision_one_image = torch.tensor(ood_decision[img_idx], dtype=torch.float32)
-#                 unknown_mask = ood_decision_one_image == 0
-#                 bboxes_coords = res.boxes.xyxy.cpu()
-#                 bboxes_cls = torch.where(unknown_mask, torch.tensor(80, dtype=torch.float32), res.boxes.cls.cpu())   
-#                 # Make all the preds to be the class 80 to known the max recall possible
-#                 #bboxes_cls = torch.tensor(80, dtype=torch.float32).repeat(len(res.boxes.cls))
-#                 bboxes_conf = res.boxes.conf.cpu()
-#                 # TODO: La logica de como ignorar ciertos unknowns la tenemos que idear, ya que por el momento no tiene 
-#                 #   sentido que las propuestas no sean unknowns
-#                 if self.enhanced_unk_localization:
-#                     # Add the possible unknown boxes to the predictions
-#                     bboxes_coords = torch.cat([bboxes_coords, possible_unk_bboxes[img_idx]], dim=0)
-#                     one_image_ood_decision_on_possible_unk = torch.tensor(ood_decision_on_unknown[img_idx], dtype=torch.float32)
-#                     assert one_image_ood_decision_on_possible_unk.sum().item() == 0.0, "Uno de los posible unknowns es considerado como known, pero como no tenemos esa logica implementada es ERROR"
-#                     # TODO: Por el momento simplemente lo que hago es hacer un tensor con todo clase 80 (unk). Luego tendre que ver como gestiono el hacer que acaben siendo una clase
-#                     cls_unk_prop = torch.tensor(80, dtype=torch.float32).repeat(len(possible_unk_bboxes[img_idx]))
-#                     bboxes_cls = torch.cat([bboxes_cls, cls_unk_prop], dim=0)
-#                     conf_unk_prop = torch.ones(len(possible_unk_bboxes[img_idx])) * 0.150001  # TODO: Pongo 0.150001 de confianza para las propuestas de unknown
-#                     bboxes_conf = torch.cat([bboxes_conf, conf_unk_prop], dim=0)
-#                 all_preds.append({
-#                     'img_idx': number_of_images_processed + img_idx,
-#                     'img_name': Path(data['im_file'][img_idx]).stem,
-#                     'bboxes': bboxes_coords,
-#                     'cls': bboxes_cls,
-#                     'conf': bboxes_conf,
-#                     #'ood_decision': torch.tensor(ood_decision[img_idx], dtype=torch.float32)
-#                 })
-                    
-#                 # Transform the classes to index 80 if they are not in the known classes
-#                 known_mask = torch.isin(targets['cls'][img_idx], known_classes_tensor)
-#                 transformed_target_cls = torch.where(known_mask, targets['cls'][img_idx], torch.tensor(80, dtype=torch.float32))
-#                 all_targets.append({
-#                     'img_idx': number_of_images_processed + img_idx,
-#                     'img_name': Path(data['im_file'][img_idx]).stem,
-#                     'bboxes': targets['bboxes'][img_idx],
-#                     'cls': transformed_target_cls
-#                 })
-
-#             ### Acumular predicciones y targets ###
-#             number_of_images_processed += len(imgs)
-
-#             # # Plot one image of the batch with predictions and targets
-#             # idx_image = 4
-#             # plot_results(
-#             #     class_names=model.names,
-#             #     results=results,
-#             #     folder_path=Path('.'),
-#             #     now='ahora',
-#             #     valid_preds_only=False,
-#             #     origin_of_idx=idx_of_batch*dataloader.batch_size,
-#             #     image_format='{IMAGE_FORMAT}',
-#             #     #ood_decision=ood_decision,
-#             #     targets=targets,
-#             # )
-#             number_of_images_saved += len(data['im_file'])
-
-#         #########
-#         # Loop finished
-#         #########
-
-#         # All predictions collected, now compute metrics
-#         results_dict = compute_metrics(all_preds, all_targets, class_names, known_classes, logger)
-
-#         # Count the number of non-unknown instances and the number of unknown instances
-#         number_of_known_boxes = 0 
-#         number_of_unknown_boxes = 0
-#         for _target in all_targets:
-#             number_of_known_boxes += torch.sum(_target['cls'] != 80).item()
-#             number_of_unknown_boxes += torch.sum(_target['cls'] == 80).item()
-#         logger.info(f"Number of target known boxes: {number_of_known_boxes}")
-#         logger.info(f"Number of target unknown boxes: {number_of_unknown_boxes}")
-
-#         return results_dict

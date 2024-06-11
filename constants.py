@@ -5,6 +5,7 @@ ROOT = Path(__file__).parent  # Assumes this script is in the root of the projec
 STORAGE_PATH = ROOT / 'storage'
 PRUEBAS_ROOT_PATH = ROOT / 'pruebas'
 RESULTS_PATH = ROOT / 'results'
+INDIVIDUAL_RESULTS_FILE_PATH = RESULTS_PATH / 'individual_results'
 
 ### For YOLO ###
 STRIDES_RATIO = [8, 16, 32]  # The ratio between each level of the FPN and the original image size ((orig_img_size / feature_map_size) = ratio)
@@ -20,7 +21,7 @@ COCO_MIXED_NAME = 'coco_mixed'
 COCO_OWOD_TEST_NAME = 'owod'
 # OOD Methods
 LOGITS_METHODS = ['NoMethod', 'MSP', 'Energy', 'ODIN', 'Sigmoid']
-DISTANCE_METHODS = ['L1_cl_stride', 'L2_cl_stride', 'GAP_L2_cl_stride', 'Cosine_cl_stride']
+DISTANCE_METHODS = ['L1_cl_stride', 'L2_cl_stride', 'GAP_L2_cl_stride', 'Cosine_cl_stride', 'Umap', 'Ivis']
 OOD_METHOD_CHOICES = LOGITS_METHODS + DISTANCE_METHODS
 
 FTMAPS_RELATED_OPTIONS = ['roi_aligned_ftmaps','all_ftmaps', 'ftmaps_and_strides']

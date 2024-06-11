@@ -2,11 +2,12 @@ import time
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Type, Union, Literal, List, Tuple, Dict
+from typing import Type, Union, Literal, List, Tuple, Dict, Any
 from logging import Logger
 
 from tap import Tap
 import numpy as np
+import pandas as pd
 import torch
 
 import log
@@ -15,13 +16,14 @@ from ultralytics.yolo.data.build import InfiniteDataLoader
 
 from ood_utils import configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, NoMethod, MSP, Energy, ODIN, Sigmoid, \
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride, \
-    FusionMethod
+    FusionMethod, UmapMethod, IvisMethod
 from data_utils import read_json, write_json, load_dataset_and_dataloader
 from unknown_localization_utils import select_ftmaps_summarization_method, select_thresholding_method
 from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, OOD_METHOD_CHOICES, TARGETS_RELATED_OPTIONS, \
     AVAILABLE_CLUSTERING_METHODS, DISTANCE_METHODS, BENCHMARKS, COCO_OOD_NAME, COCO_MIXED_NAME, COCO_OWOD_TEST_NAME, \
-    COMMON_COLUMNS, COCO_OOD_COLUMNS, COCO_MIX_COLUMNS, COCO_OWOD_COLUMNS, FINAL_COLUMNS, LOGITS_METHODS, DISTANCE_METHODS
-from custom_hyperparams import CUSTOM_HYP, Hyperparams
+    COMMON_COLUMNS, COCO_OOD_COLUMNS, COCO_MIX_COLUMNS, COCO_OWOD_COLUMNS, FINAL_COLUMNS, LOGITS_METHODS, DISTANCE_METHODS, \
+    INDIVIDUAL_RESULTS_FILE_PATH
+from custom_hyperparams import CUSTOM_HYP, Hyperparams, hyperparams_to_dict
 
 
 NOW = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -220,6 +222,10 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
         return GAPL2DistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'Cosine_cl_stride':
         return CosineDistanceOneClusterPerStride(**distance_methods_kwargs)
+    elif args.ood_method == 'Umap':
+        return UmapMethod(**distance_methods_kwargs)
+    elif args.ood_method == 'Ivis':
+        return IvisMethod(**distance_methods_kwargs)
     else:
         raise NotImplementedError("Not implemented yet")
 
@@ -332,13 +338,9 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
     logger.flush()
 
     # ALL method must use validation split in order no to collapse all the thresholds to 0
-    # original_value_of_use_val_split = args.use_val_split_for_thresholds
-    # original_value_of_use_train_and_val = args.use_train_and_val_for_thresholds
     original_value_which_split = args.which_split
     if args.cluster_method == 'all' and ood_method.is_distance_method:
         logger.warning(f"Setting use_val_split_for_thresholds to True and use_train_and_val_for_thresholds to False as the cluster method is {args.cluster_method}")
-        # args.use_val_split_for_thresholds = True
-        # args.use_train_and_val_for_thresholds = False
         args.which_split = 'val'
 
     if args.ood_method.startswith('fusion'):
@@ -363,22 +365,6 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
     else:
         activations_path_train, thresholds_path, clusters_path, activations_path_val = define_paths_of_activations_thresholds_and_clusters(ood_method, model, args)
 
-    # activations_str =   f'{ood_method.which_internal_activations}_conf{ood_method.min_conf_threshold_train}_{model.ckpt["train_args"]["name"]}_activations'
-    # thresholds_str =    f'{ood_method.name}_conf{ood_method.min_conf_threshold_train}_{model.ckpt["train_args"]["name"]}_thresholds'
-    # if args.ood_method in DISTANCE_METHODS:
-    #     clusters_str = f'{ood_method.name}_conf{ood_method.min_conf_threshold_train}_{model.ckpt["train_args"]["name"]}_clusters_{ood_method.cluster_method}_{ood_method.cluster_optimization_metric}'
-    #     thresholds_str += f'_{ood_method.cluster_method}'
-    # if args.ood_method in TARGETS_RELATED_OPTIONS:
-    #     activations_str += f'_{args.ind_info_creation_option}'
-    #     thresholds_str += f'_{args.ind_info_creation_option}'
-    #     if args.ood_method in DISTANCE_METHODS:
-    #         clusters_str += f'_{args.ind_info_creation_option}'
-    
-    # activations_path = STORAGE_PATH / f'{activations_str}.pt'
-    # thresholds_path = STORAGE_PATH / f'{thresholds_str}.json'
-    # if args.ood_method in DISTANCE_METHODS:
-    #     clusters_path = STORAGE_PATH / f'{clusters_str}.pt'
-
     ### Load the thresholds ###
     if args.load_thresholds:
         # Load thresholds from disk
@@ -400,60 +386,6 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
             ind_activations_val = obtain_ind_activations(ood_method, model, device, ind_dataloader_val, activations_path_val, logger, args)
         else:
             ind_activations_val = None
-        
-        # # Load activations for the thresholds
-        # if args.load_ind_activations:
-        #     # Load in_distribution activations from disk
-        #     logger.info("Loading in-distribution activations...")
-        #     if args.ood_method.startswith('fusion'):  # For fusion methods
-        #         configure_extra_output_of_the_model(model, ood_method.method1)
-        #         ind_activations1 = load_or_generate_and_save_activations(activations_path1, ood_method.method1, in_loader, model, device, logger)
-        #         configure_extra_output_of_the_model(model, ood_method.method2)
-        #         ind_activations2 = load_or_generate_and_save_activations(activations_path2, ood_method.method2, in_loader, model, device, logger)
-        #         ind_activations = [ind_activations1, ind_activations2]
-        #     # For the rest of the methods
-        #     else:
-                
-        #         ind_activations = load_or_generate_and_save_activations(activations_path, ood_method, in_loader, model, device, logger)
-
-        #     # if activations_path.exists():
-        #     #     ind_activations = torch.load(activations_path)
-        #     #     logger.info(f"In-distribution activations succesfully loaded from {activations_path}")
-        #     # else:
-        #     #     # Generate in_distribution activations to generate thresholds
-        #     #     logger.error(f"File {activations_path} does not exist. Generating in-distribution activations by iterating over the data...")
-        #     #     ind_activations = ood_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
-        #     #     logger.info("In-distribution data processed")
-        #     #     logger.info("Saving in-distribution activations...")
-        #     #     torch.save(ind_activations, activations_path, pickle_protocol=5)
-        #     #     logger.info(f"In-distribution activations succesfully saved in {activations_path}")
-
-        # # Generate in_distribution activations to generate thresholds
-        # else:
-        #     if args.ood_method.startswith('fusion'):  # For fusion methods
-        #         logger.info("Processing in-distribution data for BOTH fused methods...")
-        #         ind_activations = ood_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
-        #         torch.save(ind_activations[0], activations_path1, pickle_protocol=5)
-        #         torch.save(ind_activations[1], activations_path2, pickle_protocol=5)
-
-        #         # configure_extra_output_of_the_model(model, ood_method.ood_method1)
-        #         # ind_activations1 = ood_method.method1.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
-        #         # torch.save(ind_activations1, activations_path1, pickle_protocol=5)
-        #         # configure_extra_output_of_the_model(model, ood_method.ood_method2)
-        #         # ind_activations2 = ood_method.method2.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
-        #         # torch.save(ind_activations2, activations_path2, pickle_protocol=5)                
-        #         # ind_activations = [ind_activations1, ind_activations2]
-
-        #         logger.info("In-distribution data processed and saved")
-
-        #     # Rest of the methods
-        #     else:
-        #         logger.info("Processing in-distribution data...")
-        #         ind_activations = ood_method.iterate_data_to_extract_ind_activations(in_loader, model, device, logger)
-        #         logger.info("In-distribution data processed")
-        #         logger.info("Saving in-distribution activations...")
-        #         torch.save(ind_activations, activations_path, pickle_protocol=5)
-        #         logger.info(f"In-distribution activations succesfully saved in {activations_path}")
 
         ### 2. Obtain scores ###
         # Distance methods need to have clusters representing the In-Distribution data and then compute the scores
@@ -507,15 +439,6 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
             logger.info("Generating scores to evaluate UNK proposals...")
             scores_for_unk_prop = ood_method.compute_scores_from_activations_for_unk_proposals(ind_activations, logger)
             logger.info("Saving UNK proposals...")
-        
-        # # For the rest of the methods activations are the scores themselves
-        # else:
-        #     if args.use_val_split_for_thresholds:
-        #         ind_scores = ood_method.compute_scores_from_activations(ind_activations_val, logger)
-        #     elif args.use_train_and_val_for_thresholds:
-        #         ind_scores = ood_method.compute_scores_from_activations(ind_activations_train + ind_activations_val, logger)
-        #     else:
-        #         ind_scores = ood_method.compute_scores_from_activations(ind_activations_train, logger)
 
         ### 3. Obtain thresholds ###
         # Finally generate and save the thresholds
@@ -535,8 +458,6 @@ def execute_pipeline_for_in_distribution_configuration(ood_method: Union[LogitsM
 
     # Restore the original value for 'all' cluster method in case it was changed
     if args.cluster_method == 'all' and ood_method.is_distance_method:
-        # args.use_val_split_for_thresholds = original_value_of_use_val_split
-        # args.use_train_and_val_for_thresholds = original_value_of_use_train_and_val
         args.which_split = original_value_which_split
 
 
@@ -598,6 +519,12 @@ def run_eval(ood_method: OODMethod, model: YOLO, device: str, ood_loader: Infini
 
     return results
 
+
+######################################################################################
+
+# Main program
+
+######################################################################################
 
 def main(args: SimpleArgumentParser):
     print('---------------------------- OOD Detection ----------------------------')
@@ -696,8 +623,22 @@ def main(args: SimpleArgumentParser):
             
         elif args.compute_metrics:
             
-            # Run the normal evaluation to compute the metrics
-            _ = run_eval(ood_method, model, device, ood_dataloader, known_classes, logger)
+            results = {}
+            
+            # Fill the dictionary with the information of the method
+            mean_n_clusters, std_n_clusters = get_mean_and_std_n_clusters(ood_method)
+            fill_dict_with_method_info(results, args, ood_method, fusion_strat='None', mean_n_clus=mean_n_clusters, std_n_clus=std_n_clusters)
+
+            # Run normal evaluation to compute the metrics and fill the dictionary with the results
+            results_one_dataset = run_eval(ood_method, model, device, ood_dataloader, known_classes, logger)
+            fill_dict_with_one_dataset_results(results, results_one_dataset, args.ood_dataset)
+            
+            # Obtain the dictionary with the hyperparameters
+            custom_hyperparams_dict = hyperparams_to_dict(CUSTOM_HYP)
+            results.update(custom_hyperparams_dict)
+
+            # Append the results to the xlsx file. Create it if it does not exist
+            append_results_to_xlsx_and_csv(results, INDIVIDUAL_RESULTS_FILE_PATH.with_name(f"{INDIVIDUAL_RESULTS_FILE_PATH.stem}_{args.ood_dataset}"))
         
         else:
             raise ValueError("You must pass either visualize_oods or compute_metrics")
@@ -708,7 +649,6 @@ def main(args: SimpleArgumentParser):
 
     ### Benchmark execution ###
     else:
-        import pandas as pd
         logger.info(f"Running benchmark for {args.benchmark}")
 
         print('--------------------------------------')
@@ -1265,82 +1205,29 @@ def get_mean_and_std_n_clusters(ood_method: OODMethod) -> Tuple[float, float]:
         std_n_clusters = 0
     return mean_n_clusters, std_n_clusters
 
+def append_results_to_xlsx_and_csv(results: Dict[str, float], file_path: Path) -> None:
+
+    # Ensure the directory exists
+    file_path.parent.mkdir(parents=False, exist_ok=True)
+
+    # Create a DataFrame with the new results
+    new_results_df = pd.DataFrame([results])
+
+    # Check if file exists
+    if not file_path.exists():
+        # Create a new DataFrame with the results
+        combined_results_df = new_results_df
+    else:
+        # Read the existing file into a DataFrame
+        existing_results_df = pd.read_excel(file_path)
+        # Append the new results
+        combined_results_df = pd.concat([existing_results_df, new_results_df], ignore_index=True)
+
+    # Save the DataFrame to the Excel file
+    combined_results_df.to_excel(file_path.with_suffix('.xlsx'), index=False)
+    # Save the DataFrame to the CSV file
+    combined_results_df.to_csv(file_path.with_suffix('.csv'), index=False)
+
 
 if __name__ == "__main__":
     main(SimpleArgumentParser().parse_args())
-
-
-# elif args.benchmark == 'fusion_strategies':
-#             ## 1. Name results file
-#             results_file_name = f"{NOW}_{args.benchmark}_{args.ood_method}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}"
-#             FUSION_STRATS_TO_TEST = BENCHMARKS[args.benchmark]
-#             logger.info(f"Running benchmark for methods {FUSION_STRATS_TO_TEST}")
-
-#             ## 2. Load common assets for the benchmark if any
-#             logger.info(f"First configure and train the OOD detection method")
-#             # Load the OOD detection method
-#             ood_method = select_ood_detection_method(args)
-#             # Modify internal attributes of the model to obtain the desired outputs in the extra_item
-#             configure_extra_output_of_the_model(model, ood_method)
-#             execute_pipeline_for_in_distribution_configuration(ood_method, model, device, ind_dataloader, ind_val_dataloader, logger, args)
-            
-#             ## 3. Run the benchmark
-#             final_results_df = pd.DataFrame(columns=results_colums)
-#             for strat in FUSION_STRATS_TO_TEST:
-#                 print("-"*50)
-#                 results_one_run = {}
-#                 ## 3.1. Modify what is going to be benchmarked
-#                 logger.info(f" *** Fusion strategy: {strat} ***")
-#                 # Change to the new strat
-#                 args.fusion_strategy = strat
-#                 ood_method.fusion_strategy = strat
-                
-#                 ## 3.2. Add info
-#                 if ood_method.is_distance_method:
-#                     if ood_method.method1.is_distance_method and ood_method.method2.is_distance_method:
-#                         cluster_method_name = f"{ood_method.method1.cluster_method} + {ood_method.method2.cluster_method}"
-#                         mean_n_clusters1, std_n_clusters1 = get_mean_and_std_n_clusters(ood_method.method1)
-#                         mean_n_clusters2, std_n_clusters2 = get_mean_and_std_n_clusters(ood_method.method2)
-#                         mean_n_clusters = (mean_n_clusters1 + mean_n_clusters2) / 2
-#                         std_n_clusters = (std_n_clusters1 + std_n_clusters2) / 2
-#                     elif ood_method.method1.is_distance_method:
-#                         cluster_method_name = ood_method.method1.cluster_method
-#                         mean_n_clusters, std_n_clusters = get_mean_and_std_n_clusters(ood_method.method1)
-#                     elif ood_method.method2.is_distance_method:
-#                         cluster_method_name = ood_method.method2.cluster_method
-#                         mean_n_clusters, std_n_clusters = get_mean_and_std_n_clusters(ood_method.method2)
-#                     else:
-#                         raise ValueError("At least one of the methods must be a distance method if indicated in the base class")
-#                 else:
-#                     cluster_method_name = 'No Cluster Method'
-#                     mean_n_clusters, std_n_clusters = 0, 0
-
-#                 results_one_run['Method'] = args.ood_method
-#                 results_one_run['conf_thr_train'] = args.conf_thr_train
-#                 results_one_run['conf_thr_test'] = args.conf_thr_test
-#                 results_one_run["tpr_thr"] = args.tpr_thr
-#                 results_one_run["cluster_method"] = cluster_method_name
-#                 results_one_run["mean_n_clus"] = mean_n_clusters
-#                 results_one_run["std_n_clus"] = std_n_clusters
-#                 # results_one_run["mean_num_samples_per_clus"] = mean_num_samples_per_clus
-#                 # results_one_run["std_num_samples_per_clus"] = std_num_samples_per_clus
-#                 results_one_run["fusion_strat"] = args.fusion_strategy
-
-#                 ## 3.3. Run configuration for every dataset
-#                 for dataloader in ood_dataloaders:
-#                     # Extract metrics
-#                     results_one_run_one_dataset = run_eval(ood_method, model, device, dataloader, known_classes, logger)
-#                     if coco_ood_dataloader == dataloader:
-#                         dataset_name = COCO_OOD_NAME    
-#                     elif coco_mixed_dataloader == dataloader:
-#                         dataset_name = COCO_MIXED_NAME
-#                     elif coco_owod_test_dataloader == dataloader:
-#                         dataset_name = COCO_OWOD_TEST_NAME
-#                     else:
-#                         raise ValueError("Unknown dataset")
-#                     fill_dict_with_one_dataset_results(results_one_run, results_one_run_one_dataset, dataset_name)
-                
-#                 ## 3.4. Collect results
-#                 add_args_and_hyperparams_info(results_one_run, args, CUSTOM_HYP)
-#                 final_results_df.loc[len(final_results_df)] = results_one_run
-#                 print("-"*50, '\n')
