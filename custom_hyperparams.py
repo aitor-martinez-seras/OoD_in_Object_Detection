@@ -21,7 +21,7 @@ def hyperparams_to_dict(hyperparams: Any) -> Dict:
 @dataclass
 class IvisParams:
     # For Ivis
-    EMBEDDING_DIMS: int = 16
+    EMBEDDING_DIMS: int = 32
     N_EPOCHS_WITHOUT_PROGRESS: int = 20
     K: int = 15
     MODEL: str = 'maaten'
@@ -51,11 +51,15 @@ class FusionParams:
 class ClustersParams:
     MIN_SAMPLES: int = 3  # Should be equal to the MIN_NUMBER_OF_SAMPLES_FOR_THR
     RANGE_OF_CLUSTERS: List[int] = field(default_factory=lambda: list(range(2, 15)))
-    # Clusters (orphans = samples whose label is -1)
-    REMOVE_ORPHANS: bool = False  # If True, orphans will not be counted as a cluster
-    WEIGHT_SCORE_WITH_PERCENT_ORPHANS: bool = True  # If True, the score will be weighted by the percentage of orphans in the cluster
-    MAX_PERCENT_OF_ORPHANS: float = 0.95  # The maximum percentage of orphans per class and stride
     VISUALIZE: bool = False  # This is activated from ood_evaluation
+    # Density based metric usage
+    USE_DENSITY_BASED_METRIC: bool = False  # If True, the DBCV metric will be used to optimize the number of clusters for density based methods
+    # Orphans options (orphans = samples whose label is -1)
+    MAKE_EACH_ORPHAN_EACH_OWN_CLUSTER: bool = False  # If True, each orphan will be considered as a cluster
+    REMOVE_ORPHANS: bool = False  # If True, orphans will not be counted as a cluster
+    #WEIGHT_SCORE_WITH_PERCENT_ORPHANS: bool = True  # If True, the score will be weighted by the percentage of orphans in the cluster
+    MAX_PERCENT_OF_ORPHANS: float = 0.95  # The maximum percentage of orphans per class and stride
+    assert (MAKE_EACH_ORPHAN_EACH_OWN_CLUSTER != REMOVE_ORPHANS) or (MAKE_EACH_ORPHAN_EACH_OWN_CLUSTER == REMOVE_ORPHANS == False), "Only one of the two options can be used"
 
 
 @dataclass
@@ -71,7 +75,7 @@ class DRiseParams:
 @dataclass
 class XAIParams:
 
-    XAI_METHOD: str = "D-RISE"  # GradCAM, HiResCAM, LayerCAM, D-RISE
+    XAI_METHOD: str = "LayerCAM"  # GradCAM, HiResCAM, LayerCAM, D-RISE
     XAI_TARGET_LAYERS: List[int] = (15, 18, 21)
     if XAI_METHOD == "D-RISE":
         drise: DRiseParams = DRiseParams()
@@ -113,6 +117,12 @@ class RankParams:
 
 @dataclass
 class UnkEnhancementParams:
+    # Unknown enhancement method being used? This is activated from ood_evaluation
+    USE_UNK_ENHANCEMENT: bool = False  # DO NOT CHANGE THIS VALUE, IT IS USED TO FOR REPORTS, DOES NOT AFFECT THE CODE
+
+    # Enable or disable the use of heuristics to remove boxes
+    USE_HEURISTICS: bool = True
+
     # Information summarization method
     SUMMARIZATION_METHOD: str = "mean_absolute_deviation_of_ftmaps"
 
@@ -123,29 +133,25 @@ class UnkEnhancementParams:
 
     # Enable or disable the use of XAI
     USE_XAI_TO_MODIFY_SALIENCY: bool = False  # If True, the XAI method will be used to enhance the localization of the UNK proposals
-    USE_XAI_TO_REMOVE_PROPOSALS: bool = True  # If True, the XAI method will be used to remove the UNK proposals
+    USE_XAI_TO_REMOVE_PROPOSALS: bool = False  # If True, the XAI method will be used to remove the UNK proposals
     assert not (USE_XAI_TO_MODIFY_SALIENCY and USE_XAI_TO_REMOVE_PROPOSALS), "Only one of the XAI methods can be used"
-
-    # Enable or disable the use of heuristics
-    USE_HEURISTICS: bool = True
     
-    # Used heuristics
+    # Simple heuristics
+    USE_SIMPLE_HEURISTICS: bool = False  # Use to enable or disable the simple heuristics, listed below
     USE_FIRST_THRESHOLD: bool = True  # If True, the first threshold will be used
-    MAX_IOU_WITH_PREDS: float = 0.0  # The maximum IOU between an UNK proposal bbox and a predicted bbox. If over the threshold, the UNK proposal is discarded
     MIN_BOX_SIZE: int = 3  # The minimum size of a box in the feature map space. 3*8 = 24 pixels in the original image if the stride is 8.
     MAX_BOX_SIZE_PERCENT: float = 0.9  # The percentage of the feature map size that a box can take
-    MAX_INTERSECTION_W_PREDS: float = 0.0  # If above 0, the proposals with an intersection with the predicted bboxes over the threshold will be removed
+    MAX_IOU_WITH_PREDS: float = 0.0  # The maximum IOU between an UNK proposal bbox and a predicted bbox. If over the threshold, the UNK proposal is discarded
+    MAX_INTERSECTION_W_PREDS: float = 0  # If above 0, the proposals with an intersection with the predicted bboxes over the threshold will be removed
 
     # Enable or disable ranking the prosals. if USE_HEURISTICS is False, no ranking will be done
-    RANK_BOXES: bool = True
+    RANK_BOXES: bool = False
     
-    if USE_XAI_TO_MODIFY_SALIENCY or USE_XAI_TO_REMOVE_PROPOSALS:
-        USE_XAI: bool = True  # If True, the XAI method will be used to enhance the localization of the UNK proposals
-        xai: XAIParams = XAIParams()
-    else:
-        USE_XAI: bool = False
-    if RANK_BOXES:
-        rank: RankParams = RankParams()
+    
+    # if USE_XAI_TO_MODIFY_SALIENCY or USE_XAI_TO_REMOVE_PROPOSALS:
+    #     USE_XAI: bool = True  # If True, the XAI method will be used to enhance the localization of the UNK proposals
+    xai: XAIParams = XAIParams()
+    rank: RankParams = RankParams()
     
 
 @dataclass
@@ -180,6 +186,8 @@ class Hyperparams:
                 "000000500613", "000000365655", "000000241319", "000000357060", "000000163951",
                 "000000156292", "000000553221", "000000195918", "000000163746", "000000469192"
             ]
+    
+    BENCHMARK_MODE: bool = False  # This should only be changed to True dynamically when running the benchmarks
 
 # Create an instance of the Hyperparams class for imports
 CUSTOM_HYP = Hyperparams()

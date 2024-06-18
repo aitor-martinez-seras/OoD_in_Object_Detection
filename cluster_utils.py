@@ -51,7 +51,7 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
         b = np.linspace(0.1, 1, 100)
         c = np.linspace(1, 10, 100)
         d = np.linspace(10, 100, 100)
-        eps = np.concatenate((a,b,c,d))
+        eps = np.concatenate((a,b,c))
         params = {
             'eps': eps,
             'min_samples': [CUSTOM_HYP.clusters.MIN_SAMPLES],
@@ -180,8 +180,25 @@ def find_optimal_number_of_clusters_one_class_one_stride_and_return_labels(
     else:
         cluster_labels = cluster_class(**best_params).fit_predict(feature_maps)
 
+    if CUSTOM_HYP.clusters.MAKE_EACH_ORPHAN_EACH_OWN_CLUSTER:
+        cluster_labels = make_each_orphan_be_each_own_cluster(cluster_labels)
+
     return cluster_labels
     
+
+def make_each_orphan_be_each_own_cluster(cluster_labels: np.ndarray) -> np.ndarray:
+    orphan_labels_positions = np.where(cluster_labels < 0)[0]
+    num_orphans = len(orphan_labels_positions)
+    if num_orphans == 0:
+        # There are no orphan samples
+        return cluster_labels
+    else:
+        # There are orphan samples
+        starting_cluster_number = np.max(cluster_labels)
+        for i in range(num_orphans):
+            cluster_labels[orphan_labels_positions[i]] = starting_cluster_number + i+1
+    return cluster_labels
+
 
 def compute_score_for_all_possible_configurations(
         feature_maps: np.ndarray,
@@ -248,7 +265,11 @@ def compute_score_for_all_possible_configurations(
 
                 ### Compute performance score and append it to the list
                 if total_number_of_samples-1 > len(set(cluster_labels)) > 1:
-                    if density_based and CUSTOM_HYP.clusters.REMOVE_ORPHANS:
+
+                    if CUSTOM_HYP.clusters.MAKE_EACH_ORPHAN_EACH_OWN_CLUSTER:
+                        cluster_labels = make_each_orphan_be_each_own_cluster(cluster_labels)
+
+                    if density_based and (CUSTOM_HYP.clusters.REMOVE_ORPHANS or CUSTOM_HYP.clusters.USE_DENSITY_BASED_METRIC):
                         score = hdbscan.validity.validity_index(feature_maps_one_run.astype(np.float64), cluster_labels, metric=metric, d=feature_maps_one_run.shape[1])
                     else:
                         if perf_score_metric == 'silhouette':
@@ -284,7 +305,7 @@ def compute_score_for_all_possible_configurations(
 def plot_scores(clustering_performance_scores: List[float], params: dict, parameter_name: str, clustering_perf_metric: str,  filename: str, density_based: bool = False):
     plt.plot(params[parameter_name], clustering_performance_scores, marker='o')
     plt.xlabel(parameter_name)
-    if density_based and CUSTOM_HYP.clusters.REMOVE_ORPHANS:
+    if density_based and (CUSTOM_HYP.clusters.REMOVE_ORPHANS or CUSTOM_HYP.clusters.USE_DENSITY_BASED_METRIC):
         clustering_perf_metric = f"DBCV"
     plt.ylabel(f"{clustering_perf_metric} Score")
     plt.title(f"{clustering_perf_metric} Analysis")
@@ -333,3 +354,14 @@ def search_for_best_param(
     best_param_config = param_configs[np.argmax(clustering_performance_scores)]
     logger.info(f"Best parameters: {best_param_config}")
     return best_param_config, clustering_performance_scores
+
+
+def pruebas_hyp():
+
+    print(f"Dentro de pruebas_hyp y es ->  {CUSTOM_HYP.unk.USE_UNK_ENHANCEMENT}")
+
+    print('Dentro de bucle:')
+    if CUSTOM_HYP.unk.USE_UNK_ENHANCEMENT:
+        print("Dentro de pruebas_hyp y es ->  True")
+    else:
+        print("Dentro de pruebas_hyp y es ->  False")

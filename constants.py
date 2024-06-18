@@ -3,6 +3,7 @@ from pathlib import Path
 ### Paths ###
 ROOT = Path(__file__).parent  # Assumes this script is in the root of the project
 STORAGE_PATH = ROOT / 'storage'
+TEMPORAL_STORAGE_PATH = STORAGE_PATH / 'temp'
 PRUEBAS_ROOT_PATH = ROOT / 'pruebas'
 RESULTS_PATH = ROOT / 'results'
 INDIVIDUAL_RESULTS_FILE_PATH = RESULTS_PATH / 'individual_results'
@@ -19,9 +20,10 @@ UNKNOWN_CLASS_INDEX = 80
 COCO_OOD_NAME = 'coco_ood'
 COCO_MIXED_NAME = 'coco_mixed'
 COCO_OWOD_TEST_NAME = 'owod'
+AVAILABLE_DATASETS = [COCO_OOD_NAME, COCO_MIXED_NAME, COCO_OWOD_TEST_NAME]
 # OOD Methods
 LOGITS_METHODS = ['NoMethod', 'MSP', 'Energy', 'ODIN', 'Sigmoid']
-DISTANCE_METHODS = ['L1_cl_stride', 'L2_cl_stride', 'GAP_L2_cl_stride', 'Cosine_cl_stride', 'Umap', 'Ivis']
+DISTANCE_METHODS = ['L1_cl_stride', 'L2_cl_stride', 'GAP_L2_cl_stride', 'Cosine_cl_stride', 'Umap', 'CosineIvis']
 OOD_METHOD_CHOICES = LOGITS_METHODS + DISTANCE_METHODS
 
 FTMAPS_RELATED_OPTIONS = ['roi_aligned_ftmaps','all_ftmaps', 'ftmaps_and_strides']
@@ -63,5 +65,29 @@ BENCHMARKS = {
     'cluster_methods': ['one', 'all', 'DBSCAN', 'KMeans', 'KMeans_3', 'KMeans_5', 'KMeans_10', 'HDBSCAN', 'AgglomerativeClustering', 'Birch'],
     'cluster_perf_metric': AVAILABLE_CLUSTER_OPTIMIZATION_METRICS,
     'logits_methods': LOGITS_METHODS,
-    'fusion_strategies': [['fusion-MSP-Energy', 'fusion-MSP-Cosine_cl_stride', 'fusion-Cosine_cl_stride-Cosine_cl_stride'], ['and', 'or', 'score']]
+    #'fusion_strategies': [['fusion-MSP-Energy', 'fusion-MSP-Cosine_cl_stride', 'fusion-Cosine_cl_stride-Cosine_cl_stride'], ['and', 'or', 'score']],
+    'fusion_strategies': [['fusion-MSP-Sigmoid', 'fusion-MSP-CosineIvis', 'fusion-CosineIvis-Cosine_cl_stride'], ['and', 'or', 'score']],
+    'unk_loc_enhancement': [{
+        # 'unk.THRESHOLDING_METHOD': ['recursive_otsu'],# 'recursive_otsu'],
+        # 'unk.NUM_THRESHOLDS': [3],# 3, 4, 5],
+        # 'unk.USE_HEURISTICS': [True],
+        # 'unk.MIN_BOX_SIZE': [2,3,5],
+        # 'unk.MAX_IOU_WITH_PREDS': [0, 0.25, 0.5, 0.75],
+        # 'unk.MAX_INTERSECTION_W_PREDS': [0, 0.25, 0.5, 0.75],
+        # 'unk.MAX_BOX_SIZE_PERCENT': [0.9],
+        # 'unk.USE_XAI_TO_REMOVE_PROPOSALS': [False],# True],
+        # 'unk.USE_XAI_TO_MODIFY_SALIENCY': [False],# True],
+        # 'unk.RANK_BOXES': [False],# True],
+        # 'unk.xai.XAI_METHOD': ['D-RISE'],
+
+
+        'unk.USE_SIMPLE_HEURISTICS': [False, True],
+        'unk.USE_XAI_TO_REMOVE_PROPOSALS': [False, True],
+        'unk.USE_XAI_TO_MODIFY_SALIENCY': [False],# True],
+        'unk.RANK_BOXES': [False, True],
+        'unk.THRESHOLDING_METHOD': ['multithreshold_otsu'],# 'recursive_otsu'],
+        'unk.NUM_THRESHOLDS': [4],# 3, 4, 5],
+        'unk.USE_HEURISTICS': [True],
+        'unk.xai.XAI_METHOD': ['D-RISE'],
+    }],
 }

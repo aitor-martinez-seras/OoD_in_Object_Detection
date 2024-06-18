@@ -29,7 +29,7 @@ from datasets_utils.owod.owod_evaluation_protocol import compute_metrics
 from unknown_localization_utils import extract_bboxes_from_saliency_map_and_thresholds
 from constants import IND_INFO_CREATION_OPTIONS, AVAILABLE_CLUSTERING_METHODS, \
     AVAILABLE_CLUSTER_OPTIMIZATION_METRICS, INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS, \
-    FTMAPS_RELATED_OPTIONS, LOGITS_RELATED_OPTIONS, STRIDES_RATIO, IMAGE_FORMAT
+    FTMAPS_RELATED_OPTIONS, LOGITS_RELATED_OPTIONS, STRIDES_RATIO, IMAGE_FORMAT, TEMPORAL_STORAGE_PATH
 from custom_hyperparams import CUSTOM_HYP
 from YOLOv8_Explainer import yolov8_heatmap
 from cluster_utils import find_optimal_number_of_clusters_one_class_one_stride_and_return_labels
@@ -372,7 +372,7 @@ class OODMethod(ABC):
         number_of_images_saved = 0
 
         ### XAI ###
-        if CUSTOM_HYP.unk.USE_XAI:
+        if CUSTOM_HYP.unk.USE_XAI_TO_MODIFY_SALIENCY or CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
             if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
                 from yolo_drise.xai.drise import DRISE
                 import os
@@ -426,7 +426,7 @@ class OODMethod(ABC):
                 directory_name = f'{now}_{self.name}'
                 imgs_folder_path = folder_path / directory_name
                 imgs_folder_path.mkdir(exist_ok=True)
-                if CUSTOM_HYP.unk.USE_XAI:
+                if CUSTOM_HYP.unk.USE_XAI_TO_MODIFY_SALIENCY or CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
                     # TODO: Aqui pruebo lo de la explicabilidad, que tiene que sacar un mapa de valores por imagen, siendo cada mapa una imagen de 80x80
                     #   con los valores de la importancia de cada pixel, que luego se restaran al saliency map correspondiente, escalando los valores al rango
                     #   del saliency map
@@ -520,7 +520,7 @@ class OODMethod(ABC):
         known_classes_tensor = torch.tensor(known_classes, dtype=torch.float32)
 
         # TODO: XAI
-        if CUSTOM_HYP.unk.USE_XAI and self.enhanced_unk_localization:
+        if (CUSTOM_HYP.unk.USE_XAI_TO_MODIFY_SALIENCY or CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS) and self.enhanced_unk_localization:
             if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
                 from yolo_drise.xai.drise import DRISE
                 import os
@@ -552,6 +552,9 @@ class OODMethod(ABC):
                     show_box=False,
                 )
 
+        # For the case of benchmarks, if we want to not compute the results everytime
+        TEMPORAL_STORAGE_PATH.mkdir(exist_ok=True)
+
         number_of_images_saved = 0
         count_of_images = 0
         for idx_of_batch, data in enumerate(dataloader):
@@ -569,16 +572,27 @@ class OODMethod(ABC):
             #         f.write(f'{i+number_of_images_processed} - {im_file}\n')
             # number_of_images_processed += len(data['im_file'])
             # continue
-            
+
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
-            results = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
+            # In case we are in BENCHMARKS and we want to not compute the results
+            if CUSTOM_HYP.BENCHMARK_MODE:
+                string_for_temp_results = f'{NOW_ood_utils}_{dataset_name}_{idx_of_batch}.pt'
+                path_of_temp_results = TEMPORAL_STORAGE_PATH / string_for_temp_results
+                if path_of_temp_results.exists():
+                    results = torch.load(path_of_temp_results)
+                else:
+                    results = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
+                    torch.save(results, path_of_temp_results)
+            # Regular execution
+            else:
+                results = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
 
             ### Comprobar si las cajas predichas son OoD ###
             ood_decision = self.compute_ood_decision_on_results(results, logger)
 
             ### Añadir posibles cajas desconocidas a las predicciones ###
             if self.enhanced_unk_localization:
-                if CUSTOM_HYP.unk.USE_XAI:
+                if CUSTOM_HYP.unk.USE_XAI_TO_MODIFY_SALIENCY or CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
                     # TODO: Aqui pruebo lo de la explicabilidad, que tiene que sacar un mapa de valores por imagen, siendo cada mapa una imagen de 80x80
                     #   con los valores de la importancia de cada pixel, que luego se restaran al saliency map correspondiente, escalando los valores al rango
                     #   del saliency map
@@ -592,10 +606,7 @@ class OODMethod(ABC):
                     # and in the range [0, 1]
                     if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
                         from skimage.transform import downscale_local_mean
-                        if p1 == 0.5:
-                            save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}.npy'
-                        else:
-                            save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}_p1_{p1:.2f}.npy'
+                        save_name = f'./yolo_drise/{dataset_name}_heatmaps_{number_of_images_saved}_to_{count_of_images-1}_p1_{p1:.2f}.npy'
                         if not os.path.exists(save_name):
                             expl_heatmaps = expl_model(x=imgs, results=results, mode='object_detection')
                             # Save the heatmaps
@@ -1103,62 +1114,52 @@ class OODMethod(ABC):
                 all_unk_prop.append(unk_proposals_one_thr)
                 continue
             # Yes
-            # 0: Remove the unk_proposals_one_thr from the first stride?
-            if idx_thr == 0 and not CUSTOM_HYP.unk.USE_FIRST_THRESHOLD:
+            ### Simple heuristics ###
+            if CUSTOM_HYP.unk.USE_SIMPLE_HEURISTICS:
+                # 0: Remove the unk_proposals_one_thr from the first stride?
+                if idx_thr == 0 and not CUSTOM_HYP.unk.USE_FIRST_THRESHOLD:
                     print('Remove thr 0')
                     continue
-            # 1º: Remove small unk_proposals_one_thr
-            mask_small_boxes = (w >= min_box_size) & (h >= min_box_size)
-            # 2º: Remove big unk_proposals_one_thr
-            mask_big_boxes = (w < int(max_box_size_percent * unpaded_ftmap_width)) & (h < int(max_box_size_percent * unpaded_ftmap_height))
-            mask = mask_small_boxes & mask_big_boxes
-            unk_proposals_one_thr = unk_proposals_one_thr[mask]
-            # Use pred boxes to remove some unk_proposals_one_thr
+                # 1º: Remove small unk_proposals_one_thr
+                mask_small_boxes = (w >= min_box_size) & (h >= min_box_size)
+                # 2º: Remove big unk_proposals_one_thr
+                mask_big_boxes = (w < int(max_box_size_percent * unpaded_ftmap_width)) & (h < int(max_box_size_percent * unpaded_ftmap_height))
+                mask = mask_small_boxes & mask_big_boxes
+                unk_proposals_one_thr = unk_proposals_one_thr[mask]
+
+            # Only use this following part if preds are available
             if len(bbox_preds_in_ftmap_size) > 0:
-                if CUSTOM_HYP.unk.MAX_IOU_WITH_PREDS > 0:
-                    # 3º: Remove unk_proposals_one_thr with IoU > iou_thr with the predictions
-                    # Compute the IoU with the predictions
-                    ious = box_iou(unk_proposals_one_thr, bbox_preds_in_ftmap_size)
-                    # Remove the unk_proposals_one_thr with IoU > iou_thr
-                    mask = ious.max(dim=1).values < CUSTOM_HYP.unk.MAX_IOU_WITH_PREDS
-                    unk_proposals_one_thr = unk_proposals_one_thr[mask]
-
-                # # Plot Unk prop (in yellow) and preds (in green) 
-                # import matplotlib.pyplot as plt
-                # from torchvision.utils import draw_bounding_boxes
-                # # Convert to tensor
-                # unk = unk_proposals_one_thr.to(torch.uint8)
-                # pred = bbox_preds_in_ftmap_size.to(torch.uint8)
-                # # Create the image
-                # img = torch.ones((3, ftmap_height + padding[1]*2, ftmap_width + padding[0]*2), dtype=torch.uint8)
-                # # Merge the bouding boxes and create the colors for each
-                # boxes = torch.cat([unk, pred], dim=0)
-                # colors = ["yellow"] * len(unk) + ["green"] * len(pred)
-                # # Draw the boxes
-                # img = draw_bounding_boxes(img, boxes, colors=colors)
-                # plt.imshow(img.permute(1, 2, 0).cpu().numpy())
-                # plt.savefig('AAA_unk_prop_and_preds.png')
-                # plt.close()
-
-                # 4º: Remove unk_proposals_one_thr that have a ratio of intersection w.r.t a prediction greater than a thr
-                if CUSTOM_HYP.unk.MAX_INTERSECTION_W_PREDS:
-                    if len(unk_proposals_one_thr) > 0:
-                        # Calculate the intersection areas
-                        inter_x1 = torch.max(unk_proposals_one_thr[:, None, 0], bbox_preds_in_ftmap_size[:, 0])
-                        inter_y1 = torch.max(unk_proposals_one_thr[:, None, 1], bbox_preds_in_ftmap_size[:, 1])
-                        inter_x2 = torch.min(unk_proposals_one_thr[:, None, 2], bbox_preds_in_ftmap_size[:, 2])
-                        inter_y2 = torch.min(unk_proposals_one_thr[:, None, 3], bbox_preds_in_ftmap_size[:, 3])
-                        inter_area = (inter_x2 - inter_x1).clamp(min=0) * (inter_y2 - inter_y1).clamp(min=0)
-                        # Calculate the areas of the prediction boxes
-                        pred_areas = (bbox_preds_in_ftmap_size[:, 2] - bbox_preds_in_ftmap_size[:, 0]) * \
-                                    (bbox_preds_in_ftmap_size[:, 3] - bbox_preds_in_ftmap_size[:, 1])
-                        # Calculate the intersection ratios
-                        intersection_ratios = inter_area / pred_areas
-                        # Find the max intersection ratio for each unknown proposal
-                        max_intersection_ratios, _ = intersection_ratios.max(dim=1)
-                        # Remove the proposals with max intersection ratio greater than 0.9. Do that by keeping the ones that are less or equal
-                        unk_proposals_one_thr = unk_proposals_one_thr[max_intersection_ratios <= CUSTOM_HYP.unk.MAX_INTERSECTION_W_PREDS]
                 
+                ### Simple heuristics ###
+                if CUSTOM_HYP.unk.USE_SIMPLE_HEURISTICS:
+                    if CUSTOM_HYP.unk.MAX_IOU_WITH_PREDS > 0:
+                        # 3º: Remove unk_proposals_one_thr with IoU > iou_thr with the predictions
+                        # Compute the IoU with the predictions
+                        ious = box_iou(unk_proposals_one_thr, bbox_preds_in_ftmap_size)
+                        # Remove the unk_proposals_one_thr with IoU > iou_thr
+                        mask = ious.max(dim=1).values < CUSTOM_HYP.unk.MAX_IOU_WITH_PREDS
+                        unk_proposals_one_thr = unk_proposals_one_thr[mask]
+
+                    # 4º: Remove unk_proposals_one_thr that have a ratio of intersection w.r.t a prediction greater than a thr
+                    if CUSTOM_HYP.unk.MAX_INTERSECTION_W_PREDS:
+                        if len(unk_proposals_one_thr) > 0:
+                            # Calculate the intersection areas
+                            inter_x1 = torch.max(unk_proposals_one_thr[:, None, 0], bbox_preds_in_ftmap_size[:, 0])
+                            inter_y1 = torch.max(unk_proposals_one_thr[:, None, 1], bbox_preds_in_ftmap_size[:, 1])
+                            inter_x2 = torch.min(unk_proposals_one_thr[:, None, 2], bbox_preds_in_ftmap_size[:, 2])
+                            inter_y2 = torch.min(unk_proposals_one_thr[:, None, 3], bbox_preds_in_ftmap_size[:, 3])
+                            inter_area = (inter_x2 - inter_x1).clamp(min=0) * (inter_y2 - inter_y1).clamp(min=0)
+                            # Calculate the areas of the prediction boxes
+                            pred_areas = (bbox_preds_in_ftmap_size[:, 2] - bbox_preds_in_ftmap_size[:, 0]) * \
+                                        (bbox_preds_in_ftmap_size[:, 3] - bbox_preds_in_ftmap_size[:, 1])
+                            # Calculate the intersection ratios
+                            intersection_ratios = inter_area / pred_areas
+                            # Find the max intersection ratio for each unknown proposal
+                            max_intersection_ratios, _ = intersection_ratios.max(dim=1)
+                            # Remove the proposals with max intersection ratio greater than 0.9. Do that by keeping the ones that are less or equal
+                            unk_proposals_one_thr = unk_proposals_one_thr[max_intersection_ratios <= CUSTOM_HYP.unk.MAX_INTERSECTION_W_PREDS]
+                
+                ### Usage of XAI ###
                 if CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
                     #assert xai_boxes is not None, "You must provide the XAI boxes to remove the proposals"
                     # 5º: Remove unk_proposals_one_thr that are close to the XAI boxes
@@ -2469,18 +2470,24 @@ class _DimensionalityReductionMethod(_PairwiseDistanceClustersPerClassPerStride)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.is_dimensionality_reduction_trained = False
 
+    @abstractmethod
     def train_dimensionality_reduction_module(self, activations: List[np.ndarray], logger: Logger):
         pass
 
+    @abstractmethod
     def activations_transformation(self, activations: np.array, cls_idx: int, stride_idx: int) -> np.array:
 
         # Transform the activations to the new space by using the dimensionality reduction function
         pass
-
+    
+    # Overriding the method to train the dimensionality reduction module before generating the clusters
     def generate_clusters(self, ind_tensors: List[np.ndarray] | List[List[np.ndarray]], logger: Logger) -> List[np.ndarray] | List[List[np.ndarray]]:
         
-        self.train_dimensionality_reduction_module(ind_tensors, logger)
+        if not self.is_dimensionality_reduction_trained:
+            self.train_dimensionality_reduction_module(ind_tensors, logger)
+            self.is_dimensionality_reduction_trained = True
 
         return super().generate_clusters(ind_tensors, logger)
 
@@ -2526,26 +2533,26 @@ class UmapMethod(_DimensionalityReductionMethod):
         return self.umap[stride_idx].transform(activations.reshape(activations.shape[0], -1))
 
 
-class IvisMethod(_DimensionalityReductionMethod):
+class IvisMethodCosinePerClusterPerStride(_DimensionalityReductionMethod):
     
     def __init__(self, **kwargs):
         import ivis
         per_stride = True
+        metric = 'cosine'
+        name = 'IvisCosineDistancePerStride'
         if per_stride:
             dims_reduction_kwargs = {
                 'embedding_dims': CUSTOM_HYP.dr.ivis.EMBEDDING_DIMS,
                 'n_epochs_without_progress': CUSTOM_HYP.dr.ivis.N_EPOCHS_WITHOUT_PROGRESS,
                 'k': CUSTOM_HYP.dr.ivis.K,
                 'model': CUSTOM_HYP.dr.ivis.MODEL,
-                'distance': self.metric, 
+                'distance': metric, 
             }
             self.ivis = [
                 ivis.Ivis(**dims_reduction_kwargs),
                 ivis.Ivis(**dims_reduction_kwargs),
                 ivis.Ivis(**dims_reduction_kwargs),
                 ]
-        metric = 'cosine'
-        name = 'CosineDistancePerStride'
         super().__init__(name=name, metric=metric, **kwargs)
 
     def train_dimensionality_reduction_module(self, activations: List[np.ndarray], logger: Logger):
@@ -2792,9 +2799,8 @@ class FusionMethod(OODMethod):
     method2: Union[LogitsMethod, DistanceMethod]
     fusion_strategy: str
 
-    def __init__(self, method1: Union[LogitsMethod, DistanceMethod], method2: Union[LogitsMethod, DistanceMethod], fusion_strategy: str,  **kwargs):
+    def __init__(self, method1: Union[LogitsMethod, DistanceMethod], method2: Union[LogitsMethod, DistanceMethod], fusion_strategy: str, fusion_method_name: str,  cluster_method: str, **kwargs):
 
-        name = f'fusion_{method1.name}_{method2.name}'
         self.method1 = method1
         self.method2 = method2
         self.fusion_strategy = fusion_strategy
@@ -2802,7 +2808,12 @@ class FusionMethod(OODMethod):
             is_distance_method = True
         else:
             is_distance_method = False
-        super().__init__(name=name, per_class=True, per_stride=True, is_distance_method=is_distance_method, which_internal_activations="none", **kwargs)
+        super().__init__(name=fusion_method_name, per_class=True, per_stride=True, is_distance_method=is_distance_method, which_internal_activations="none", **kwargs)
+
+        if is_distance_method:
+            self.cluster_method = cluster_method
+        else:
+            self.cluster_method = 'None'
 
         # Define as properties the clusters and thresholds
         self._clusters = None
@@ -2976,7 +2987,7 @@ class FusionMethod(OODMethod):
         known_classes_tensor = torch.tensor(known_classes, dtype=torch.float32)
 
         # TODO: XAI
-        if CUSTOM_HYP.unk.USE_XAI and self.enhanced_unk_localization:
+        if (CUSTOM_HYP.unk.USE_XAI_TO_MODIFY_SALIENCY or CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS) and self.enhanced_unk_localization:
             if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
                 from yolo_drise.xai.drise import DRISE
                 import os
@@ -3055,7 +3066,7 @@ class FusionMethod(OODMethod):
 
             ### Añadir posibles cajas desconocidas a las predicciones ###
             if self.enhanced_unk_localization:
-                if CUSTOM_HYP.unk.USE_XAI:
+                if CUSTOM_HYP.unk.USE_XAI_TO_MODIFY_SALIENCY or CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
                     delattr(model.model, 'which_layers_to_extract')
                     delattr(model.model, 'extraction_mode')
                     # Heatmaps in shape (M, H, W), M being the batch size an in form of a tensor in cpu
@@ -3169,6 +3180,431 @@ class FusionMethod(OODMethod):
 
         return results_dict
 
+
+### FUSION Method ###
+
+class TripleFusionMethod(OODMethod):
+
+    method1: Union[LogitsMethod, DistanceMethod]
+    method2: Union[LogitsMethod, DistanceMethod]
+    method3: Union[LogitsMethod, DistanceMethod]
+    fusion_strategy: str
+
+    def __init__(self, method1: Union[LogitsMethod, DistanceMethod], method2: Union[LogitsMethod, DistanceMethod], method3: Union[LogitsMethod, DistanceMethod], cluster_method: str, **kwargs):
+
+        name = f'fusion-{method1.name}-{method2.name}_{method3.name}'
+        self.method1 = method1
+        self.method2 = method2
+        self.method3 = method3
+        self.fusion_strategy = 'majority_voting'
+        if method1.is_distance_method or method2.is_distance_method or method3.is_distance_method:
+            is_distance_method = True
+        else:
+            is_distance_method = False
+        super().__init__(name=name, per_class=True, per_stride=True, is_distance_method=is_distance_method, which_internal_activations="none", **kwargs)
+
+        if is_distance_method:
+            self.cluster_method = cluster_method
+        else:
+            self.cluster_method = 'None'
+
+        # Define as properties the clusters and thresholds
+        self._clusters = None
+        self._thresholds = None
+    
+    # Clusters
+    @property
+    def clusters(self):
+        if self.method1.is_distance_method and self.method2.is_distance_method and self.method3.is_distance_method:
+            return self.method1.clusters, self.method2.clusters, self.method3.clusters
+        elif self.method1.is_distance_method and self.method2.is_distance_method:
+            return self.method1.clusters, self.method2.clusters
+        elif self.method1.is_distance_method and self.method3.is_distance_method:
+            return self.method1.clusters, self.method3.clusters
+        elif self.method2.is_distance_method and self.method3.is_distance_method:
+            return self.method2.clusters, self.method3.clusters
+        elif self.method1.is_distance_method:
+            return self.method1.clusters
+        elif self.method2.is_distance_method:
+            return self.method2.clusters
+        elif self.method3.is_distance_method:
+            return self.method3.clusters
+        else:
+            raise ValueError("This should not be called if none of the methods is a distance method")
+    
+    @clusters.setter
+    def clusters(self, clusters):
+        if self.method1.is_distance_method and self.method2.is_distance_method and self.method3.is_distance_method:
+            self.method1.clusters = clusters[0]
+            self.method2.clusters = clusters[1]
+            self.method3.clusters = clusters[2]
+        elif self.method1.is_distance_method and self.method2.is_distance_method:
+            self.method1.clusters = clusters[0]
+            self.method2.clusters = clusters[1]
+        elif self.method1.is_distance_method and self.method3.is_distance_method:
+            self.method1.clusters = clusters[0]
+            self.method3.clusters = clusters[1]
+        elif self.method2.is_distance_method and self.method3.is_distance_method:
+            self.method2.clusters = clusters[0]
+            self.method3.clusters = clusters[1]
+        elif self.method1.is_distance_method:
+            self.method1.clusters = clusters
+        elif self.method2.is_distance_method:
+            self.method2.clusters = clusters
+        elif self.method3.is_distance_method:
+            self.method3.clusters = clusters
+        else:
+            raise ValueError("At least one of the methods must be a distance method to set the clusters")
+
+    # Thresholds
+    @property
+    def thresholds(self):
+        return self.method1.thresholds, self.method2.thresholds, self.method3.thresholds
+    
+    @thresholds.setter
+    def thresholds(self, thresholds):
+        if thresholds is not None:
+            if len(thresholds) == 3:
+                self.method1.thresholds = thresholds[0]
+                self.method2.thresholds = thresholds[1]
+                self.method3.thresholds = thresholds[2]
+            else:
+                raise ValueError("The thresholds must be a tuple with two elements, one for the logits and one for the distance")
+        else:
+            print("The thresholds must be a tuple with two elements, one for the logits and one for the distance")
+            self.method1.thresholds = None
+            self.method2.thresholds = None
+            self.method3.thresholds = None
+
+
+    def extract_internal_activations(self, results: Results, all_activations: Union[List[float], List[List[np.ndarray]]], targets: Dict[str, Tensor]):
+        """
+        Function to be overriden by each method to extract the internal activations of the model. In the logits
+        methods, it will be the logits, and in the ftmaps methods, it will be the ftmaps.
+        The extracted activations will be stored in the list all_activations
+        """
+        pass
+
+    def format_internal_activations(self, all_activations: Union[List[float], List[List[np.ndarray]]]):
+        """
+        Function to be overriden by each method to format the internal activations of the model.
+        The extracted activations will be stored in the list all_activations
+        """
+        pass
+
+    def compute_ood_decision_on_results(self, results: Results, logger) -> List[List[int]]:
+        """
+        Function to be overriden by each method type to compute the OOD decision for each image.
+        Parameters:
+            results: Results -> The results of the model predictions
+            logger: Logger -> The logger to print warnings or info
+        Returns:
+            ood_decision: List[int] -> A list of lists, where the first list is for each image and the second list is for each bbox. 
+                The value is 1 if the bbox is In-Distribution, 0 if it is Out-of-Distribution
+        """
+        pass
+    
+    def compute_scores(self, activations, *args, **kwargs) -> np.ndarray:
+        """
+        Function to compute the scores of the activations. Either for one box or multiple boxes.
+        The function should be overriden by each method and should try to vectorize the computation as much as possible.
+        """
+        pass
+
+    def activations_transformation(self, activations: np.array, **kwargs) -> np.array:
+        raise NotImplementedError("This method is not going to be called directly")
+
+    def compute_distance(self, centroids: np.array, features: np.array) -> np.array:
+        raise NotImplementedError("This method is not going to be called directly")
+
+    def iterate_data_to_extract_ind_activations(self, data_loader, model: YOLO, device: str, logger: Logger):
+        
+        configure_extra_output_of_the_model(model, which_internal_activations=self.method1.which_internal_activations)
+        all_activations1 = self.method1.iterate_data_to_extract_ind_activations(data_loader, model, device, logger)
+        configure_extra_output_of_the_model(model, which_internal_activations=self.method2.which_internal_activations)
+        all_activations2 = self.method2.iterate_data_to_extract_ind_activations(data_loader, model, device, logger)
+        configure_extra_output_of_the_model(model, which_internal_activations=self.method3.which_internal_activations)
+        all_activations3 = self.method3.iterate_data_to_extract_ind_activations(data_loader, model, device, logger)
+
+        return all_activations1, all_activations2, all_activations3
+
+    def generate_thresholds(self, ind_scores: list, tpr: float, logger: Logger) -> Union[List[float], List[List[float]]]:
+        
+        activations1, activations2, activations3 = ind_scores
+        thrs1 = self.method1.generate_thresholds(activations1, tpr, logger)
+        thrs2 = self.method2.generate_thresholds(activations2, tpr, logger)
+        thrs3 = self.method3.generate_thresholds(activations3, tpr, logger)
+
+        return thrs1, thrs2, thrs3
+
+    def generate_clusters(self, ind_tensors: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger) -> Union[List[np.ndarray], List[List[np.ndarray]]]:
+        if self.method1.is_distance_method and self.method2.is_distance_method and self.method3.is_distance_method:
+            clusters1 = self.method1.generate_clusters(ind_tensors[0], logger)
+            clusters2 = self.method2.generate_clusters(ind_tensors[1], logger)
+            clusters3 = self.method3.generate_clusters(ind_tensors[2], logger)
+            return [clusters1, clusters2, clusters3]
+        if self.method1.is_distance_method and self.method2.is_distance_method:
+            clusters1 = self.method1.generate_clusters(ind_tensors[0], logger)
+            clusters2 = self.method2.generate_clusters(ind_tensors[1], logger)
+            return [clusters1, clusters2]
+        if self.method1.is_distance_method and self.method3.is_distance_method:
+            clusters1 = self.method1.generate_clusters(ind_tensors[0], logger)
+            clusters3 = self.method3.generate_clusters(ind_tensors[1], logger)
+            return [clusters1, clusters3]
+        if self.method2.is_distance_method and self.method3.is_distance_method:
+            clusters2 = self.method2.generate_clusters(ind_tensors[0], logger)
+            clusters3 = self.method3.generate_clusters(ind_tensors[1], logger)
+            return [clusters2, clusters3]
+        elif self.method1.is_distance_method:
+            return self.method1.generate_clusters(ind_tensors[0], logger)
+        elif self.method2.is_distance_method:
+            return self.method2.generate_clusters(ind_tensors[1], logger)
+        elif self.method3.is_distance_method:
+            return self.method3.generate_clusters(ind_tensors[2], logger)
+        else:
+            raise ValueError("Both methods must be distance methods to generate the clusters")
+    
+    def compute_scores_from_activations(self, activations: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger) -> Tuple[List[List[float]], List[List[float]]]:
+        
+        activations1, activations2, activations3 = activations
+        scores1 = self.method1.compute_scores_from_activations(activations1, logger)
+        scores2 = self.method2.compute_scores_from_activations(activations2, logger)
+        scores3 = self.method3.compute_scores_from_activations(activations3, logger)
+
+        return scores1, scores2, scores3
+
+    def fuse_ood_decisions(self, ood_decision1: List[List[int]], ood_decision2: List[List[int]], ood_decision3: List[List[int]]) -> List[List[int]]:
+        # 1 is InD, 0 is OoD
+        ood_decision = []
+        if self.fusion_strategy == 'majority_voting':
+            # Majority voting: If two of the three methods say that the bbox is InD (decision = 1), then it is InD
+            for idx_img in range(len(ood_decision1)):
+                ood_decision.append(
+                    [1 if (ood_decision1[idx_img][idx_bbox] + ood_decision2[idx_img][idx_bbox] + ood_decision3[idx_img][idx_bbox]) >= 2 else 0 for idx_bbox in range(len(ood_decision1[idx_img]))]
+                )
+            
+        else:
+            raise ValueError("Only valid majority_voting fusion strategy")
+        
+        # Assert that the number of bboxes is the same after the decision
+        for idx_img in range(len(ood_decision)):
+            assert len(ood_decision[idx_img]) == len(ood_decision1[idx_img]), "The number of bboxes is different"
+            assert len(ood_decision[idx_img]) == len(ood_decision2[idx_img]), "The number of bboxes is different"
+            assert len(ood_decision[idx_img]) == len(ood_decision3[idx_img]), "The number of bboxes is different"
+
+        return ood_decision
+
+    def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger: Logger, known_classes: List[int]) -> Dict[str, float]:
+        
+        logger.warning(f"Using a confidence threshold of {self.min_conf_threshold_test} for tests")
+        number_of_images_processed = 0
+        number_of_batches = len(dataloader)
+        all_preds = []
+        all_targets = []
+        assert hasattr(dataloader.dataset, "number_of_classes"), "The dataset does not have the attribute number_of_classes to know the number of classes known in the dataset"
+        class_names = list(dataloader.dataset.data['names'].values())[:dataloader.dataset.number_of_classes]
+        class_names.append('unknown')
+        known_classes_tensor = torch.tensor(known_classes, dtype=torch.float32)
+
+        # TODO: XAI
+        if (CUSTOM_HYP.unk.USE_XAI_TO_MODIFY_SALIENCY or CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS) and self.enhanced_unk_localization:
+            if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
+                from yolo_drise.xai.drise import DRISE
+                import os
+                input_size = (640, 640)
+                gpu_batch = CUSTOM_HYP.unk.xai.drise.GPU_BATCH
+                number_of_masks = CUSTOM_HYP.unk.xai.drise.NUMBER_OF_MASKS
+                stride = CUSTOM_HYP.unk.xai.drise.STRIDE
+                p1 = CUSTOM_HYP.unk.xai.drise.P1
+                expl_model = DRISE(model=model, 
+                                  input_size=input_size, 
+                                  device=device,
+                                  gpu_batch=gpu_batch)
+                
+                generate_new = CUSTOM_HYP.unk.xai.drise.GENERATE_NEW_MASKS
+                mask_file = f"./yolo_drise/masks/masks_640x640_{p1:.2f}.npy"
+                if generate_new or not os.path.isfile(mask_file):
+                    expl_model.generate_masks(N=number_of_masks, s=stride, p1=p1, savepath=mask_file)
+                else:
+                    expl_model.load_masks(mask_file)
+                    print('Masks are loaded.')
+            else:
+                expl_model = yolov8_heatmap(
+                    weight=model.ckpt_path,
+                    method=CUSTOM_HYP.unk.xai.XAI_METHOD,
+                    layer=CUSTOM_HYP.unk.xai.XAI_TARGET_LAYERS,
+                    ratio=0.05,
+                    conf_threshold=self.min_conf_threshold_test,
+                    renormalize=CUSTOM_HYP.unk.xai.XAI_RENORMALIZE,
+                    show_box=False,
+                )
+
+        number_of_images_saved = 0
+        count_of_images = 0
+        for idx_of_batch, data in enumerate(dataloader):
+            count_of_images += len(data['im_file'])
+
+            if idx_of_batch % 50 == 0 or idx_of_batch == number_of_batches - 1:
+                logger.info(f"{(idx_of_batch/number_of_batches) * 100:02.1f}%: Procesing batch {idx_of_batch+1} of {number_of_batches}") 
+
+            ### Preparar imagenes y targets ###
+            imgs, targets = self.prepare_data_for_model(data, device)
+
+            ###
+            # Method 1
+            ###
+            configure_extra_output_of_the_model(model, ood_method=self.method1)
+            ### Procesar imagenes en el modelo para obtener logits y las cajas ###
+            results_1 = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
+            ### Comprobar si las cajas predichas son OoD ###
+            ood_decision1 = self.method1.compute_ood_decision_on_results(results_1, logger)
+
+            ###
+            # Method 2
+            ###
+            configure_extra_output_of_the_model(model, ood_method=self.method2)
+            ### Procesar imagenes en el modelo para obtener las caracteristicas y las cajas ###
+            results_2 = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
+            ### Comprobar si las cajas predichas son OoD ###
+            ood_decision2 = self.method2.compute_ood_decision_on_results(results_2, logger)
+
+            ###
+            # Method 3
+            ###
+            configure_extra_output_of_the_model(model, ood_method=self.method3)
+            ### Procesar imagenes en el modelo para obtener las caracteristicas y las cajas ###
+            results_3 = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_test, device=device)
+            ### Comprobar si las cajas predichas son OoD ###
+            ood_decision3 = self.method3.compute_ood_decision_on_results(results_3, logger)
+
+            # Assert deeply that results are the same and assign the results as one of them (either logits or distance)
+            for idx_r in range(len(results_1)):
+                assert torch.allclose(results_1[idx_r].boxes.xyxy, results_2[idx_r].boxes.xyxy), f"Results are not the same for image {idx_r}"
+                assert torch.allclose(results_1[idx_r].boxes.cls, results_2[idx_r].boxes.cls), f"Results are not the same for image {idx_r}"
+                assert torch.allclose(results_1[idx_r].boxes.conf, results_2[idx_r].boxes.conf), f"Results are not the same for image {idx_r}"
+                assert torch.allclose(results_1[idx_r].boxes.xyxy, results_3[idx_r].boxes.xyxy), f"Results are not the same for image {idx_r}"
+                assert torch.allclose(results_1[idx_r].boxes.cls, results_3[idx_r].boxes.cls), f"Results are not the same for image {idx_r}"
+                assert torch.allclose(results_1[idx_r].boxes.conf, results_3[idx_r].boxes.conf), f"Results are not the same for image {idx_r}"
+            results = results_1
+
+            ### Fuse the results of the logits and distance methods ###
+            ood_decision = self.fuse_ood_decisions(ood_decision1, ood_decision2, ood_decision3)
+
+            ### Añadir posibles cajas desconocidas a las predicciones ###
+            if self.enhanced_unk_localization:
+                if CUSTOM_HYP.unk.USE_XAI_TO_MODIFY_SALIENCY or CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
+                    delattr(model.model, 'which_layers_to_extract')
+                    delattr(model.model, 'extraction_mode')
+                    # Heatmaps in shape (M, H, W), M being the batch size an in form of a tensor in cpu
+                    # and in the range [0, 1]
+                    if CUSTOM_HYP.unk.xai.XAI_METHOD == 'D-RISE':
+                        from skimage.transform import downscale_local_mean
+                        if p1 == 0.5:
+                            save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}.npy'
+                        else:
+                            save_name = f'./yolo_drise/heatmaps_{number_of_images_saved}_to_{count_of_images-1}_p1_{p1:.2f}.npy'
+                        if not os.path.exists(save_name):
+                            expl_heatmaps = expl_model(x=imgs, results=results, mode='object_detection')
+                            # Save the heatmaps
+                            np.save(save_name, expl_heatmaps.numpy())
+                        else:
+                            # Load the heatmaps and downscale them
+                            print('***** LOADING HEATMAPS *****')
+                            expl_heatmaps = torch.tensor(np.load(save_name), dtype=torch.float32)
+                        processed_heatmaps = downscale_local_mean(expl_heatmaps.numpy(), (1, 8, 8))
+                        processed_heatmaps = [torch.tensor(hm, dtype=torch.float32) for hm in processed_heatmaps]
+                    else:
+                        expl_heatmaps = expl_model(imgs, return_type='Tensor', show_image=False)
+                        processed_heatmaps = expl_heatmaps
+                        #processed_heatmaps = limit_heatmaps_to_bounding_boxes(expl_heatmaps, results)                 
+                    configure_extra_output_of_the_model(model, self)
+                    
+                else:
+                    processed_heatmaps = None
+                if CUSTOM_HYP.unk.RANK_BOXES:
+                        possible_unk_bboxes, ood_decision_on_unknown, distances_per_image = self.compute_extra_possible_unkwnown_bboxes_and_decision(
+                            results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
+                            folder_path=None, origin_of_idx=idx_of_batch*dataloader.batch_size
+                        )
+                else:
+                    distances_per_image = None
+                    possible_unk_bboxes, ood_decision_on_unknown = self.compute_extra_possible_unkwnown_bboxes_and_decision(
+                        results, data, ood_decision_of_results=ood_decision, explainalbility_heatmaps=processed_heatmaps,
+                        folder_path=None, origin_of_idx=idx_of_batch*dataloader.batch_size
+                    )
+
+            # Cada prediccion va a ser un diccionario con las siguientes claves:
+            #   'img_idx': int -> Indice de la imagen
+            #   'img_name': str -> Nombre del archivo de la imagen
+            #   'bboxes': List[Tensor] -> Lista de tensores con las cajas predichas
+            #   'cls': List[Tensor] -> Lista de tensores con las clases predichas
+            #   'conf': List[Tensor] -> Lista de tensores con las confianzas de las predicciones (en yolov8 es cls)
+            #   'ood_decision': List[int] -> Lista de enteros con la decision de si la caja es OoD o no
+            for img_idx, res in enumerate(results):
+                #for idx_bbox in range(len(res.boxes.cls)):
+                # if self.enhanced_unk_localization:
+                #     pass
+                # else:
+                # Parse the ood elements as the unknown class (80)
+                ood_decision_one_image = torch.tensor(ood_decision[img_idx], dtype=torch.float32)
+                unknown_mask = ood_decision_one_image == 0
+                bboxes_coords = res.boxes.xyxy.cpu()
+                bboxes_cls = torch.where(unknown_mask, torch.tensor(80, dtype=torch.float32), res.boxes.cls.cpu())   
+                # Make all the preds to be the class 80 to known the max recall possible
+                #bboxes_cls = torch.tensor(80, dtype=torch.float32).repeat(len(res.boxes.cls))
+                bboxes_conf = res.boxes.conf.cpu()
+                # TODO: La logica de como ignorar ciertos unknowns la tenemos que idear, ya que por el momento no tiene 
+                #   sentido que las propuestas no sean unknowns
+                if self.enhanced_unk_localization:
+                    # Add the possible unknown boxes to the predictions
+                    bboxes_coords = torch.cat([bboxes_coords, possible_unk_bboxes[img_idx]], dim=0)
+                    one_image_ood_decision_on_possible_unk = torch.tensor(ood_decision_on_unknown[img_idx], dtype=torch.float32)
+                    assert one_image_ood_decision_on_possible_unk.sum().item() == 0.0, "Uno de los posible unknowns es considerado como known, pero como no tenemos esa logica implementada es ERROR"
+                    # TODO: Por el momento simplemente lo que hago es hacer un tensor con todo clase 80 (unk). Luego tendre que ver como gestiono el hacer que acaben siendo una clase
+                    cls_unk_prop = torch.tensor(80, dtype=torch.float32).repeat(len(possible_unk_bboxes[img_idx]))
+                    bboxes_cls = torch.cat([bboxes_cls, cls_unk_prop], dim=0)
+                    conf_unk_prop = torch.ones(len(possible_unk_bboxes[img_idx])) * 0.150001  # TODO: Pongo 0.150001 de confianza para las propuestas de unknown
+                    bboxes_conf = torch.cat([bboxes_conf, conf_unk_prop], dim=0)
+                all_preds.append({
+                    'img_idx': number_of_images_processed + img_idx,
+                    'img_name': Path(data['im_file'][img_idx]).stem,
+                    'bboxes': bboxes_coords,
+                    'cls': bboxes_cls,
+                    'conf': bboxes_conf,
+                    #'ood_decision': torch.tensor(ood_decision[img_idx], dtype=torch.float32)
+                })
+                    
+                # Transform the classes to index 80 if they are not in the known classes
+                known_mask = torch.isin(targets['cls'][img_idx], known_classes_tensor)
+                transformed_target_cls = torch.where(known_mask, targets['cls'][img_idx], torch.tensor(80, dtype=torch.float32))
+                all_targets.append({
+                    'img_idx': number_of_images_processed + img_idx,
+                    'img_name': Path(data['im_file'][img_idx]).stem,
+                    'bboxes': targets['bboxes'][img_idx],
+                    'cls': transformed_target_cls
+                })
+
+            ### Acumular predicciones y targets ###
+            number_of_images_processed += len(imgs)
+            number_of_images_saved += len(data['im_file'])
+
+        #########
+        # Loop finished
+        #########
+
+        # All predictions collected, now compute metrics
+        results_dict = compute_metrics(all_preds, all_targets, class_names, known_classes, logger)
+
+        # Count the number of non-unknown instances and the number of unknown instances
+        number_of_known_boxes = 0 
+        number_of_unknown_boxes = 0
+        for _target in all_targets:
+            number_of_known_boxes += torch.sum(_target['cls'] != 80).item()
+            number_of_unknown_boxes += torch.sum(_target['cls'] == 80).item()
+        logger.info(f"Number of target known boxes: {number_of_known_boxes}")
+        logger.info(f"Number of target unknown boxes: {number_of_unknown_boxes}")
+
+        return results_dict
 
 ### Method to configure internals of the model ###
     
