@@ -17,7 +17,7 @@ from ultralytics import YOLO
 from ultralytics.yolo.data.build import InfiniteDataLoader
 
 from ood_utils import configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, NoMethod, MSP, Energy, ODIN, Sigmoid, \
-    L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, GAPL2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride, \
+    L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride, \
     FusionMethod, UmapMethod, IvisMethodCosinePerClusterPerStride, TripleFusionMethod
 from data_utils import read_json, write_json, load_dataset_and_dataloader
 from unknown_localization_utils import select_ftmaps_summarization_method, select_thresholding_method
@@ -262,8 +262,6 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
         return L1DistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'L2_cl_stride':
         return L2DistanceOneClusterPerStride(**distance_methods_kwargs)
-    elif args.ood_method == 'GAP_L2_cl_stride':
-        return GAPL2DistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'Cosine_cl_stride':
         return CosineDistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'Umap':

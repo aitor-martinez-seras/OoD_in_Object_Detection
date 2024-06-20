@@ -13,7 +13,7 @@ from ultralytics.yolo.utils import DEFAULT_CFG_PATH
 class SimpleArgumentParser(Tap):
     
     devices: List[int]  # Device to use for training on GPU. Indicate more than one to use multiple GPUs. Use -1 for CPU.
-    model: str = "yolov8"  # Model to use. Options: yolov5, yolov6, yolov8. Default: yolov8
+    model: str = "yolov8"  # Model to use. Options: yolov5, yolov6, yolov8, yolov_custom_8. Default: yolov8
     model_size: Literal["n", "s", "m", "l", "x"]  # Which variant of the model YOLO to use
     dataset: str = "tao_coco"
     # Hyperparameters

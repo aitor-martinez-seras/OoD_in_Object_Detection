@@ -18,6 +18,9 @@ from .utils import bias_init_with_prob, linear_init_
 
 __all__ = 'Detect', 'Segment', 'Pose', 'Classify', 'RTDETRDecoder'
 
+import torch
+import torch.nn as nn
+
 class DetectCustom(nn.Module):
     """YOLOv8 Custom Detect head for detection models."""
     dynamic = False  # force grid reconstruction
@@ -34,16 +37,27 @@ class DetectCustom(nn.Module):
         self.no = nc + self.reg_max * 4  # number of outputs per anchor
         self.stride = torch.zeros(self.nl)  # strides computed during build
         c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], self.nc)  # channels
-        self.cv2 = nn.ModuleList(
-            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch)
-        self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
+        
+        self.cv2_1 = nn.ModuleList([nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3)) for x in ch])
+        self.cv2_2 = nn.ModuleList([nn.Conv2d(c2, 4 * self.reg_max, 1) for _ in ch])
+        
+        self.cv3_1 = nn.ModuleList([nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3)) for x in ch])
+        self.cv3_2 = nn.ModuleList([nn.Conv2d(c3, self.nc, 1) for _ in ch])
+        
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
 
     def forward(self, x):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
         shape = x[0].shape  # BCHW
         for i in range(self.nl):
-            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
+            x_cv2_1 = self.cv2_1[i](x[i])
+            x_cv2_2 = self.cv2_2[i](x_cv2_1)
+            
+            x_cv3_1 = self.cv3_1[i](x[i])
+            x_cv3_2 = self.cv3_2[i](x_cv3_1)
+            
+            x[i] = torch.cat((x_cv2_2, x_cv3_2), 1)
+        
         if self.training:
             return x
         elif self.dynamic or self.shape != shape:
@@ -59,6 +73,7 @@ class DetectCustom(nn.Module):
         dbox = dist2bbox(self.dfl(box), self.anchors.unsqueeze(0), xywh=True, dim=1) * self.strides
         y = torch.cat((dbox, cls.sigmoid()), 1)
         return y if self.export else (y, x)
+
 
     def bias_init(self):
         """Initialize Detect() biases, WARNING: requires stride availability."""
