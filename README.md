@@ -1,3 +1,9 @@
+# Introduction
+
+This is the code for the paper ______. 
+
+The code is based on an early version of the Ultralytics YOLOv8 repository. The more updated version of the libray can be found [here](https://github.com/ultralytics/ultralytics).
+
 # Instalation of the package
 
 To install the package:

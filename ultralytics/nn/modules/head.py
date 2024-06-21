@@ -37,10 +37,10 @@ class DetectCustom(nn.Module):
         self.no = nc + self.reg_max * 4  # number of outputs per anchor
         self.stride = torch.zeros(self.nl)  # strides computed during build
         c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], self.nc)  # channels
-        
+        # The BOX head
         self.cv2_1 = nn.ModuleList([nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3)) for x in ch])
         self.cv2_2 = nn.ModuleList([nn.Conv2d(c2, 4 * self.reg_max, 1) for _ in ch])
-        
+        # The CLS head
         self.cv3_1 = nn.ModuleList([nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3)) for x in ch])
         self.cv3_2 = nn.ModuleList([nn.Conv2d(c3, self.nc, 1) for _ in ch])
         
@@ -49,6 +49,8 @@ class DetectCustom(nn.Module):
     def forward(self, x):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
         shape = x[0].shape  # BCHW
+        if not self.training:
+            x_cls_intermediate = []
         for i in range(self.nl):
             x_cv2_1 = self.cv2_1[i](x[i])
             x_cv2_2 = self.cv2_2[i](x_cv2_1)
@@ -57,6 +59,9 @@ class DetectCustom(nn.Module):
             x_cv3_2 = self.cv3_2[i](x_cv3_1)
             
             x[i] = torch.cat((x_cv2_2, x_cv3_2), 1)
+
+            if not self.training:
+                x_cls_intermediate.append(x_cv3_2)
         
         if self.training:
             return x
@@ -80,9 +85,12 @@ class DetectCustom(nn.Module):
         m = self  # self.model[-1]  # Detect() module
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1
         # ncf = math.log(0.6 / (m.nc - 0.999999)) if cf is None else torch.log(cf / cf.sum())  # nominal class frequency
-        for a, b, s in zip(m.cv2, m.cv3, m.stride):  # from
-            a[-1].bias.data[:] = 1.0  # box
-            b[-1].bias.data[:m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
+        for a_1, a_2, b_1, b_2, s in zip(m.cv2_1, m.cv2_2, m.cv3_1, m.cv3_2, m.stride):  # from
+            #a_1[-1].bias.data[:] = 1.0  # box
+            # a_2[-1].bias.data[:] = 1.0  # box
+            # b_1[-1].bias.data[:m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
+            # b_2[-1].bias.data[:m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
+            pass
 
 
 class Detect(nn.Module):
@@ -107,6 +115,8 @@ class Detect(nn.Module):
         # The CLS head
         self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
+        # Added 
+        self.output_values_before_sigmoid = False
 
     def forward(self, x):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
@@ -146,6 +156,8 @@ class Detect(nn.Module):
         # Box es []
         dbox = dist2bbox(self.dfl(box), self.anchors.unsqueeze(0), xywh=True, dim=1) * self.strides
         y = torch.cat((dbox, cls.sigmoid()), 1)
+        if self.output_values_before_sigmoid:
+            x = cls
         return y if self.export else (y, x)                   
 
     def bias_init(self):

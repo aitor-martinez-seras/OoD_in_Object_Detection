@@ -98,7 +98,7 @@ class DetectionPredictor(BasePredictor):
 
         # Preds:
         #   - Si viene sin output_extra: 
-        #       - preds[0] es un tensor de (N, 84, 8000) -> Las predicciones
+        #       - preds[0] es un tensor de (N, n_cls + 4, 8000) -> Las predicciones
         #       - preds[1] es una lista con 3 tensores de (N, 144, H, W)  -> No se que son...
         #   - Si viene con output_extra:
         #       - preds[0] es el tensor sin output_extra (es lo mostrado arriba, con las preds en la posicion 0)
@@ -111,7 +111,10 @@ class DetectionPredictor(BasePredictor):
         ood_info_retrieval_mode = hasattr(self.model.model, 'extraction_mode')
         if ood_info_retrieval_mode:  #in ['roi_aligned_ftmaps', 'logits', 'all_ftmaps', 'ftmaps_and_strides']:
             
-            output_extra = preds[1]  # Los feature maps o logits
+            if self.model.model.model[-1].output_values_before_sigmoid:
+                output_extra = preds[0][1]  # Los valores antes de la sigmoide
+            else:
+                output_extra = preds[1]  # Los feature maps o logits
             preds = preds[0][0]  # Las predicciones
             
             if self.model.model.extraction_mode == 'roi_aligned_ftmaps':
@@ -152,28 +155,11 @@ class DetectionPredictor(BasePredictor):
                     device=device
                 )
 
-                # OPCION 2: Hacer un loop para cada imagen del batch, y dentro de ese loop hacer otro loop para cada stride
-                # Con este loop recorremos la dimension de batch
-                # for idx_img, one_img_bboxes in enumerate(only_bboxes):
-
-                #     strides_of_each_bbox = [torch.where(strides[idx_img] == idx) for idx in range(number_of_strides)]
-                #     aux_list = list()
-                #     idx_of_each_bbox_in_batch = [list(range(len(st))) for st in strides_of_each_bbox]
-                #     which_stride = strides[idx_img]
-                #     idx_of_stride = list(range(len(strides[idx_img])))
-                #     idx_of_strides = [list(range(len(st))) for st in strides[idx_img]]
-
-                #     s8_preds = roi_align(
-                #         input=torch.unsqueeze(output_extra[0][idx_img], dim=0),
-                #         boxes=[one_img_bboxes],
-                #         output_size= (10, 10),
-                #         spatial_scale=output_extra[0].shape[2]/img.shape[2]
-                #     )
-
                 output_extra = roi_aligned_ftmaps_per_image_and_stride  # Sobreescibimos el output_extra con el resultado del roi_align
 
             elif self.model.model.extraction_mode == 'logits':
-                output_extra = output_extra[0]  # Los logits
+                if not self.model.model.model[-1].output_values_before_sigmoid:
+                    output_extra = output_extra[0]  # Los logits
                 preds = ops.non_max_suppression(preds,
                                                 self.args.conf,
                                                 self.args.iou,

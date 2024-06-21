@@ -106,6 +106,7 @@ class OODMethod(ABC):
     min_conf_threshold_train: float  # Train threshold, for configuring the In-Distribution
     min_conf_threshold_test: float  # Test threshold, for outputs during tests
     which_internal_activations: str  # Where to extract internal activations from
+    use_values_before_sigmoid: bool  # If True, the method will use the values before the sigmoid in the logits methods
     enhanced_unk_localization: bool  # If True, the method will try to enhance the localization of the UNK objects by adding new boxes
     compute_saliency_map_one_stride: Callable  # Function to compute the saliency map of one stride
     compute_thresholds_out_of_saliency_map: Callable  # Function to compute the thresholds out of the saliency map
@@ -129,6 +130,7 @@ class OODMethod(ABC):
             self.compute_saliency_map_one_stride = self.validate_saliency_map_computation_function(saliency_map_computation_function)
             self.compute_thresholds_out_of_saliency_map = self.validate_thresholds_out_of_saliency_map_function(thresholds_out_of_saliency_map_function)
             #self.extract_bboxes_from_saliency_map_and_thresholds = extract_bboxes_from_saliency_map_and_thresholds
+        self.use_values_before_sigmoid = False
 
     @staticmethod
     def validate_internal_activations_option(selected_option: str):
@@ -1359,13 +1361,14 @@ class OODMethod(ABC):
 class LogitsMethod(OODMethod):
     
     def __init__(self, name: str, per_class: bool, per_stride: bool, iou_threshold_for_matching: float,
-                 min_conf_threshold_train: float, min_conf_threshold_test: float, **kwargs):
+                 min_conf_threshold_train: float, min_conf_threshold_test: float, use_values_before_sigmoid: bool, **kwargs):
         is_distance_method = False
         which_internal_activations = 'logits'  # Always logits for these methods
         enhanced_unk_localization = False  # By default not used with logits, as feature maps are needed.
         super().__init__(name, is_distance_method, per_class, per_stride, iou_threshold_for_matching,
                          min_conf_threshold_train, min_conf_threshold_test, which_internal_activations, enhanced_unk_localization)
         self.cluster_method = 'None'
+        self.use_values_before_sigmoid = use_values_before_sigmoid
 
     def compute_ood_decision_on_results(self, results: Results, logger: Logger) -> List[List[int]]:
         ood_decision = []  
@@ -1373,7 +1376,7 @@ class LogitsMethod(OODMethod):
             ood_decision.append([])  # Every image has a list of decisions for each bbox
             for idx_bbox in range(len(res.boxes.cls)):
                 cls_idx = int(res.boxes.cls[idx_bbox].cpu())
-                logits = res.extra_item[idx_bbox][4:].cpu()
+                logits = self.activations_transformation(res.extra_item[idx_bbox].cpu())
                 score = self.compute_scores(logits, cls_idx)[0]
                 if score < self.thresholds[cls_idx]:
                     ood_decision[idx_img].append(0)  # OOD
@@ -1388,7 +1391,7 @@ class LogitsMethod(OODMethod):
             scores.append([])  # Every image has a list of decisions for each bbox
             for idx_bbox in range(len(res.boxes.cls)):
                 cls_idx = int(res.boxes.cls[idx_bbox].cpu())
-                logits = res.extra_item[idx_bbox][4:].cpu()
+                logits = self.activations_transformation(res.extra_item[idx_bbox].cpu())
                 score = self.compute_scores(logits, cls_idx)[0]
                 # AQUI hay que poner una logica para que devuelva el score entre -1 y 1.
                 # -1 significa que es OOD al maximo y 1 que es IND al maximo
@@ -1466,7 +1469,7 @@ class LogitsMethod(OODMethod):
             for valid_idx_one_bbox in res.valid_preds:
                 #cls_idx_one_bbox = res.boxes.cls[valid_idx_one_bbox].cpu().unsqueeze(0)
                 cls_idx_one_bbox = int(res.boxes.cls[valid_idx_one_bbox].cpu())
-                logits_one_bbox = res.extra_item[valid_idx_one_bbox][4:].cpu()
+                logits_one_bbox = res.extra_item[valid_idx_one_bbox].cpu()
                 #all_activations[cls_idx_one_bbox].append(self.compute_score_one_bbox(logits_one_bbox, cls_idx_one_bbox))
                 # Concatenate the cls_idx to the logits in the first element and the append to the list
                 all_activations[cls_idx_one_bbox].append(logits_one_bbox)
@@ -1493,7 +1496,10 @@ class LogitsMethod(OODMethod):
             scores = [[] for _ in range(len(activations))]
             for idx_cls in range(len(scores)):
                 if len(activations[idx_cls]) > 0:
-                    scores[idx_cls] = self.compute_scores(activations[idx_cls], idx_cls)
+                    scores[idx_cls] = self.compute_scores(
+                        self.activations_transformation(activations[idx_cls]),
+                        idx_cls
+                    )
                 else:
                     scores[idx_cls] = np.array([], dtype=np.float32)
         else:
@@ -1519,7 +1525,11 @@ class LogitsMethod(OODMethod):
                     self.max_score[idx_cls] = 0.0
 
     def activations_transformation(self, activations: np.array, **kwargs) -> np.array:
-        raise NotImplementedError("This method is not needed for methods using logits")
+        if self.use_values_before_sigmoid:
+            return activations  # In this case the activations are already the logits
+        else:
+            return activations[..., 4:]  # The bbox coordinates are part of the activations and must be eliminated
+        #raise NotImplementedError("This method is not needed for methods using logits")
 
     def compute_distance(self, centroids: np.array, features: np.array) -> np.array:
         raise NotImplementedError("This method is not needed for methods using logits")
@@ -1598,6 +1608,8 @@ class Sigmoid(LogitsMethod):
     def compute_scores(self, logits: Tensor, cls_idx: int) -> np.ndarray:
         if len(logits.shape) == 1:  # In case we only have one bbox
             logits = logits.unsqueeze(0)
+        if self.use_values_before_sigmoid:  # In case the values have not been processed by a sigmoid
+            logits = torch.sigmoid(logits)
         logits = logits.numpy()
         assert (cls_idx == logits.argmax(axis=1)).all(), "The max logit is not the one of the predicted class"
         return logits[:, cls_idx]
@@ -3650,6 +3662,8 @@ def configure_extra_output_of_the_model(model: YOLO, ood_method: Type[OODMethod]
             model.model.which_layers_to_extract = "convolutional_layers"
         elif ood_method.which_internal_activations in LOGITS_RELATED_OPTIONS:
             model.model.which_layers_to_extract = "logits"
+            if ood_method.use_values_before_sigmoid:
+                model.model.model[-1].output_values_before_sigmoid = True
         elif ood_method.which_internal_activations == "none":
             model.model.which_layers_to_extract = "none"
         else:

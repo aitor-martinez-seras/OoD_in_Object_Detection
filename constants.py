@@ -53,6 +53,7 @@ VOC_TEST_COLUMN = ['mAP']
 COCO_OOD_COLUMNS = ['U-AP_(COOD)', 'U-F1_(COOD)', 'U-PRE_(COOD)', 'U-REC_(COOD)']
 COCO_MIX_COLUMNS = ['mAP', 'U-AP_(CMIX)', 'U-F1_(CMIX)', 'U-PRE_(CMIX)', 'U-REC_(CMIX)','A-OSE', 'WI-08']
 COCO_OWOD_COLUMNS = ['mAP_(OWOD)', 'U-AP_(OWOD)', 'U-F1_(OWOD)', 'U-PRE_(OWOD)', 'U-REC_(OWOD)','A-OSE_(OWOD)', 'WI-08_(OWOD)']
+COCO_OWOD_COLUMNS_T1 = ['mAP_(VOC_test)']
 FINAL_COLUMNS = ['Model', 'args', 'custom_hyp']
 # Benchmark options
 AVAILABLE_BENCHMARKS = ['best_methods', 'conf_thr_test', 'clusters', 'logits_methods']

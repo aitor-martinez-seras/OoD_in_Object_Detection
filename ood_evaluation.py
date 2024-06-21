@@ -24,7 +24,7 @@ from unknown_localization_utils import select_ftmaps_summarization_method, selec
 from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, OOD_METHOD_CHOICES, TARGETS_RELATED_OPTIONS, \
     AVAILABLE_CLUSTERING_METHODS, DISTANCE_METHODS, BENCHMARKS, COCO_OOD_NAME, COCO_MIXED_NAME, COCO_OWOD_TEST_NAME, \
     COMMON_COLUMNS, COCO_OOD_COLUMNS, COCO_MIX_COLUMNS, COCO_OWOD_COLUMNS, FINAL_COLUMNS, LOGITS_METHODS, DISTANCE_METHODS, \
-    INDIVIDUAL_RESULTS_FILE_PATH, AVAILABLE_DATASETS
+    INDIVIDUAL_RESULTS_FILE_PATH, AVAILABLE_DATASETS, COCO_OWOD_COLUMNS_T1
 from custom_hyperparams import CUSTOM_HYP, Hyperparams, hyperparams_to_dict
 
 
@@ -63,6 +63,8 @@ class SimpleArgumentParser(Tap):
     which_internal_activations: str = 'roi_aligned_ftmaps'  # Which internal activations to use for the OoD detection
     # Hyperparams for FUSION methods
     fusion_strategy: Literal["and", "or", "score"] = "or"
+    # For Logits methods
+    use_values_before_sigmoid: bool = False  # Whether to use the values before the sigmoid
     # ODIN and Energy
     temperature_energy: int = 1
     temperature_odin: int = 1000
@@ -98,7 +100,14 @@ class SimpleArgumentParser(Tap):
         else:
             if self.model == '':
                 raise ValueError("You must pass a model size.")
-            
+        
+        # Check OWOD tasks for OOD
+        if self.owod_task_ood == 't1':
+            # In case is T1, the columns are different
+            global COCO_OWOD_COLUMNS
+            COCO_OWOD_COLUMNS = COCO_OWOD_COLUMNS_T1
+
+        # Check OOD datasets
         if len(self.ood_datasets) == 0:
             raise ValueError("You must pass ood_datasets")
         else:
@@ -106,6 +115,7 @@ class SimpleArgumentParser(Tap):
                 if dataset not in AVAILABLE_DATASETS:
                     raise ValueError(f"Invalid dataset {dataset}")
         
+        # Check OOD methods
         ood_methods = self.ood_method.split('-')
         for method in ood_methods:
             if method == 'fusion':
@@ -172,7 +182,8 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
     common_kwargs = {
         'iou_threshold_for_matching': CUSTOM_HYP.IOU_THRESHOLD,
         'min_conf_threshold_train': args.conf_thr_train,
-        'min_conf_threshold_test': args.conf_thr_test
+        'min_conf_threshold_test': args.conf_thr_test,
+        'use_values_before_sigmoid': args.use_values_before_sigmoid,
     }
     distance_methods_kwargs = {
         'agg_method': 'mean',
@@ -289,6 +300,10 @@ def define_paths_of_activations_thresholds_and_clusters(ood_method: OODMethod, m
         thresholds_str += f'_{args.ind_info_creation_option}'
         if args.ood_method in DISTANCE_METHODS:
             clusters_str += f'_{args.ind_info_creation_option}'
+    if args.use_values_before_sigmoid:
+        activations_str += '_before_sigmoid'
+        activations_str_val += '_before_sigmoid'
+        thresholds_str += '_before_sigmoid'
     
     activations_path = STORAGE_PATH / f'{activations_str}.pt'
     activations_val_path = STORAGE_PATH / f'{activations_str_val}.pt'
@@ -709,6 +724,12 @@ def main(args: SimpleArgumentParser):
     ood_dataloaders = []
     results_colums = COMMON_COLUMNS
     # Load Out-of-Distribution datasets
+    voc_test_dataloader = None
+    coco_ood_dataloader = None
+    coco_mixed_dataloader = None
+    coco_owod_test_dataloader = None
+    owod_val_dataloader = None
+
     if COCO_OOD_NAME in args.ood_datasets:
         logger.info(f"******** {COCO_OOD_NAME} - {args.ood_split} ********")
         coco_ood_dataset, coco_ood_dataloader = load_dataset_and_dataloader(
@@ -716,7 +737,7 @@ def main(args: SimpleArgumentParser):
             data_split=args.ood_split,
             batch_size=args.batch_size,
             workers=args.workers,
-            owod_task=args.owod_task_ood
+            #owod_task=args.owod_task_ood
         )
         ood_dataloaders.append(coco_ood_dataloader)
         results_colums += COCO_OOD_COLUMNS
@@ -728,13 +749,13 @@ def main(args: SimpleArgumentParser):
             data_split=args.ood_split,
             batch_size=args.batch_size,
             workers=args.workers,
-            owod_task=args.owod_task_ood
+            #owod_task=args.owod_task_ood
         )
         ood_dataloaders.append(coco_mixed_dataloader)
         results_colums += COCO_MIX_COLUMNS
 
     if COCO_OWOD_TEST_NAME in args.ood_datasets:
-        logger.info(f"******** {COCO_OWOD_TEST_NAME} - {args.ood_split} ********")
+        logger.info(f"******** {COCO_OWOD_TEST_NAME} - {args.ood_split} - {args.owod_task_ood} ********")
         coco_owod_test_dataset, coco_owod_test_dataloader = load_dataset_and_dataloader(
             dataset_name=COCO_OWOD_TEST_NAME,
             data_split=args.ood_split,
@@ -1335,7 +1356,7 @@ def fill_dict_with_method_info(results_one_run: Dict[str, float], args: SimpleAr
     results_one_run["fusion_strat"] = kwargs.get('fusion_strat', args.fusion_strategy)
 
 
-def fill_dict_with_one_dataset_results(results_dict: Dict[str, float], results_one_dataset: Dict[str, float], dataset_name: str) -> None:
+def fill_dict_with_one_dataset_results(results_dict: Dict[str, float], results_one_dataset: Dict[str, float], dataset_name: str, owod_task: str) -> None:
     if dataset_name == COCO_OOD_NAME:
         final_results_columns =  COCO_OOD_COLUMNS
     elif dataset_name == COCO_MIXED_NAME:
@@ -1358,6 +1379,7 @@ def add_args_and_hyperparams_info(results_dict: Dict[str, float], args: SimpleAr
     results_dict['args'] = str(args)
     results_dict['custom_hyp'] = str(custom_hyp)
 
+
 def get_mean_and_std_n_clusters(ood_method: OODMethod) -> Tuple[float, float]:
     if ood_method.is_distance_method:
         if ood_method.per_class and ood_method.per_stride:
@@ -1375,6 +1397,7 @@ def get_mean_and_std_n_clusters(ood_method: OODMethod) -> Tuple[float, float]:
         mean_n_clusters = 0
         std_n_clusters = 0
     return mean_n_clusters, std_n_clusters
+
 
 def append_results_to_xlsx_and_csv(results: Dict[str, float], file_path: Path) -> None:
 

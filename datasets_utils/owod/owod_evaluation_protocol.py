@@ -47,9 +47,10 @@ def compute_avg_precision_at_a_recall_level_for_unk(precisions, recalls, recall_
     for iou, recall in recalls.items():
         prec = []
         for cls_id, rec in enumerate(recall):
-            if cls_id == UNKNOWN_CLASS_INDEX and len(rec)>0:
+            if cls_id == 20 and len(rec)>0:  # 20 as the number of classes is 21 and the number of known classes is 20
                 p = precisions[iou][cls_id][min(range(len(rec)), key=lambda i: abs(rec[i] - recall_level))]
                 prec.append(p)
+        #print(prec)
         if len(prec) > 0:
             precs[iou] = np.mean(prec)
         else:
@@ -128,12 +129,30 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
             one_class_preds["confs"] = np.array(one_class_preds["confs"], dtype=np.float32)
             one_class_preds["bboxes"] = np.array(one_class_preds["bboxes"], dtype=np.float32)
             
-
             # for thresh in range(50, 100, 5):
             thresh = 50  # IoU threshold
+
+            # In case there are no predictions for current class, just append empty arrays and the num unks
             if one_class_preds["confs"].shape[0] == 0:
                 logger.info(f"No predictions for class {cls_name}")
+                empty_array = np.empty(0)
+                # aps[thresh].append(ap * 100)
+                # unk_det_as_knowns[thresh].append(0)
+                # # Compute num unks
+                # num_unk = 0
+                # for target in all_targets:
+                #     current_class_gt_mask = target['cls'] == UNKNOWN_CLASS_INDEX  # 80 es el indice de unknown
+                #     R = target["cls"][current_class_gt_mask]
+                #     difficult = np.array([False for x in R]).astype(bool)  # All are non difficult
+                #     num_unk = num_unk + sum(~difficult)  # Number of non-difficult GTs, always same as len(R)
+                # num_unks[thresh].append(num_unk)
+                #all_precs[thresh].append(empty_array)
+                all_recs[thresh].append(empty_array)
+                tp_plus_fp_cs[thresh].append(empty_array)
+                fp_os[thresh].append(empty_array)
                 continue
+            
+            # In case there are predictions, compute the metrics
             rec, prec, ap, unk_det_as_known, num_unk, tp_plus_fp_closed_set, fp_open_set = voc_eval(
                 current_class_predictions=one_class_preds,
                 all_targets=all_targets,
@@ -182,21 +201,23 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
 
     # Compute metrics for Known classes
     aps_unksniffer = defaultdict(list)  # iou -> ap per class
-    # _all_recs = defaultdict(list)
-    # _all_precs = defaultdict(list)
-    # _tp_plus_fp_cs = defaultdict(list)
-    # _fp_os = defaultdict(list)
+    _all_recs = defaultdict(list)
+    _all_precs = defaultdict(list)
+    _unk_det_as_knowns = defaultdict(list)
+    _tp_plus_fp_cs = defaultdict(list)
+    _fp_os = defaultdict(list)
     for cls_id, cls_name in enumerate(class_names[:len(known_classes)]):
-        _rec, _prec, _ap, _d, _e, _tp_plus_fp_closed_set, _fp_open_set = voc_eval_unksniffer_WI_file(
+        _rec, _prec, _ap, _num_det_as_unk, _num_unks_gt, _tp_plus_fp_closed_set, _fp_open_set = voc_eval_unksniffer_WI_file(
                     detections=detections_unksniffer,
                     annotations=annotations_unksniffer,
                     classname=cls_id,
                 )
         aps_unksniffer[thresh].append(_ap * 100)
-        # _all_precs[thresh].append(_prec)
-        # _all_recs[thresh].append(_rec)
-        # _tp_plus_fp_cs[thresh].append(_tp_plus_fp_closed_set)
-        # _fp_os[thresh].append(_fp_open_set)
+        _all_precs[thresh].append(_prec)
+        _all_recs[thresh].append(_rec)
+        _unk_det_as_knowns[thresh].append(_num_det_as_unk)
+        _tp_plus_fp_cs[thresh].append(_tp_plus_fp_closed_set)
+        _fp_os[thresh].append(_fp_open_set)
         #logger.info(f"Class: {cls_name}, AP: {_ap * 100:.2f}, Recall: {_rec * 100:.2f}, Precision: {_prec * 100:.2f}")
     known_ap50_unksniffer = np.mean(aps_unksniffer[50])
     
@@ -219,7 +240,7 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
     # Otherwise, we compute WI and A-OSE and return all metrics
     cls_diff_from_unk_found = False
     for t in all_targets:
-        if torch.where(t["cls"] == 80, 0, 1).sum() > 0:
+        if torch.where(t["cls"] == UNKNOWN_CLASS_INDEX, 0, 1).sum() > 0:
             cls_diff_from_unk_found = True
             break
     if not cls_diff_from_unk_found:
@@ -409,7 +430,7 @@ def voc_eval(current_class_predictions: Dict[str, List], all_targets: List[Dict]
     # assumes imagesetfile is a text file with each line an image name
 
     # Classname to idx
-    class_mapping = {class_name: idx if class_name != 'unknown' else 80 for idx, class_name in enumerate(class_names)}
+    class_mapping = {class_name: idx if class_name != 'unknown' else UNKNOWN_CLASS_INDEX for idx, class_name in enumerate(class_names)}
     class_idx = class_mapping[classname]  # Tengo que llevar hasta aqui el mapping de las clases
 
     # MANTENGO
@@ -553,7 +574,7 @@ def voc_eval(current_class_predictions: Dict[str, List], all_targets: List[Dict]
     # compute precision recall
     fp = np.cumsum(fp)
     tp = np.cumsum(tp)
-    rec = tp / float(npos)  # recall = TP / (TP + FN)
+    rec = tp / float(npos)  # recall = TP / (TP + FN). npos is the number of instances of the wanted class (TP + FN)
     # avoid divide by zero in case the first detection matches a difficult
     # ground truth
     prec = tp / np.maximum(tp + fp, np.finfo(np.float64).eps)
@@ -592,7 +613,7 @@ def voc_eval(current_class_predictions: Dict[str, List], all_targets: List[Dict]
     for target in all_targets:
         #if target['img_name'] in imagenames:
         imagename = target['img_name']
-        current_class_gt_mask = target['cls'] == 80  # 80 es el indice de unknown
+        current_class_gt_mask = target['cls'] == UNKNOWN_CLASS_INDEX  # 80 es el indice de unknown
         R = target["cls"][current_class_gt_mask]
         bbox = target["bboxes"][current_class_gt_mask].numpy()
         difficult = np.array([False for x in R]).astype(bool)  # All are non difficult
@@ -824,9 +845,9 @@ def voc_eval_unksniffer_WI_file(detections, annotations, classname, ovthresh=0.5
     if det_bboxes.shape[0] == 0:
         unknown_class_recs = {}
         n_unk = 0
-        if classname == 80:
+        if classname == UNKNOWN_CLASS_INDEX:
             for image_name in annotations:
-                R = [obj[:4] for obj in annotations[image_name] if int(obj[-1]) == 81]
+                R = [obj[:4] for obj in annotations[image_name] if int(obj[-1]) == UNKNOWN_CLASS_INDEX]
                 bbox = np.array(R)
                 difficult = np.array([0] * len(R)).astype(np.bool_)
                 det = [False] * len(R)
@@ -904,14 +925,14 @@ def voc_eval_unksniffer_WI_file(detections, annotations, classname, ovthresh=0.5
     unknown_class_recs = {}
     n_unk = 0
     for image_name in annotations:
-        R = [obj[:4] for obj in annotations[image_name] if int(obj[-1]) == 81]
+        R = [obj[:4] for obj in annotations[image_name] if int(obj[-1]) == UNKNOWN_CLASS_INDEX]
         bbox = np.array(R)
         difficult = np.array([0] * len(R)).astype(np.bool_)
         det = [False] * len(R)
         n_unk = n_unk + sum(~difficult)
         unknown_class_recs[image_name] = {"bbox": bbox, "difficult": difficult, "det": det}
 
-    if classname == 80:
+    if classname == UNKNOWN_CLASS_INDEX:
         return rec, prec, ap, 0, n_unk, None, None
 
     # Go down each detection and see if it has an overlap with an unknown object.

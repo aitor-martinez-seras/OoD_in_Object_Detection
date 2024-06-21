@@ -13,7 +13,7 @@ from ultralytics.yolo.utils import DEFAULT_CFG_PATH
 class SimpleArgumentParser(Tap):
     
     devices: List[int]  # Device to use for training on GPU. Indicate more than one to use multiple GPUs. Use -1 for CPU.
-    model: str = "yolov8"  # Model to use. Options: yolov5, yolov6, yolov8, yolov_custom_8. Default: yolov8
+    model: str = "yolov8"  # Model to use. Options: yolov5, yolov6, yolov8, custom_yolov8. Default: yolov8
     model_size: Literal["n", "s", "m", "l", "x"]  # Which variant of the model YOLO to use
     dataset: str = "tao_coco"
     # Hyperparameters
@@ -46,6 +46,16 @@ class SimpleArgumentParser(Tap):
     def process_args(self):
         if not self.epochs:
             assert self.val_only, "You must pass the number of epochs if you are not only validating."
+        
+        if self.model:
+            # Assert that the model size will work with the model passed
+            if self.model_size:
+                import re
+                try:
+                    yaml_path = f"{self.model}{self.model_size}.yaml"
+                    re.search(r'yolov\d+([nslmx])', Path(yaml_path).stem).group(1)
+                except AttributeError:
+                    raise ValueError("The YAML file name passed will not work with the model size passed. It must have the substring 'yolov8{size}' in the name.")
 
         if self.model_path:
             print('Loading model from', self.model_path)
