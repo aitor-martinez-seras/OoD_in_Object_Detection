@@ -18,7 +18,7 @@ from ultralytics.yolo.data.build import InfiniteDataLoader
 
 from ood_utils import configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, NoMethod, MSP, Energy, ODIN, Sigmoid, \
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride, \
-    FusionMethod, UmapMethod, IvisMethodCosinePerClusterPerStride, TripleFusionMethod
+    FusionMethod, UmapMethod, IvisMethodCosine, IvisMethodL1, IvisMethodL2, TripleFusionMethod
 from data_utils import read_json, write_json, load_dataset_and_dataloader
 from unknown_localization_utils import select_ftmaps_summarization_method, select_thresholding_method
 from constants import ROOT, STORAGE_PATH, PRUEBAS_ROOT_PATH, RESULTS_PATH, OOD_METHOD_CHOICES, TARGETS_RELATED_OPTIONS, \
@@ -64,7 +64,7 @@ class SimpleArgumentParser(Tap):
     # Hyperparams for FUSION methods
     fusion_strategy: Literal["and", "or", "score"] = "or"
     # For Logits methods
-    use_values_before_sigmoid: bool = False  # Whether to use the values before the sigmoid
+    use_values_before_sigmoid: bool = True  # Whether to use the values before the sigmoid
     # ODIN and Energy
     temperature_energy: int = 1
     temperature_odin: int = 1000
@@ -277,8 +277,12 @@ def select_ood_detection_method(args: SimpleArgumentParser) -> Union[LogitsMetho
         return CosineDistanceOneClusterPerStride(**distance_methods_kwargs)
     elif args.ood_method == 'Umap':
         return UmapMethod(**distance_methods_kwargs)
+    elif args.ood_method == 'L1Ivis':
+        return IvisMethodL1(**distance_methods_kwargs)
+    elif args.ood_method == 'L2Ivis':
+        return IvisMethodL2(**distance_methods_kwargs)
     elif args.ood_method == 'CosineIvis':
-        return IvisMethodCosinePerClusterPerStride(**distance_methods_kwargs)
+        return IvisMethodCosine(**distance_methods_kwargs)
     else:
         raise NotImplementedError("Not implemented yet")
 
@@ -1356,7 +1360,7 @@ def fill_dict_with_method_info(results_one_run: Dict[str, float], args: SimpleAr
     results_one_run["fusion_strat"] = kwargs.get('fusion_strat', args.fusion_strategy)
 
 
-def fill_dict_with_one_dataset_results(results_dict: Dict[str, float], results_one_dataset: Dict[str, float], dataset_name: str, owod_task: str) -> None:
+def fill_dict_with_one_dataset_results(results_dict: Dict[str, float], results_one_dataset: Dict[str, float], dataset_name: str) -> None:
     if dataset_name == COCO_OOD_NAME:
         final_results_columns =  COCO_OOD_COLUMNS
     elif dataset_name == COCO_MIXED_NAME:
@@ -1462,12 +1466,6 @@ def check_all_attrs_exist(obj, attrs: List[str]):
 def modify_hyperparams_with_dict(hyperparams: Hyperparams, hyperparams_dict: Dict[str, Any]) -> Hyperparams:
     for key, value in hyperparams_dict.items():
         set_nested_attr(hyperparams, key, value)
-
-    # # Manually set the XAI attribute
-    # if CUSTOM_HYP.unk.USE_XAI_TO_MODIFY_SALIENCY or CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
-    #     CUSTOM_HYP.unk.USE_XAI = True
-    # else:
-    #     CUSTOM_HYP.unk.USE_XAI = False
 
     return hyperparams
 

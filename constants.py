@@ -23,7 +23,7 @@ COCO_OWOD_TEST_NAME = 'owod'
 AVAILABLE_DATASETS = [COCO_OOD_NAME, COCO_MIXED_NAME, COCO_OWOD_TEST_NAME]
 # OOD Methods
 LOGITS_METHODS = ['NoMethod', 'MSP', 'Energy', 'ODIN', 'Sigmoid']
-DISTANCE_METHODS = ['L1_cl_stride', 'L2_cl_stride', 'Cosine_cl_stride', 'Umap', 'CosineIvis']
+DISTANCE_METHODS = ['L1_cl_stride', 'L2_cl_stride', 'Cosine_cl_stride', 'Umap', 'CosineIvis', 'L1Ivis', 'L2Ivis']
 OOD_METHOD_CHOICES = LOGITS_METHODS + DISTANCE_METHODS
 
 FTMAPS_RELATED_OPTIONS = ['roi_aligned_ftmaps','all_ftmaps', 'ftmaps_and_strides']

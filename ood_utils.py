@@ -13,6 +13,7 @@ import numpy as np
 # import sklearn.metrics as sk
 from numpy.core.multiarray import array as array
 from sklearn.metrics import pairwise_distances
+from sklearn.preprocessing import normalize
 import torch
 import torch.nn.functional as F
 from torch import Tensor
@@ -114,7 +115,7 @@ class OODMethod(ABC):
 
     def __init__(self, name: str, is_distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float,
                  min_conf_threshold_train: float, min_conf_threshold_test: float, which_internal_activations: str, enhanced_unk_localization: bool = False,
-                 saliency_map_computation_function: Callable = None, thresholds_out_of_saliency_map_function: Callable = None
+                 saliency_map_computation_function: Callable = None, thresholds_out_of_saliency_map_function: Callable = None, **kwargs
         ):
         self.name = name
         self.is_distance_method = is_distance_method
@@ -705,23 +706,7 @@ class OODMethod(ABC):
             number_of_images_saved += len(data['im_file'])
 
         # All predictions collected, now compute metrics
-        #try:
         results_dict = compute_metrics(all_preds, all_targets, class_names, known_classes, logger)
-        # except Exception as e:
-        #     logger.error("*********************************************")
-        #     logger.error("")
-        #     logger.error(f"Error computing metrics: {e}")
-        #     logger.error("")
-        #     logger.error("*********************************************")
-        #     results_dict = {
-        #         'mAP': 0,
-        #         'U-AP': 0,
-        #         'U-F1': 0,
-        #         'U-PRE': 0,
-        #         'U-REC': 0,
-        #         'A-OSE': 0,
-        #         'WI-08': 0,   
-        #     }
 
         # Count the number of non-unknown instances and the number of unknown instances
         number_of_known_boxes = 0 
@@ -1626,7 +1611,7 @@ class DistanceMethod(OODMethod):
     clusters: Union[List[np.ndarray], List[List[np.ndarray]]]
     ind_info_creation_option: str
     enhanced_unk_localization: bool
-    metric: 'str'
+    metric: str
 
     # name: str, is_distance_method: bool, per_class: bool, per_stride: bool, iou_threshold_for_matching: float, min_conf_threshold_test: float
     # def __init__(self, name: str, agg_method: str, per_class: bool, per_stride: bool, cluster_method: str,
@@ -2109,10 +2094,8 @@ class DistanceMethod(OODMethod):
                     if len(self.clusters[idx_cls][idx_stride]) > 0:
                         
                         scores[idx_cls][idx_stride] = self.compute_scores_one_class_one_stride(
-                            #self.clusters[idx_cls][idx_stride][None, :],
                             self.clusters[idx_cls][idx_stride],
                             self.activations_transformation(activations_one_cls_one_stride, cls_idx=idx_cls, stride_idx=idx_stride)
-                            # activations_one_cls_one_stride.reshape(activations_one_cls_one_stride.shape[0], -1)
                         )
 
                     if len(activations_one_cls_one_stride) < 50:
@@ -2228,85 +2211,85 @@ class DistanceMethod(OODMethod):
                         ood_decision[idx_img].append(0)  # OOD   
 
 
-    def compute_ood_decision_with_ftmaps(self, activations: Union[List[np.ndarray], List[List[np.ndarray]]], bboxes: Dict[str, List], logger: Logger) -> List[List[List[int]]]:
-        """
-        Compute the OOD decision for each class using the in-distribution activations (usually feature maps).
-        If per_class, activations must be a list of lists, where each position is a list of tensors, one for each stride.
-        """
-        # Como hay 3 strides y estoy con los targets (por lo que no se que clase predicha tendrian asignada),
-        # voy a asignar un % de OOD a cada caja por cada stride, donde el % es el % de clases para las cuales el elemento es OOD
-        # Por tanto devuelvo una lista de listas de listas, donde la primera lista es para cada imagen, la segunda para cada caja
-        # y la tercera para cada stride el % de OOD
-        known_classes = set(range(20))
-        # Loop imagenes
-        ood_decision = []
-        for idx_img, activations_one_img in enumerate(activations):
+    # def compute_ood_decision_with_ftmaps(self, activations: Union[List[np.ndarray], List[List[np.ndarray]]], bboxes: Dict[str, List], logger: Logger) -> List[List[List[int]]]:
+    #     """
+    #     Compute the OOD decision for each class using the in-distribution activations (usually feature maps).
+    #     If per_class, activations must be a list of lists, where each position is a list of tensors, one for each stride.
+    #     """
+    #     # Como hay 3 strides y estoy con los targets (por lo que no se que clase predicha tendrian asignada),
+    #     # voy a asignar un % de OOD a cada caja por cada stride, donde el % es el % de clases para las cuales el elemento es OOD
+    #     # Por tanto devuelvo una lista de listas de listas, donde la primera lista es para cada imagen, la segunda para cada caja
+    #     # y la tercera para cada stride el % de OOD
+    #     known_classes = set(range(20))
+    #     # Loop imagenes
+    #     ood_decision = []
+    #     for idx_img, activations_one_img in enumerate(activations):
 
-            # Loop strides
-            #ood_decision.append([])
-            percentage_ood_one_img_all_bboxes_per_stride = []
-            for idx_stride, activations_one_img_one_stride in enumerate(activations_one_img):
-                #ood_decision[idx_img].append([])
+    #         # Loop strides
+    #         #ood_decision.append([])
+    #         percentage_ood_one_img_all_bboxes_per_stride = []
+    #         for idx_stride, activations_one_img_one_stride in enumerate(activations_one_img):
+    #             #ood_decision[idx_img].append([])
                 
-                # Check if there is any bbox
-                if len(activations_one_img_one_stride) > 0:
+    #             # Check if there is any bbox
+    #             if len(activations_one_img_one_stride) > 0:
                     
-                    # Loop clusters
-                    # Loop over the cluster of each class to obtain per stride one "score" for each bbox
-                    ood_decision_per_cls_per_bbox = []
-                    for idx_cls, cluster in enumerate(self.clusters):
-                        if len(cluster[idx_stride]) > 0:
-                            distances_per_bbox = self.compute_distance(
-                                #cluster[idx_stride][None, :],
-                                cluster[idx_stride],
-                                #self.activations_transformation(activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1))
-                                activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1)  # Flatten the activations
-                            )
-                            # IN THIS CASE: 1 is OoD, 0 is InD
-                            # Ya que las distancias que sean mayores que el threshold son OoD
-                            ood_decision_per_cls_per_bbox.append((distances_per_bbox > self.thresholds[idx_cls][idx_stride]).astype(int))
-                            # Check 
-                        else:
-                            if idx_cls > 19:
-                                continue
-                            # TODO: Aqui tengo que hacer que el numero de distancias = 1000 sea como el numero de cajas
-                            raise ValueError("The clusters must have at least one sample")
+    #                 # Loop clusters
+    #                 # Loop over the cluster of each class to obtain per stride one "score" for each bbox
+    #                 ood_decision_per_cls_per_bbox = []
+    #                 for idx_cls, cluster in enumerate(self.clusters):
+    #                     if len(cluster[idx_stride]) > 0:
+    #                         distances_per_bbox = self.compute_distance(
+    #                             #cluster[idx_stride][None, :],
+    #                             cluster[idx_stride],
+    #                             #self.activations_transformation(activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1))
+    #                             activations_one_img_one_stride.reshape(activations_one_img_one_stride.shape[0], -1)  # Flatten the activations
+    #                         )
+    #                         # IN THIS CASE: 1 is OoD, 0 is InD
+    #                         # Ya que las distancias que sean mayores que el threshold son OoD
+    #                         ood_decision_per_cls_per_bbox.append((distances_per_bbox > self.thresholds[idx_cls][idx_stride]).astype(int))
+    #                         # Check 
+    #                     else:
+    #                         if idx_cls > 19:
+    #                             continue
+    #                         # TODO: Aqui tengo que hacer que el numero de distancias = 1000 sea como el numero de cajas
+    #                         raise ValueError("The clusters must have at least one sample")
                     
-                    # Compute the percentage of OOD for each bbox
-                    ood_decision_per_cls_per_bbox = np.stack(ood_decision_per_cls_per_bbox, axis=1)
-                    percentage_ood_one_img_all_bboxes_per_stride.append(np.sum(ood_decision_per_cls_per_bbox, axis=1) / 20)
+    #                 # Compute the percentage of OOD for each bbox
+    #                 ood_decision_per_cls_per_bbox = np.stack(ood_decision_per_cls_per_bbox, axis=1)
+    #                 percentage_ood_one_img_all_bboxes_per_stride.append(np.sum(ood_decision_per_cls_per_bbox, axis=1) / 20)
 
-                # Check for each bbox if the cls is in the known classes and if it is, compare only agains the corresponding cluster
-                for _bbox_idx, _cls_idx in enumerate(bboxes['cls'][idx_img]):
-                    _cls_idx = int(_cls_idx.item())
-                    if _cls_idx in known_classes:
-                        # Compruebo si hay cluster
-                        if len(self.clusters[_cls_idx][idx_stride]) > 0:
-                            # Calculo distancia si hay cluster
-                            distance = self.compute_distance(
-                                #self.clusters[_cls_idx][idx_stride][None, :],
-                                self.clusters[_cls_idx][idx_stride],
-                                activations_one_img_one_stride[_bbox_idx].reshape(1, -1)
-                            )[0]
-                            # Checkeo si la distancia es menor que el threshold, en ese caso es InD (0), sino OoD (1)
-                            if self.thresholds[_cls_idx][idx_stride]:
-                                if distance < self.thresholds[_cls_idx][idx_stride]:
-                                    percentage_ood_one_img_all_bboxes_per_stride[idx_stride][_bbox_idx] = 0
-                                else:
-                                    percentage_ood_one_img_all_bboxes_per_stride[idx_stride][_bbox_idx] = 1
-                            else:
-                                percentage_ood_one_img_all_bboxes_per_stride[idx_stride][_bbox_idx] = 1
-                        else:
-                            raise ValueError("The clusters must have at least one sample")
-                    else:
-                        # Si la clase no es conocida, no hay que cambiar nada
-                        pass
-                        #percentage_ood_one_img_all_bboxes_per_stride[bbox_idx] = 0
+    #             # Check for each bbox if the cls is in the known classes and if it is, compare only agains the corresponding cluster
+    #             for _bbox_idx, _cls_idx in enumerate(bboxes['cls'][idx_img]):
+    #                 _cls_idx = int(_cls_idx.item())
+    #                 if _cls_idx in known_classes:
+    #                     # Compruebo si hay cluster
+    #                     if len(self.clusters[_cls_idx][idx_stride]) > 0:
+    #                         # Calculo distancia si hay cluster
+    #                         distance = self.compute_distance(
+    #                             #self.clusters[_cls_idx][idx_stride][None, :],
+    #                             self.clusters[_cls_idx][idx_stride],
+    #                             activations_one_img_one_stride[_bbox_idx].reshape(1, -1)
+    #                         )[0]
+    #                         # Checkeo si la distancia es menor que el threshold, en ese caso es InD (0), sino OoD (1)
+    #                         if self.thresholds[_cls_idx][idx_stride]:
+    #                             if distance < self.thresholds[_cls_idx][idx_stride]:
+    #                                 percentage_ood_one_img_all_bboxes_per_stride[idx_stride][_bbox_idx] = 0
+    #                             else:
+    #                                 percentage_ood_one_img_all_bboxes_per_stride[idx_stride][_bbox_idx] = 1
+    #                         else:
+    #                             percentage_ood_one_img_all_bboxes_per_stride[idx_stride][_bbox_idx] = 1
+    #                     else:
+    #                         raise ValueError("The clusters must have at least one sample")
+    #                 else:
+    #                     # Si la clase no es conocida, no hay que cambiar nada
+    #                     pass
+    #                     #percentage_ood_one_img_all_bboxes_per_stride[bbox_idx] = 0
             
-            ood_decision.append(np.stack(percentage_ood_one_img_all_bboxes_per_stride, axis=1))
-            print(f'{idx_img} image done!')
+    #         ood_decision.append(np.stack(percentage_ood_one_img_all_bboxes_per_stride, axis=1))
+    #         print(f'{idx_img} image done!')
 
-        return ood_decision
+    #     return ood_decision
 
     def generate_clusters(self, ind_tensors: Union[List[np.ndarray], List[List[np.ndarray]]], logger: Logger) -> Union[List[np.ndarray], List[List[np.ndarray]]]:
         """
@@ -2454,12 +2437,13 @@ class DistanceMethod(OODMethod):
         Transform the activations to the shape needed to compute the distance.
         By default, it flattens the activations leaving the batch dimension as the first dimension.
         """
-        return activations.reshape(activations.shape[0], -1)
+        return normalize(activations.reshape(activations.shape[0], -1), axis=1)
+        #return activations.reshape(activations.shape[0], -1)
 
 
 class _PairwiseDistanceClustersPerClassPerStride(DistanceMethod):
     def __init__(self, name: str, metric: str, **kwargs):
-            AVAILABLE_PAIRWISE_METRICS = ['cosine', 'l1', 'l2']
+            AVAILABLE_PAIRWISE_METRICS = ['cosine', 'l1', 'l2', 'manhattan','euclidean']
             per_class = True
             per_stride = True
             super().__init__(name=name, metric=metric, per_class=per_class, per_stride=per_stride, **kwargs)
@@ -2544,13 +2528,12 @@ class UmapMethod(_DimensionalityReductionMethod):
         return self.umap[stride_idx].transform(activations.reshape(activations.shape[0], -1))
 
 
-class IvisMethodCosinePerClusterPerStride(_DimensionalityReductionMethod):
+#class IvisMethodCosinePerClusterPerStride(_DimensionalityReductionMethod):
+class _IvisMethodPairwiseDistance(_DimensionalityReductionMethod):
     
-    def __init__(self, **kwargs):
+    def __init__(self, metric, name, **kwargs):
         import ivis
         per_stride = True
-        metric = 'cosine'
-        name = 'IvisCosineDistancePerStride'
         if per_stride:
             dims_reduction_kwargs = {
                 'embedding_dims': CUSTOM_HYP.dr.ivis.EMBEDDING_DIMS,
@@ -2584,12 +2567,39 @@ class IvisMethodCosinePerClusterPerStride(_DimensionalityReductionMethod):
 
             for idx_stride, concatenated_array in enumerate(concatenated_arrays_per_stride):
                 concatenated_array, concatenated_targets  = shuffle(concatenated_array.reshape(concatenated_array.shape[0], -1), concatenated_targets_per_stride[idx_stride].astype(np.uint8), random_state=15)
-                self.ivis[idx_stride].fit(concatenated_array, concatenated_targets, shuffle_mode=True)
+                self.ivis[idx_stride].fit(normalize(concatenated_array), concatenated_targets, shuffle_mode=True)
                 logger.info(f'IVIS fitted for stride {idx_stride}')
 
     def activations_transformation(self, activations: np.array, cls_idx: int, stride_idx: int) -> np.array:
-        # Depending on the stride, apply the corresponding UMAP
-        return self.ivis[stride_idx].transform(activations.reshape(activations.shape[0], -1))
+        # Depending on the stride, apply the corresponding dimensionality reduction
+        return self.ivis[stride_idx].transform(
+            normalize(
+                activations.reshape(activations.shape[0], -1)
+            )
+        )
+
+class IvisMethodCosine(_IvisMethodPairwiseDistance):
+    
+    def __init__(self, **kwargs):
+        metric = 'cosine'
+        name = 'IvisCosineDistancePerStride'
+        super().__init__(metric, name, **kwargs)
+
+
+class IvisMethodL1(_IvisMethodPairwiseDistance):
+        
+    def __init__(self, **kwargs):
+        metric = 'manhattan'
+        name = 'IvisL1DistancePerStride'
+        super().__init__(metric, name, **kwargs)
+
+
+class IvisMethodL2(_IvisMethodPairwiseDistance):
+
+    def __init__(self, **kwargs):
+        metric = 'euclidean'
+        name = 'IvisL2DistancePerStride'
+        super().__init__(metric, name, **kwargs)
 
 
 class L1DistanceOneClusterPerStride(_PairwiseDistanceClustersPerClassPerStride):
@@ -3586,71 +3596,71 @@ class TripleFusionMethod(OODMethod):
         return results_dict
 
 
-class CosineIvisPerStrideOnly(IvisMethodCosinePerClusterPerStride):
-    def __init__(self, name: str, metric: str, **kwargs):
-        super().__init__(**kwargs)            
+# class CosineIvisPerStrideOnly(_IvisMethodPairwiseDistance):
+#     def __init__(self, name: str, metric: str, **kwargs):
+#         super().__init__(**kwargs)            
 
-    # Only modify the method to compute the distance, as we want to compute the distance against ALL classes in same stride
-    def _compute_ood_decision_for_one_result_from_roi_aligned_feature_maps(
-            self, idx_img: int, one_img_bboxes_cls_idx: Tensor, roi_aligned_ftmaps_one_img_per_stride, ood_decision: List, logger: Logger
-    ):
-        """
-        Compute the OOD decision for one image using the in-distribution activations (usually feature maps).
-        Pipeline:
-            1. Loop over the strides. Each stride is a list of bboxes and their feature maps
-            2. Compute the distance between the prediction and the cluster of the predicted class
-            3. Compare the distance with the threshold
-        """
-        # Loop each stride of the image. Select the first element of the list as we are processing one image only
-        for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(roi_aligned_ftmaps_one_img_per_stride):
+#     # Only modify the method to compute the distance, as we want to compute the distance against ALL classes in same stride
+#     def _compute_ood_decision_for_one_result_from_roi_aligned_feature_maps(
+#             self, idx_img: int, one_img_bboxes_cls_idx: Tensor, roi_aligned_ftmaps_one_img_per_stride, ood_decision: List, logger: Logger
+#     ):
+#         """
+#         Compute the OOD decision for one image using the in-distribution activations (usually feature maps).
+#         Pipeline:
+#             1. Loop over the strides. Each stride is a list of bboxes and their feature maps
+#             2. Compute the distance between the prediction and the cluster of the predicted class
+#             3. Compare the distance with the threshold
+#         """
+#         # Loop each stride of the image. Select the first element of the list as we are processing one image only
+#         for stride_idx, (bbox_idx_in_one_stride, ftmaps) in enumerate(roi_aligned_ftmaps_one_img_per_stride):
             
-            # Only enter if there are any predictions in this stride
-            if len(bbox_idx_in_one_stride) > 0:
-                # Each ftmap is from a bbox prediction
-                for idx, ftmap in enumerate(ftmaps):
-                    bbox_idx = idx
-                    cls_idx = int(one_img_bboxes_cls_idx[bbox_idx])
-                    ftmap = ftmap.cpu().unsqueeze(0).numpy()  # To obtain a tensor of shape [1, C, H, W]
-                    # ftmap = ftmap.cpu().flatten().unsqueeze(0).numpy()
-                    # [None, :] is to do the same as unsqueeze(0) but with numpy
-                    # Check if there is a cluster for the class and stride
-                    if len(self.clusters[cls_idx][stride_idx]) == 0:
-                        logger.warning(
-                            f'Image {idx_img}, bbox {bbox_idx} is viewed as an OOD.' \
-                            f'It cannot be compared as there is no cluster for class {cls_idx} and stride {stride_idx}'
-                        )
-                        distance = 1000
-                    else:
-                        # Collect all the clusters for this stride
-                        cluster_of_stride = []
-                        for cls_idx in range(len(self.clusters)):
-                            if len(self.clusters[cls_idx][stride_idx]) > 0:
-                                cluster_of_stride.append(self.clusters[cls_idx][stride_idx])
-                        cluster_of_stride = np.concatenate(cluster_of_stride, axis=0)
-                        distance = self.compute_distance(
-                            cluster_of_stride,
-                            self.activations_transformation(ftmap, cls_idx=cls_idx, stride_idx=stride_idx)
-                        )[0]
+#             # Only enter if there are any predictions in this stride
+#             if len(bbox_idx_in_one_stride) > 0:
+#                 # Each ftmap is from a bbox prediction
+#                 for idx, ftmap in enumerate(ftmaps):
+#                     bbox_idx = idx
+#                     cls_idx = int(one_img_bboxes_cls_idx[bbox_idx])
+#                     ftmap = ftmap.cpu().unsqueeze(0).numpy()  # To obtain a tensor of shape [1, C, H, W]
+#                     # ftmap = ftmap.cpu().flatten().unsqueeze(0).numpy()
+#                     # [None, :] is to do the same as unsqueeze(0) but with numpy
+#                     # Check if there is a cluster for the class and stride
+#                     if len(self.clusters[cls_idx][stride_idx]) == 0:
+#                         logger.warning(
+#                             f'Image {idx_img}, bbox {bbox_idx} is viewed as an OOD.' \
+#                             f'It cannot be compared as there is no cluster for class {cls_idx} and stride {stride_idx}'
+#                         )
+#                         distance = 1000
+#                     else:
+#                         # Collect all the clusters for this stride
+#                         cluster_of_stride = []
+#                         for cls_idx in range(len(self.clusters)):
+#                             if len(self.clusters[cls_idx][stride_idx]) > 0:
+#                                 cluster_of_stride.append(self.clusters[cls_idx][stride_idx])
+#                         cluster_of_stride = np.concatenate(cluster_of_stride, axis=0)
+#                         distance = self.compute_distance(
+#                             cluster_of_stride,
+#                             self.activations_transformation(ftmap, cls_idx=cls_idx, stride_idx=stride_idx)
+#                         )[0]
 
-                    # Check if the distance is lower than the threshold
-                    if self.thresholds[cls_idx][stride_idx]:
-                        if distance < self.thresholds[cls_idx][stride_idx]:
-                            ood_decision[idx_img].append(1)  # InD
-                        else:
-                            ood_decision[idx_img].append(0)  # OOD
-                    else:
-                        # logger.warning(f'WARNING: Class {cls_idx:03}, Stride {stride_idx} -> No threshold!')
-                        ood_decision[idx_img].append(0)  # OOD   
+#                     # Check if the distance is lower than the threshold
+#                     if self.thresholds[cls_idx][stride_idx]:
+#                         if distance < self.thresholds[cls_idx][stride_idx]:
+#                             ood_decision[idx_img].append(1)  # InD
+#                         else:
+#                             ood_decision[idx_img].append(0)  # OOD
+#                     else:
+#                         # logger.warning(f'WARNING: Class {cls_idx:03}, Stride {stride_idx} -> No threshold!')
+#                         ood_decision[idx_img].append(0)  # OOD   
         
-    def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
+#     def compute_distance(self, cluster: np.array, activations: np.array) -> List[float]:
 
-        distances = pairwise_distances(
-            cluster,
-            activations,
-            metric=self.metric
-            )
+#         distances = pairwise_distances(
+#             cluster,
+#             activations,
+#             metric=self.metric
+#             )
 
-        return distances.min(axis=0)
+#         return distances.min(axis=0)
 
 
 ### Method to configure internals of the model ###
@@ -3658,6 +3668,7 @@ class CosineIvisPerStrideOnly(IvisMethodCosinePerClusterPerStride):
 def configure_extra_output_of_the_model(model: YOLO, ood_method: Type[OODMethod]):
         # Modify the model's attributes to output the desired extra_item
         # 1. Select the layers to extract depending on the OOD method from ultralytics/nn/tasks.py
+        model.model.model[-1].output_values_before_sigmoid = False  # By default, we do not want to output the values before the sigmoid
         if ood_method.which_internal_activations in FTMAPS_RELATED_OPTIONS:
             model.model.which_layers_to_extract = "convolutional_layers"
         elif ood_method.which_internal_activations in LOGITS_RELATED_OPTIONS:
