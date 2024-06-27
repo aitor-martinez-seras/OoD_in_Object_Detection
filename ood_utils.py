@@ -1885,6 +1885,16 @@ class DistanceMethod(OODMethod):
             else:
                 raise ValueError("Wrong ind_info_creation_option for the selected internal activations.")
 
+        elif self.which_internal_activations == 'ftmaps_and_strides_exact_pos':
+            
+            if self.ind_info_creation_option in ['all_targets_one_stride', 'all_targets_all_strides']:
+                raise NotImplementedError("Not supported")
+            elif self.ind_info_creation_option in ['valid_preds_one_stride', 'valid_preds_all_strides']:
+                # Loop each image fo the batch
+                for res in results:
+                    # Extract the features from the corresponding anchor
+                    self._extract_features_from_correct_stride_and_pos(res, all_activations)
+
         ### Case where only the RoIAligned feature maps are extracted ###
         elif self.which_internal_activations == 'roi_aligned_ftmaps':
             if self.ind_info_creation_option in ['all_targets_one_stride', 'all_targets_all_strides']:
@@ -1917,6 +1927,62 @@ class DistanceMethod(OODMethod):
                         # Use only predictions that are "valid", i.e., correctly predicted and asociated univocally GT
                         # and use all the strides 
                         raise NotImplementedError("Not implemented yet")
+
+    def _extract_features_from_correct_stride_and_pos(
+            self, res: Results, all_activations: List[List[List[np.ndarray]]]
+        ):
+        
+        # Extract all the cls idx of all the preds of one image
+        cls_idx_one_pred = res.boxes.cls.cpu()
+        # Extract feature maps, the stride and the valid preds info
+        ftmaps, strides = res.extra_item
+        valid_preds = res.valid_preds
+
+        # Flatten the feature maps in the HxW dimensions to properly access them later
+        ftmaps = [ft.reshape(ft.shape[0], -1) for ft in ftmaps]
+
+        # Configure the strides
+        s8 = res.orig_img.shape[-1] // 8
+        s8 = s8 * s8
+        s16 = res.orig_img.shape[-1] // 16
+        s16 = (s16 * s16) + s8
+        s32 = res.orig_img.shape[-1] // 32
+        s32 = (s32 * s32) + s16
+
+        # Loop each bbox of the preds of one image
+        for bbox_idx, st in enumerate(strides):
+            if self.ind_info_creation_option == 'valid_preds_one_stride':
+                # Use only predictions that are "valid", i.e., correctly predicted and asociated univocally GT
+                # and use only the stride where the bbox is predicted
+                if bbox_idx in valid_preds:
+                    # Obtain the predicted class
+                    pred_cls = int(cls_idx_one_pred[bbox_idx].item())
+                    
+                    # Obtain the feature
+                    if st < s8:
+                        stride_idx = 0
+                        feature_for_pred = ftmaps[0][:, st]
+                    elif st < s16:
+                        stride_idx = 1
+                        st = st - s8
+                        feature_for_pred = ftmaps[1][:, st]
+                    elif st < s32:
+                        stride_idx = 2
+                        st = st - s16
+                        feature_for_pred = ftmaps[2][:, st]
+                    else:
+                        raise ValueError(f"stride position {st} cannot be greater than stride index max {s32}")
+
+                    # Store the feature
+                    all_activations[pred_cls][stride_idx].append(feature_for_pred.cpu().numpy())
+                    
+            elif self.ind_info_creation_option == 'valid_preds_all_strides':
+                # Use only predictions that are "valid", i.e., correctly predicted and asociated univocally GT
+                # and use all the strides 
+                raise NotImplementedError("Not implemented yet")
+            else:
+                raise ValueError("Wrong ind_info_creation_option for the selected internal activations.")
+
 
     def format_internal_activations(self, all_activations: List[List[List[np.ndarray]]]):
         """
@@ -2147,6 +2213,57 @@ class DistanceMethod(OODMethod):
                 # As we are processing one image only and the output is a list per image, we take the first element
                 roi_aligned_ftmaps_per_stride = roi_aligned_ftmaps_per_stride[0]
 
+            elif self.which_internal_activations == 'ftmaps_and_strides_exact_pos':
+                # Extract all the cls idx of all the preds of one image
+                cls_idx_one_pred = res.boxes.cls.cpu()
+                # Extract feature maps, the stride and the valid preds info
+                ftmaps, strides = res.extra_item
+
+                # Flatten the feature maps in the HxW dimensions to properly access them later
+                ftmaps = [ft.reshape(ft.shape[0], -1) for ft in ftmaps]
+
+                # Configure the strides
+                s8 = res.orig_img.shape[-1] // 8
+                s8 = s8 * s8
+                s16 = res.orig_img.shape[-1] // 16
+                s16 = (s16 * s16) + s8
+                s32 = res.orig_img.shape[-1] // 32
+                s32 = (s32 * s32) + s16
+
+                # Initialize
+                roi_aligned_ftmaps_per_stride = [[] for _ in range(3)]
+
+                # Loop each bbox of the preds of one image
+                for bbox_idx, st in enumerate(strides):
+                    # Obtain the feature
+                    if st < s8:
+                        stride_idx = 0
+                        feature_for_pred = ftmaps[0][:, st]
+                    elif st < s16:
+                        stride_idx = 1
+                        st = st - s8
+                        feature_for_pred = ftmaps[1][:, st]
+                    elif st < s32:
+                        stride_idx = 2
+                        st = st - s16
+                        feature_for_pred = ftmaps[2][:, st]
+                    else:
+                        raise ValueError(f"stride position {st} cannot be greater than stride index max {s32}")
+                    roi_aligned_ftmaps_per_stride[stride_idx].append((bbox_idx, feature_for_pred))
+                
+                # Rearrange features to match the expected format in self._compute_ood_decision_for_one_result_from_roi_aligned_feature_maps
+                for stride_idx in range(3):
+                    bbox_idx_one_stride, ftmaps_one_stride = [], []
+                    if len(roi_aligned_ftmaps_per_stride[stride_idx]) == 0:
+                        roi_aligned_ftmaps_per_stride[stride_idx] = (torch.empty(0), torch.empty(0))
+                    else:
+                        for bbox_idx, ftmap in roi_aligned_ftmaps_per_stride[stride_idx]:
+                            bbox_idx_one_stride.append(bbox_idx)
+                            ftmaps_one_stride.append(ftmap)
+                        bbox_idx_one_stride = torch.tensor(bbox_idx_one_stride, device=ftmaps_one_stride[0].device)
+                        ftmaps_one_stride = torch.stack(ftmaps_one_stride, dim=0)
+                        roi_aligned_ftmaps_per_stride[stride_idx] = (bbox_idx_one_stride, ftmaps_one_stride)
+                
             # RoI aligned feature maps are already extracted from the model
             elif self.which_internal_activations == 'roi_aligned_ftmaps':
                 roi_aligned_ftmaps_per_stride = res.extra_item
@@ -2157,7 +2274,7 @@ class DistanceMethod(OODMethod):
             self._compute_ood_decision_for_one_result_from_roi_aligned_feature_maps(
                 idx_img=idx_img,
                 one_img_bboxes_cls_idx=res.boxes.cls.cpu(),
-                roi_aligned_ftmaps_one_img_per_stride=roi_aligned_ftmaps_per_stride,  # As we are processing one image only
+                roi_aligned_ftmaps_one_img_per_stride=roi_aligned_ftmaps_per_stride,
                 ood_decision=ood_decision,
                 logger=logger,
             )

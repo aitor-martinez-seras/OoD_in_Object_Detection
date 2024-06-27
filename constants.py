@@ -26,7 +26,7 @@ LOGITS_METHODS = ['NoMethod', 'MSP', 'Energy', 'ODIN', 'Sigmoid']
 DISTANCE_METHODS = ['L1_cl_stride', 'L2_cl_stride', 'Cosine_cl_stride', 'Umap', 'CosineIvis', 'L1Ivis', 'L2Ivis']
 OOD_METHOD_CHOICES = LOGITS_METHODS + DISTANCE_METHODS
 
-FTMAPS_RELATED_OPTIONS = ['roi_aligned_ftmaps','all_ftmaps', 'ftmaps_and_strides']
+FTMAPS_RELATED_OPTIONS = ['roi_aligned_ftmaps','all_ftmaps', 'ftmaps_and_strides', 'ftmaps_and_strides_exact_pos']
 LOGITS_RELATED_OPTIONS = ['logits']
 INTERNAL_ACTIVATIONS_EXTRACTION_OPTIONS = FTMAPS_RELATED_OPTIONS + LOGITS_RELATED_OPTIONS + ['none']  # None for fusion methods, that implement it internally
 

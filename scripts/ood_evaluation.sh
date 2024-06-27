@@ -20,6 +20,9 @@ python ood_evaluation.py --conf_thr 0.001  --tpr_thr 0.95 --ind_dataset owod --i
 
 python ood_evaluation.py --ood_dataset coco_mixed --ood_method Cosine_cl_stride --cluster_method HDBSCAN --load_ind_activations --enhanced_unk_localization --compute_metrics --device 0 --ind_info_creation_option valid_preds_one_stride --which_internal_activations ftmaps_and_strides --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20240313_1407_owod_t1_yolov8l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1  --ood_split val --owod_task_ood all_task_test
 
+# Clusters
+
+
 # For testing unknown localization
 nohup python ood_evaluation.py --enhanced_unk_localization --ood_method Cosine_cl_stride --cluster_method HDBSCAN --device 0 --compute_metrics --ind_info_creation_option valid_preds_one_stride --load_ind_activations --which_split train_val --which_internal_activations ftmaps_and_strides --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20240313_1407_owod_t1_yolov8l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_dataset coco_mixed coco_ood --ood_split val --owod_task_ood all_task_test &
 nohup python ood_evaluation.py --load_clusters --enhanced_unk_localization --ood_method Cosine_cl_stride --cluster_method HDBSCAN --device 0 --compute_metrics --ind_info_creation_option valid_preds_one_stride --load_ind_activations --which_split train_val --which_internal_activations ftmaps_and_strides --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20240313_1407_owod_t1_yolov8l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_dataset coco_mixed coco_ood --ood_split val --owod_task_ood all_task_test &

@@ -17,7 +17,7 @@ def extract_roi_aligned_features_from_correct_stride(
     img_shape: List[int],
     device: torch.device,
     extract_all_strides: bool = False
-    ) -> List[List[Tensor]]:
+    ) -> List[List[List[Tensor]]]:
     """
     Extracts the features of each bounding box from the correct feature map, using RoIAlign. This is needed because
     the bounding boxes are predicted in the original image, but the features are extracted from the feature maps,
@@ -31,10 +31,9 @@ def extract_roi_aligned_features_from_correct_stride(
     :param strides: List of tensors, each tensor is a list of the stride of each bounding box in the batch, with the shape [N].
     :param img_shape: Shape of the original image, [H, W].
     :param device: Device to use for the tensors.
-    :return: List of lists of tensors, each tensor is the feature map of the corresponding bounding box.
-        The first list has as many elements as images in the batch (N), and each element is a list of tensors,
-        each position of the second list being the stride (3). Each tensor has shape [M, C, H, W] where M is the
-        number of bounding boxes in the image which have been prediced with the corresponding stride.
+    :return: List of lists of lists of tensors. The first dimension is the batch size, the second is the stride, 
+        and the third has two positions, the bbox index and the feature maps. The tensor of the bbox index has shape [M] and
+        the tensor of feature maps has shape [M, C, H, W] where M is the number of bboxes in the stride and C is the number of channels.
     """
     ### OPTIMIZED AND IMPROVED VERSION ###
 
@@ -204,6 +203,45 @@ class DetectionPredictor(BasePredictor):
                     (torch.zeros((s8*s8), device=device),  # 0
                      torch.ones((s16*s16), device=device),  # 1
                      torch.ones((s32*s32), device=device) * 2)  # 2
+                )
+
+                # Perform NMS and extract the strides to which the final predicted bboxes belong
+                preds, strides = ops.non_max_suppression(
+                    preds,
+                    self.args.conf,
+                    self.args.iou,
+                    agnostic=self.args.agnostic_nms,
+                    max_det=self.args.max_det,
+                    classes=self.args.classes,  # Usually None
+                    extra_item=None,
+                    strides=strides
+                )
+
+                # Merge the feature maps and the strides into a list of lists
+                # where the first list has as many elements as images in the batch (N),
+                # and each element is list of two elements, the feature maps and the strides
+                output_extra = list(zip(output_extra, strides))
+
+            elif self.model.model.extraction_mode == 'ftmaps_and_strides_exact_pos':
+                
+                # Create a list of lists, where first dimension is N and second is S, the stride
+                # Each element of the second list is a tensor of shape [C, H, W] where C is the number of channels
+                output_extra = [list(batch) for batch in zip(*output_extra)]
+
+                # Strides. We use this variable to mantain the info of which is the scale of each predicted bounding box
+                #   in the final predictions. This is needed for using RoIAlign with the correct feature map
+                input_size = img.shape[2]
+                s8 = input_size // 8
+                s16 = input_size // 16
+                s32 = input_size // 32
+                device = self.device
+                range8 = torch.arange(s8*s8, device=device)
+                range16 = torch.arange(s16*s16, device=device) + s8*s8
+                range32 = torch.arange(s32*s32, device=device) + s8*s8 + s16*s16
+                strides = torch.cat(
+                    (range8,  # 0
+                     range16,  # 1
+                     range32)  # 2
                 )
 
                 # Perform NMS and extract the strides to which the final predicted bboxes belong
