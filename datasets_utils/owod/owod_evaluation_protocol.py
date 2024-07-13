@@ -245,6 +245,7 @@ def compute_metrics(all_predictions: List[Dict], all_targets: List[Dict], class_
             break
     if not cls_diff_from_unk_found:
         return {
+            #'mAP': known_ap50_unksniffer/100,
             'U-AP': ap_unksniff,
             'U-F1': f1_unksniff,
             'U-PRE': precision_unksniff,

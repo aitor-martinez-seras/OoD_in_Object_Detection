@@ -61,7 +61,7 @@ BENCHMARKS = {
     'best_methods': OOD_METHOD_CHOICES,
     'used_tpr': [0.99, 0.95, 0.90, 0.85, 0.80],
     'conf_thr_train': [0.50, 0.40, 0.35, 0.25, 0.15, 0.05, 0.01, 0.001],
-    'conf_thr_test': [0.15, 0.10, 0.05, 0.01, 0.005, 0.001, 0.0001, 0.00001],
+    'conf_thr_test': [0.45, 0.30, 0.15, 0.10, 0.05, 0.01, 0.005, 0.001],
     'which_split_for_ind_scores': ['train', 'val', 'train_val'],
     'cluster_methods': ['one', 'all', 'DBSCAN', 'KMeans', 'KMeans_3', 'KMeans_5', 'KMeans_10', 'HDBSCAN', 'AgglomerativeClustering', 'Birch'],
     'cluster_perf_metric': AVAILABLE_CLUSTER_OPTIMIZATION_METRICS,
