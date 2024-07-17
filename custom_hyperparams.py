@@ -41,7 +41,7 @@ class FusionParams:
     LOGITS_USE_PIECEWISE_FUNCTION: bool = True  # If True, the piecewise function will be used to fuse the oodness scores
 
     DISTANCE_USE_FROM_ZERO_TO_THR: bool = False  # If True, the distance from zero to the threshold will be used to fuse the oodness scores
-    DISTANCE_USE_IN_DISTRIBUTION_TO_DEFINE_LIMITS: bool = True  # If True, the distance from the mean to the threshold will be used to define the limits of the piecewise function
+    DISTANCE_USE_IN_DISTRIBUTION_TO_DEFINE_LIMITS: bool = True  # If True, the distances of the distribution of the In-Distribution will be used to define the limits of the piecewise function
 
     # Assert only one of the two methods of distance is used
     assert not (DISTANCE_USE_FROM_ZERO_TO_THR and DISTANCE_USE_IN_DISTRIBUTION_TO_DEFINE_LIMITS), "Only one of the two distance methods can be used"
@@ -60,7 +60,6 @@ class ClustersParams:
     #WEIGHT_SCORE_WITH_PERCENT_ORPHANS: bool = True  # If True, the score will be weighted by the percentage of orphans in the cluster
     MAX_PERCENT_OF_ORPHANS: float = 0.95  # The maximum percentage of orphans per class and stride
     assert (MAKE_EACH_ORPHAN_EACH_OWN_CLUSTER != REMOVE_ORPHANS) or (MAKE_EACH_ORPHAN_EACH_OWN_CLUSTER == REMOVE_ORPHANS == False), "Only one of the two options can be used"
-
 
 @dataclass
 class DRiseParams:
