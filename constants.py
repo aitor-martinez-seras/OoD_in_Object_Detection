@@ -81,14 +81,13 @@ BENCHMARKS = {
         # 'unk.RANK_BOXES': [False],# True],
         # 'unk.xai.XAI_METHOD': ['D-RISE'],
 
-
         'unk.USE_SIMPLE_HEURISTICS': [False, True],
-        'unk.USE_XAI_TO_REMOVE_PROPOSALS': [False, True],
+        'unk.USE_XAI_TO_REMOVE_PROPOSALS': [False],
         'unk.USE_XAI_TO_MODIFY_SALIENCY': [False],# True],
         'unk.RANK_BOXES': [False, True],
-        'unk.THRESHOLDING_METHOD': ['multithreshold_otsu'],# 'recursive_otsu'],
-        'unk.NUM_THRESHOLDS': [4],# 3, 4, 5],
+        'unk.THRESHOLDING_METHOD': ['multithreshold_otsu', 'recursive_otsu'],# 'recursive_otsu'],
+        'unk.NUM_THRESHOLDS': [3, 4],# 3, 4, 5],
+        'unk.MAX_IOU_WITH_PREDS': [0, 0.5],
         'unk.USE_HEURISTICS': [True],
-        'unk.xai.XAI_METHOD': ['D-RISE'],
     }],
 }
