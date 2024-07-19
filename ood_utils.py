@@ -1277,9 +1277,9 @@ class OODMethod(ABC):
                     from torchvision.ops import nms
                     # Returns the indices of the boxes that we want to keep in DESCENDING order of scores
                     if CUSTOM_HYP.unk.rank.GET_BOXES_WITH_GREATER_RANK:
-                        keep = nms(all_unk_prop, torch.from_numpy(all_distances_per_proposal), iou_threshold=CUSTOM_HYP.unk.rank.NMS)
+                        keep = nms(all_unk_prop, torch.from_numpy(all_distances_per_proposal).float(), iou_threshold=CUSTOM_HYP.unk.rank.NMS)
                     else:
-                        keep = nms(all_unk_prop, torch.from_numpy(-all_distances_per_proposal), iou_threshold=CUSTOM_HYP.unk.rank.NMS)
+                        keep = nms(all_unk_prop, torch.from_numpy(-all_distances_per_proposal).float(), iou_threshold=CUSTOM_HYP.unk.rank.NMS)
                     #idx_sorted = keep.numpy()
                     # all_unk_prop = all_unk_prop[keep[:CUSTOM_HYP.unk.rank.MAX_NUM_UNK_BOXES_PER_IMAGE]]
                     # all_distances_per_proposal = all_distances_per_proposal[keep[:CUSTOM_HYP.unk.rank.MAX_NUM_UNK_BOXES_PER_IMAGE]]

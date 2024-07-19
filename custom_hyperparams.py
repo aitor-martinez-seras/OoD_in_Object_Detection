@@ -126,8 +126,8 @@ class UnkEnhancementParams:
     SUMMARIZATION_METHOD: str = "mean_absolute_deviation_of_ftmaps"
 
     # Thresholding method
-    THRESHOLDING_METHOD: str = "multithreshold_otsu"  # multithreshold_otsu, recursive_otsu, k_means, quantile, fast_otsu
-    NUM_THRESHOLDS: int = 4  # The number of thresholds to be used in the thresholding methods
+    THRESHOLDING_METHOD: str = "recursive_otsu"  # multithreshold_otsu, recursive_otsu, k_means, quantile, fast_otsu
+    NUM_THRESHOLDS: int = 3  # The number of thresholds to be used in the thresholding methods
     OTSU_RECURSIVE_TRICK_FOR_4_THRS: bool = False  # If True, the first threshold's value will be removed from the saliency map
 
     # Enable or disable the use of XAI
@@ -144,8 +144,7 @@ class UnkEnhancementParams:
     MAX_INTERSECTION_W_PREDS: float = 0  # If above 0, the proposals with an intersection with the predicted bboxes over the threshold will be removed
 
     # Enable or disable ranking the prosals. if USE_HEURISTICS is False, no ranking will be done
-    RANK_BOXES: bool = False
-    
+    RANK_BOXES: bool = True
     
     # if USE_XAI_TO_MODIFY_SALIENCY or USE_XAI_TO_REMOVE_PROPOSALS:
     #     USE_XAI: bool = True  # If True, the XAI method will be used to enhance the localization of the UNK proposals

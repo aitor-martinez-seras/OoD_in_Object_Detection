@@ -81,13 +81,21 @@ BENCHMARKS = {
         # 'unk.RANK_BOXES': [False],# True],
         # 'unk.xai.XAI_METHOD': ['D-RISE'],
 
-        'unk.USE_SIMPLE_HEURISTICS': [False, True],
-        'unk.USE_XAI_TO_REMOVE_PROPOSALS': [False],
-        'unk.USE_XAI_TO_MODIFY_SALIENCY': [False],# True],
-        'unk.RANK_BOXES': [False, True],
-        'unk.THRESHOLDING_METHOD': ['multithreshold_otsu', 'recursive_otsu'],# 'recursive_otsu'],
-        'unk.NUM_THRESHOLDS': [3, 4],# 3, 4, 5],
-        'unk.MAX_IOU_WITH_PREDS': [0, 0.5],
+        # 'unk.USE_SIMPLE_HEURISTICS': [False, True],
+        # 'unk.USE_XAI_TO_REMOVE_PROPOSALS': [False],
+        # 'unk.USE_XAI_TO_MODIFY_SALIENCY': [False],# True],
+        # 'unk.RANK_BOXES': [False, True],
+        # 'unk.THRESHOLDING_METHOD': ['multithreshold_otsu', 'recursive_otsu'],# 'recursive_otsu'],
+        # 'unk.NUM_THRESHOLDS': [3, 4],# 3, 4, 5],
+        # 'unk.MAX_IOU_WITH_PREDS': [0, 0.5],
+        # 'unk.USE_HEURISTICS': [True],
+
         'unk.USE_HEURISTICS': [True],
+        'unk.RANK_BOXES': [True],
+        'unk.THRESHOLDING_METHOD': ['recursive_otsu'],# 'multithreshold_otsu', 'recursive_otsu'],
+        'unk.NUM_THRESHOLDS': [3],# 3, 4, 5],
+        'unk.rank.MAX_NUM_UNK_BOXES_PER_IMAGE': [3, 5, 7],
+        'unk.rank.NMS':[0,25, 0.5, 0.75],  # If > 0, the NMS will be applied to the ranked boxes
+        'unk.rank.USE_UNK_PROPOSALS_THR': [True, False]  # If > 0, the NMS will be applied to the ranked boxes
     }],
 }

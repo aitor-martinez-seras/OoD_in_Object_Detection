@@ -62,7 +62,7 @@ class SimpleArgumentParser(Tap):
     enhanced_unk_localization: bool = False  # Whether to use enhanced unknown localization
     which_internal_activations: str = 'roi_aligned_ftmaps'  # Which internal activations to use for the OoD detection
     # Hyperparams for FUSION methods
-    fusion_strategy: Literal["and", "or", "score"] = "or"
+    fusion_strategy: Literal["and", "or", "score", "none"] = "none"
     # For Logits methods
     use_values_before_sigmoid: bool = True  # Whether to use the values before the sigmoid
     # ODIN and Energy
@@ -120,6 +120,7 @@ class SimpleArgumentParser(Tap):
         for method in ood_methods:
             if method == 'fusion':
                 print('- Using a Fusion method -')
+                assert self.fusion_strategy != "None", "You must pass a fusion strategy for fusion methods"
                 assert self.load_clusters == False, "You cannot load clusters for fusion methods, the option is not correctly implemented"
                 assert self.load_thresholds == False, "You cannot load thresholds for fusion methods"
             elif method not in OOD_METHOD_CHOICES:
@@ -1041,7 +1042,7 @@ def main(args: SimpleArgumentParser):
 
                 ## 3.2. Add info
                 mean_n_clusters, std_n_clusters = get_mean_and_std_n_clusters(ood_method)
-                fill_dict_with_method_info(results_one_run, args, ood_method, fusion_strat='None', mean_n_clus=mean_n_clusters, std_n_clus=std_n_clusters)
+                fill_dict_with_method_info(results_one_run, args, ood_method, mean_n_clus=mean_n_clusters, std_n_clus=std_n_clusters)
 
                 ## 3.3. Run configuration for every dataset
                 for dataloader in ood_dataloaders:
