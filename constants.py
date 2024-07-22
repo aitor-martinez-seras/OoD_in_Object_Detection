@@ -96,6 +96,5 @@ BENCHMARKS = {
         'unk.NUM_THRESHOLDS': [3],# 3, 4, 5],
         'unk.rank.MAX_NUM_UNK_BOXES_PER_IMAGE': [3, 5, 7],
         'unk.rank.NMS':[0,25, 0.5, 0.75],  # If > 0, the NMS will be applied to the ranked boxes
-        'unk.rank.USE_UNK_PROPOSALS_THR': [True, False]  # If > 0, the NMS will be applied to the ranked boxes
     }],
 }
