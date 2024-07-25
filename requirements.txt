@@ -41,6 +41,7 @@ seaborn>=0.11.0
 # Extras --------------------------------------
 psutil  # system utilization
 openpyxl  # for exporting xlsx
+adjustText  # For better overlapping text in plots
 # thop>=0.1.1  # FLOPs computation
 # ipython  # interactive notebook
 # albumentations>=1.0.3

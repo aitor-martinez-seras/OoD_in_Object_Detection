@@ -138,10 +138,10 @@ class UnkEnhancementParams:
     # Simple heuristics
     USE_SIMPLE_HEURISTICS: bool = False  # Use to enable or disable the simple heuristics, listed below
     USE_FIRST_THRESHOLD: bool = True  # If True, the first threshold will be used
-    MIN_BOX_SIZE: int = 3  # The minimum size of a box in the feature map space. 3*8 = 24 pixels in the original image if the stride is 8.
-    MAX_BOX_SIZE_PERCENT: float = 0.9  # The percentage of the feature map size that a box can take
+    MIN_BOX_SIZE: int = 1  # The minimum size of a box in the feature map space. 3*8 = 24 pixels in the original image if the stride is 8.
+    MAX_BOX_SIZE_PERCENT: float = 0.95  # The percentage of the feature map size that a box can take
     MAX_IOU_WITH_PREDS: float = 0.0  # The maximum IOU between an UNK proposal bbox and a predicted bbox. If over the threshold, the UNK proposal is discarded
-    MAX_INTERSECTION_W_PREDS: float = 0  # If above 0, the proposals with an intersection with the predicted bboxes over the threshold will be removed
+    MAX_INTERSECTION_W_PREDS: float = 0.0  # If above 0, the proposals with an intersection with the predicted bboxes over the threshold will be removed
 
     # Enable or disable ranking the prosals. if USE_HEURISTICS is False, no ranking will be done
     RANK_BOXES: bool = True
