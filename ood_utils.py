@@ -1818,7 +1818,7 @@ class DistanceMethod(OODMethod):
         """
         if CUSTOM_HYP.fusion.DISTANCE_USE_FROM_ZERO_TO_THR:
         
-            a = -1 / (self.thresholds[cls_idx] - 1)
+            a = -1 / (self.thresholds[cls_idx][stride_idx] - 1)
             b = 1 - a
 
         elif CUSTOM_HYP.fusion.DISTANCE_USE_IN_DISTRIBUTION_TO_DEFINE_LIMITS:
@@ -3122,7 +3122,8 @@ class FusionMethod(OODMethod):
         # 1 is InD, 0 is OoD
         ood_decision = []
         if self.fusion_strategy == "and":
-            # AND strategy: If one of methods say that the bbox is InD (decision = 1), then it is InD
+            # AND strategy: Only if both methods say it is OoD (decision = 0), then it is OoD
+            #   Put it other way: If one of methods say that the bbox is InD (decision = 1), then it is InD
             for idx_img in range(len(ood_decision1)):
                 ood_decision.append(
                     [max(ood_decision1[idx_img][idx_bbox], ood_decision2[idx_img][idx_bbox]) for idx_bbox in range(len(ood_decision1[idx_img]))]

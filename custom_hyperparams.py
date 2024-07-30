@@ -36,12 +36,12 @@ class DimensionalityReductionParams:
 class FusionParams:
     
     # Score fusion strategy
-    CLIP_FUSION_SCORES: bool = True  # If True, the fusion scores will be clipped to the range [0, 1]
+    CLIP_FUSION_SCORES: bool = True  # If True, the fusion scores will be clipped to the range [0, 1]  # True
 
     LOGITS_USE_PIECEWISE_FUNCTION: bool = True  # If True, the piecewise function will be used to fuse the oodness scores
 
-    DISTANCE_USE_FROM_ZERO_TO_THR: bool = False  # If True, the distance from zero to the threshold will be used to fuse the oodness scores
-    DISTANCE_USE_IN_DISTRIBUTION_TO_DEFINE_LIMITS: bool = True  # If True, the distances of the distribution of the In-Distribution will be used to define the limits of the piecewise function
+    DISTANCE_USE_FROM_ZERO_TO_THR: bool = False  # If True, the distance from zero to the threshold will be used to fuse the oodness scores  # False
+    DISTANCE_USE_IN_DISTRIBUTION_TO_DEFINE_LIMITS: bool = True  # If True, the distances of the distribution of the In-Distribution will be used to define the limits of the piecewise function  # True
 
     # Assert only one of the two methods of distance is used
     assert not (DISTANCE_USE_FROM_ZERO_TO_THR and DISTANCE_USE_IN_DISTRIBUTION_TO_DEFINE_LIMITS), "Only one of the two distance methods can be used"
@@ -127,7 +127,7 @@ class UnkEnhancementParams:
 
     # Thresholding method
     THRESHOLDING_METHOD: str = "recursive_otsu"  # multithreshold_otsu, recursive_otsu, k_means, quantile, fast_otsu
-    NUM_THRESHOLDS: int = 3  # The number of thresholds to be used in the thresholding methods
+    NUM_THRESHOLDS: int = 4  # The number of thresholds to be used in the thresholding methods
     OTSU_RECURSIVE_TRICK_FOR_4_THRS: bool = False  # If True, the first threshold's value will be removed from the saliency map
 
     # Enable or disable the use of XAI
