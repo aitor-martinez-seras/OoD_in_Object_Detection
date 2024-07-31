@@ -413,33 +413,28 @@ class OODMethod(ABC):
         c = 0
         for idx_of_batch, data in enumerate(dataloader):
             count_of_images += len(data['im_file'])
-            if count_of_images < 49:
-                c += len(data['im_file'])
-                continue
-            # if count_of_images < 8000:
-            #     continue
             ### Preparar imagenes y targets ###
             imgs, targets = self.prepare_data_for_model(data, device)
             
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
             results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold_test, device=device)
 
-            # Save the original image
-            for i, res in enumerate(results):
-                import matplotlib.pyplot as plt
-                from pathlib import Path
-                imgs_path = Path("figures/images")
-                imgs_path.mkdir(exist_ok=True)
-                #img_to_plot = res.orig_img[i].permute(1, 2, 0).cpu().numpy()
-                # Extract the image to plot using the ori_shape from data
-                img_to_plot = res.orig_img[i].permute(1, 2, 0).cpu().numpy()
-                padded_height = (640 - data['ori_shape'][i][0]) // 2
-                padded_width = (640 - data['ori_shape'][i][1]) // 2
-                img_to_plot = img_to_plot[padded_height:padded_height+data['ori_shape'][i][0], padded_width:padded_width+data['ori_shape'][i][1]]
-                plt.imshow(img_to_plot)
-                plt.axis('off')
-                plt.savefig(imgs_path / f'img_{c + i:03d}.png', bbox_inches='tight', pad_inches=0)
-                plt.close()
+            # # Save the original image
+            # for i, res in enumerate(results):
+            #     import matplotlib.pyplot as plt
+            #     from pathlib import Path
+            #     imgs_path = Path("figures/images")
+            #     imgs_path.mkdir(exist_ok=True)
+            #     #img_to_plot = res.orig_img[i].permute(1, 2, 0).cpu().numpy()
+            #     # Extract the image to plot using the ori_shape from data
+            #     img_to_plot = res.orig_img[i].permute(1, 2, 0).cpu().numpy()
+            #     padded_height = (640 - data['ori_shape'][i][0]) // 2
+            #     padded_width = (640 - data['ori_shape'][i][1]) // 2
+            #     img_to_plot = img_to_plot[padded_height:padded_height+data['ori_shape'][i][0], padded_width:padded_width+data['ori_shape'][i][1]]
+            #     plt.imshow(img_to_plot)
+            #     plt.axis('off')
+            #     plt.savefig(imgs_path / f'img_{c + i:03d}.png', bbox_inches='tight', pad_inches=0)
+            #     plt.close()
 
             ### Comprobar si las cajas predichas son OoD ###
             ood_decision = self.compute_ood_decision_on_results(results, logger)
@@ -521,8 +516,6 @@ class OODMethod(ABC):
             )
             
             number_of_images_saved += len(data['im_file'])
-
-            exit()
     
     def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger: Logger, known_classes: List[int]) -> Dict[str, float]:
         dataset_name = dataloader.dataset.data.get('yaml_file', None)
