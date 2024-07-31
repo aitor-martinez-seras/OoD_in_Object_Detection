@@ -127,7 +127,7 @@ class UnkEnhancementParams:
 
     # Thresholding method
     THRESHOLDING_METHOD: str = "recursive_otsu"  # multithreshold_otsu, recursive_otsu, k_means, quantile, fast_otsu
-    NUM_THRESHOLDS: int = 4  # The number of thresholds to be used in the thresholding methods
+    NUM_THRESHOLDS: int = 3  # The number of thresholds to be used in the thresholding methods
     OTSU_RECURSIVE_TRICK_FOR_4_THRS: bool = False  # If True, the first threshold's value will be removed from the saliency map
 
     # Enable or disable the use of XAI

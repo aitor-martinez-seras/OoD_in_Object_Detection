@@ -413,6 +413,9 @@ class OODMethod(ABC):
         c = 0
         for idx_of_batch, data in enumerate(dataloader):
             count_of_images += len(data['im_file'])
+            if count_of_images < 49:
+                c += len(data['im_file'])
+                continue
             # if count_of_images < 8000:
             #     continue
             ### Preparar imagenes y targets ###
@@ -420,6 +423,23 @@ class OODMethod(ABC):
             
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
             results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold_test, device=device)
+
+            # Save the original image
+            for i, res in enumerate(results):
+                import matplotlib.pyplot as plt
+                from pathlib import Path
+                imgs_path = Path("figures/images")
+                imgs_path.mkdir(exist_ok=True)
+                #img_to_plot = res.orig_img[i].permute(1, 2, 0).cpu().numpy()
+                # Extract the image to plot using the ori_shape from data
+                img_to_plot = res.orig_img[i].permute(1, 2, 0).cpu().numpy()
+                padded_height = (640 - data['ori_shape'][i][0]) // 2
+                padded_width = (640 - data['ori_shape'][i][1]) // 2
+                img_to_plot = img_to_plot[padded_height:padded_height+data['ori_shape'][i][0], padded_width:padded_width+data['ori_shape'][i][1]]
+                plt.imshow(img_to_plot)
+                plt.axis('off')
+                plt.savefig(imgs_path / f'img_{c + i:03d}.png', bbox_inches='tight', pad_inches=0)
+                plt.close()
 
             ### Comprobar si las cajas predichas son OoD ###
             ood_decision = self.compute_ood_decision_on_results(results, logger)
@@ -496,10 +516,13 @@ class OODMethod(ABC):
                 targets=targets,
                 possible_unk_boxes=possible_unk_bboxes,
                 ood_decision_on_possible_unk_boxes=ood_decision_on_unknown,
-                distances_unk_prop_per_image=distances_per_image
+                distances_unk_prop_per_image=distances_per_image,
+                use_labels=False,
             )
             
             number_of_images_saved += len(data['im_file'])
+
+            exit()
     
     def iterate_data_to_compute_metrics(self, model: YOLO, device: str, dataloader: InfiniteDataLoader, logger: Logger, known_classes: List[int]) -> Dict[str, float]:
         dataset_name = dataloader.dataset.data.get('yaml_file', None)
@@ -838,11 +861,14 @@ class OODMethod(ABC):
             saliency_map = self.compute_saliency_map_one_stride(unpaded_ftmaps_of_selected_stride.cpu().numpy())
 
             if folder_path:  # Save the saliency map and the saliency map over the original image
+                USE_GREY_BANDS = False
+
                 import matplotlib.pyplot as plt
                 from skimage.transform import resize
                 plt.imshow(saliency_map, cmap='viridis')
-                plt.colorbar()
-                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map.{IMAGE_FORMAT}')
+                #plt.colorbar()
+                plt.axis('off')
+                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                 plt.close()
                 saliency_map_plot = resize(saliency_map, (data['img'][img_idx].shape[2], data['img'][img_idx].shape[1]))
                 saliency_map_plot = saliency_map_plot - saliency_map.min()
@@ -850,21 +876,40 @@ class OODMethod(ABC):
                 saliency_map_plot = (saliency_map_plot * 255).astype(np.uint8)
                 plt.imshow(data['img'][img_idx].permute(1, 2, 0).cpu().numpy())
                 plt.imshow(saliency_map_plot, cmap='viridis', alpha=0.5)
-                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map_over_image.{IMAGE_FORMAT}')
+                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map_over_image.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                 plt.close()
 
-                ### Plot the feature maps for the EUL Figure
-                # Plot the unpaded feature maps over a gray image with the size of the paded feature maps
-                feature_maps_folder = folder_path / f'{(origin_of_idx + img_idx):03}_ftmaps'
-                feature_maps_folder.mkdir(exist_ok=True)
+                # Create a gray background to plot the feature maps over it
                 grey_bg = (np.ones((paded_ftmaps_height, paded_ftmaps_width, 3))*144)/255
-                #plt.imshow(grey_bg, cmap='gray')
-                #start_x, start_y = padding_x_y
-                for _i_ftmap, indiv_ftmap in enumerate(paded_feature_maps_of_selected_stride):
-                    plt.imshow(indiv_ftmap, cmap='viridis')
-                    plt.axis('off')
-                    plt.savefig(feature_maps_folder / f'{_i_ftmap:03}_ftmaps_over_gray_image.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
-                    plt.close()
+
+                ## Plot the feature maps for the EUL Figure
+                # Plot the unpaded feature maps over a gray image with the size of the paded feature maps
+                # feature_maps_folder = folder_path / f'{(origin_of_idx + img_idx):03}_ftmaps'
+                # feature_maps_folder.mkdir(exist_ok=True)
+                # #plt.imshow(grey_bg, cmap='gray')
+                # #start_x, start_y = padding_x_y
+                # for _i_ftmap, indiv_ftmap in enumerate(unpaded_ftmaps_of_selected_stride):
+                #     indiv_ftmap = indiv_ftmap.cpu().numpy()
+                #     if USE_GREY_BANDS:
+                #         # With grey bands
+                #         from matplotlib.colors import Normalize
+                #         fig, ax = plt.subplots()
+                #         ax.imshow(grey_bg)
+                #         # Create a colormap normalization
+                #         norm = Normalize(vmin=saliency_map.min(), vmax=saliency_map.max())
+                #         start_x, start_y = padding_x_y
+                #         ax.imshow(indiv_ftmap, cmap='viridis', norm=norm, extent=(start_x, start_x + saliency_map.shape[1], start_y + saliency_map.shape[0], start_y))
+                #         # Ensure the entire 80x80 area is shown
+                #         ax.set_xlim(0, grey_bg.shape[0]-1)
+                #         ax.set_ylim(grey_bg.shape[1]-1, 0)
+                #         ax.axis('off')
+                #         plt.savefig(feature_maps_folder / f'{_i_ftmap:03}_ftmaps_over_gray_image.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
+                #         plt.close()
+                #     else:
+                #         plt.imshow(indiv_ftmap, cmap='viridis')
+                #         plt.axis('off')
+                #         plt.savefig(feature_maps_folder / f'{_i_ftmap:03}_ftmaps.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
+                #         plt.close()
                 
                 ### Plot the aggreated maps, the saliency map, for the EUL Figure    
                 # With grey bands
@@ -936,7 +981,7 @@ class OODMethod(ABC):
                             # Save the heatmap
                             plt.imshow(heatmap_for_plot, cmap='viridis')
                             plt.colorbar()
-                            plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_original.{IMAGE_FORMAT}')
+                            plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_original.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                             plt.close()
                             # Save the heatmap over the image
                             #[:, y_padding:ftmap_height-y_padding, x_padding:ftmap_width-x_padding]
@@ -945,13 +990,13 @@ class OODMethod(ABC):
                             orig_img_no_pad = data['img'][img_idx][:, orig_pd_y:orig_h-orig_pd_y, orig_pd_x:orig_w-orig_pd_x]
                             plt.imshow(orig_img_no_pad.permute(1, 2, 0).cpu().numpy()/ 255)
                             plt.imshow(resize(heatmap_for_plot, orig_img_no_pad.shape[1:]), cmap='viridis', alpha=0.5)
-                            plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_original_over_image.{IMAGE_FORMAT}')
+                            plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_original_over_image.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                             plt.close()
                             if CUSTOM_HYP.unk.USE_XAI_TO_MODIFY_SALIENCY:
                                 # Save the saliency map
                                 plt.imshow(saliency_map, cmap='viridis')
                                 plt.colorbar()
-                                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map_new.{IMAGE_FORMAT}')
+                                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map_new.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                                 plt.close()
 
             ### 3. Compute the thresholds to binarize the saliency map
@@ -962,54 +1007,83 @@ class OODMethod(ABC):
                 for idx, thr in enumerate(thresholds):
                     axs[idx].imshow(saliency_map > thr, cmap='gray')
                     axs[idx].set_title(f'Thr: {thr:.2f}')
-                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map.{IMAGE_FORMAT}')
+                plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                 plt.close()
                 ### Save each threshold separately for the EUL Figure, padded with gray
                 for idx, thr in enumerate(thresholds):
-                    fig, ax = plt.subplots()
-                    ax.imshow(grey_bg)
-                    ax.imshow(saliency_map > thr, cmap='gray', extent=(start_x, start_x + saliency_map.shape[1], start_y + saliency_map.shape[0], start_y))
-                    ax.set_xlim(0, grey_bg.shape[0]-1)
-                    ax.set_ylim(grey_bg.shape[1]-1, 0)
-                    ax.axis('off')
-                    plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:02}.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
-                    plt.close()
-
-                    # plt.imshow(saliency_map > thr, cmap='gray')
-                    # plt.axis('off')
-                    # plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_{idx:02}.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
-                    # plt.close()
+                    if USE_GREY_BANDS:
+                        fig, ax = plt.subplots()
+                        ax.imshow(grey_bg)
+                        ax.imshow(saliency_map > thr, cmap='gray', extent=(start_x, start_x + saliency_map.shape[1], start_y + saliency_map.shape[0], start_y))
+                        ax.set_xlim(0, grey_bg.shape[0]-1)
+                        ax.set_ylim(grey_bg.shape[1]-1, 0)
+                        ax.axis('off')
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_gray_bg_{idx:02}.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
+                        plt.close()
+                    else:
+                        plt.imshow(saliency_map > thr, cmap='gray', extent=(start_x, start_x + saliency_map.shape[1], start_y + saliency_map.shape[0], start_y))
+                        plt.axis('off')
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:02}.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
+                        plt.close()
                 
             ### 4. Extract the bounding boxes from the saliency map using the thresholds
             possible_unk_boxes_per_thr = extract_bboxes_from_saliency_map_and_thresholds(saliency_map, thresholds)
 
             if folder_path:
-                ### Save for each threshold the bboxes in red over the thresholded image with grey padding
+                ### Save for each threshold the bboxes in red over the thresholded image and over the original image
                 # The bounding box comes represented as [minr, minc, maxr, maxc], which corresponds to [y_min, x_min, y_max, x_max]. 
                 from matplotlib import patches
                 for idx, thr in enumerate(thresholds):
-                    fig, ax = plt.subplots()
-                    ax.imshow(grey_bg)
-                    ax.imshow(saliency_map > thr, cmap='gray', extent=(start_x, start_x + saliency_map.shape[1], start_y + saliency_map.shape[0], start_y))
-                    for bbox in possible_unk_boxes_per_thr[idx]:
-                        x1, y1, x2, y2 = bbox
-                        x1, y1, x2, y2 = x1 + start_x, y1 + start_y, x2 + start_x, y2 + start_y
-                        rect = patches.Rectangle((x1, y1), x2-x1, y2-y1, linewidth=1, edgecolor='r', facecolor='none')
-                        ax.add_patch(rect)
-                    ax.set_xlim(0, grey_bg.shape[0]-1)
-                    ax.set_ylim(grey_bg.shape[1]-1, 0)
-                    ax.axis('off')
-                    plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:02}_with_boxes.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
-                    plt.close()
-
-                    # plt.imshow(saliency_map > thr, cmap='gray')
-                    # for bbox in possible_unk_boxes_per_thr[idx]:
-                    #     x1, y1, x2, y2 = bbox
-                    #     rect = patches.Rectangle((x1, y1), x2-x1, y2-y1, linewidth=1, edgecolor='r', facecolor='none')
-                    #     plt.gca().add_patch(rect)
-                    # plt.axis('off')
-                    # plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_{idx:02}_with_boxes.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
-                    # plt.close()
+                    if USE_GREY_BANDS:
+                        fig, ax = plt.subplots()
+                        ax.imshow(grey_bg)
+                        ax.imshow(saliency_map > thr, cmap='gray', extent=(start_x, start_x + saliency_map.shape[1], start_y + saliency_map.shape[0], start_y))
+                        for bbox in possible_unk_boxes_per_thr[idx]:
+                            x1, y1, x2, y2 = bbox
+                            x1, y1, x2, y2 = x1 + start_x, y1 + start_y, x2 + start_x, y2 + start_y
+                            rect = patches.Rectangle((x1, y1), x2-x1, y2-y1, linewidth=1, edgecolor='r', facecolor='none')
+                            ax.add_patch(rect)
+                        ax.set_xlim(0, grey_bg.shape[0]-1)
+                        ax.set_ylim(grey_bg.shape[1]-1, 0)
+                        ax.axis('off')
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:03}_with_boxes_over_gray_bg.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
+                        plt.close()
+                    else:
+                        fig, ax = plt.subplots()
+                        #ax.imshow(grey_bg)
+                        ax.imshow(saliency_map > thr, cmap='gray', extent=(start_x, start_x + saliency_map.shape[1], start_y + saliency_map.shape[0], start_y))
+                        for bbox in possible_unk_boxes_per_thr[idx]:
+                            x1, y1, x2, y2 = bbox
+                            x1, y1, x2, y2 = x1 + start_x, y1 + start_y, x2 + start_x, y2 + start_y
+                            rect = patches.Rectangle((x1, y1), x2-x1, y2-y1, linewidth=1, edgecolor='r', facecolor='none')
+                            ax.add_patch(rect)
+                        # ax.set_xlim(0, grey_bg.shape[0]-1)
+                        # ax.set_ylim(grey_bg.shape[1]-1, 0)
+                        ax.axis('off')
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:03}_with_boxes.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
+                        plt.close()
+                        
+                        # Boxes over the original image
+                        fig, ax = plt.subplots()
+                        orig_img = data['img'][img_idx].permute(1, 2, 0).cpu().numpy() 
+                        # Remove padding from the original image
+                        #ftmaps[:, y_padding:ftmap_height-y_padding, x_padding:ftmap_width-x_padding],
+                        padded_height = (640 - data['ori_shape'][img_idx][0]) // 2
+                        padded_width = (640 - data['ori_shape'][img_idx][1]) // 2
+                        orig_img = orig_img[padded_height:orig_img.shape[0]-padded_height, padded_width:orig_img.shape[1]-padded_width]                        
+                        start_x = start_x*stride_ratio
+                        start_y = start_y*stride_ratio
+                        ax.imshow(orig_img, extent=(start_x, start_x + orig_img.shape[1], start_y + orig_img.shape[0], start_y))
+                        #ax.imshow(saliency_map > thr, cmap='gray', extent=(start_x, start_x + saliency_map.shape[1], start_y + saliency_map.shape[0], start_y))
+                        for bbox in possible_unk_boxes_per_thr[idx]:
+                            x1, y1, x2, y2 = bbox
+                            x1, y1, x2, y2 = x1*stride_ratio, y1*stride_ratio, x2*stride_ratio, y2*stride_ratio
+                            x1, y1, x2, y2 = x1 + start_x, y1 + start_y, x2 + start_x, y2 + start_y
+                            rect = patches.Rectangle((x1, y1), x2-x1, y2-y1, linewidth=1, edgecolor='r', facecolor='none')
+                            ax.add_patch(rect)
+                        ax.axis('off')
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:03}_with_boxes_over_image.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
+                        plt.close()
 
 
             if CUSTOM_HYP.unk.USE_XAI_TO_REMOVE_PROPOSALS:
@@ -1024,14 +1098,14 @@ class OODMethod(ABC):
                         from torchvision.utils import draw_bounding_boxes
                         im = draw_bounding_boxes(image=(heatmap*255).to(torch.uint8).unsqueeze(0), boxes=heatmap_boxes)
                         plt.imshow(im.permute(1, 2, 0).cpu().numpy())
-                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_with_boxes.{IMAGE_FORMAT}')
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_heatmap_with_boxes.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                         plt.close()
                         # Plot the thresholded heatmap
                         fig, axs = plt.subplots(1, len(thresholds_heatmap), figsize=(5*len(thresholds_heatmap), 5))
                         for idx, thr in enumerate(thresholds_heatmap):
                             axs[idx].imshow(heatmap > thr, cmap='gray')
                             axs[idx].set_title(f'Thr: {thr:.2f}')
-                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_heatmap.{IMAGE_FORMAT}')
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_heatmap.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                         plt.close()
                 else:
                     print(f"Image {img_idx} has no heatmap")
