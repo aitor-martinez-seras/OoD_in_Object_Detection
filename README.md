@@ -49,17 +49,39 @@ Follow instructions in [datasets_utils/coco_ood/instructions.md](datasets_utils/
 
 # Usage
 
+The model obtaining the results of the paper can be downloaded from [this OneDrive link](https://tecnalia365-my.sharepoint.com/:u:/g/personal/aitor_martinez_tecnalia_com/EbHfJyzcQy9Kr1-h2SOP5MsBLaQfLmMRbWtkcZxDHTIDsw?e=4D9VYi).
+
 ## Replicate results
 
-TODO
+1) Train a model using the ```replicate/train.sh```. The arguments are the same to the ones used for the paper.
+
+2) Run the bash scripts inside the  ```replicate/benchmarks.sh``` to obtain the results.
+
+3) To obtain the figures of the paper, run the ```process_results.ipynb```. The code expects the following structure:
+    
+    ```bash
+    < source_code_folder >
+    ├── results
+        ├── fmap_method
+        │   └── < .csv files from the vanilla FMap method >
+        ├── fmap_method_SDR
+        │   └── < .csv files from the SDR FMap method >
+        ├── fmap_method_EUL
+        │   └── < .csv files from the EUL FMap method >
+        ├── logits_methods
+        │   └── < .csv files from the post-hoc or logits methods >
+        └── fusion_methods
+            └── < .csv files from the fusion methods >
+    ```
+
 
 ## Using the OOD methods
 
-TODO
+Examples of usage are provided in the ```scripts/ood_evaluation.sh``` file.
 
 ## Training a YOLO model
 
-TODO
+Examples are provided ```scripts/train_owod.sh``` file.
 
 # YOLO Sizes an architecture
 

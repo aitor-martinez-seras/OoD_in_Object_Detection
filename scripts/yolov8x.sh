@@ -1,1 +1,0 @@
-nohup python custom_training.py -e 300 -m x --devices 2 --batch_size 16 -cl_ms 25 --from_scratch --workers 10 > nohup_yolov8x_300epochs.log & 

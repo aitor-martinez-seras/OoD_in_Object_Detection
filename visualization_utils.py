@@ -17,6 +17,23 @@ def create_folder(folder_path: Path, now: str, ood_method_name: str = '') -> Pat
     return folder_path
 
 
+# Save the original image 
+def save_image_from_results_and_data(results: List[Results], data: Dict[str, Tensor], c: int):
+    for i, res in enumerate(results):
+        imgs_path = Path("figures/images")
+        imgs_path.mkdir(exist_ok=True)
+        #img_to_plot = res.orig_img[i].permute(1, 2, 0).cpu().numpy()
+        # Extract the image to plot using the ori_shape from data
+        img_to_plot = res.orig_img[i].permute(1, 2, 0).cpu().numpy()
+        padded_height = (640 - data['ori_shape'][i][0]) // 2
+        padded_width = (640 - data['ori_shape'][i][1]) // 2
+        img_to_plot = img_to_plot[padded_height:padded_height+data['ori_shape'][i][0], padded_width:padded_width+data['ori_shape'][i][1]]
+        plt.imshow(img_to_plot)
+        plt.axis('off')
+        plt.savefig(imgs_path / f'img_{c + i:03d}.png', bbox_inches='tight', pad_inches=0)
+        plt.close()
+
+
 def prepare_bboxes_and_labels(
         results: Results, class_names: List[str], ood_decision: Optional[List[int]], targets: Optional[Dict[str, Tensor]],
         img_idx: int, valid_preds_only: bool, possible_unk_boxes: Optional[List[Tensor]] = None, ood_decision_on_possible_unk_boxes: Optional[List[List[int]]] = None,
