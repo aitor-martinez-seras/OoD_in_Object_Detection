@@ -1313,7 +1313,6 @@ def main(args: SimpleArgumentParser):
                 logger.info(f" *** Running following combination: ***")
                 logger.info(one_combination_of_hyp)
                 modify_hyperparams_with_dict(CUSTOM_HYP, one_combination_of_hyp)
-                # logger.info(f"USE XAI set to {CUSTOM_HYP.unk.USE_XAI}")
 
                 ## 3.2. Add info
                 mean_n_clusters, std_n_clusters = get_mean_and_std_n_clusters(ood_method)

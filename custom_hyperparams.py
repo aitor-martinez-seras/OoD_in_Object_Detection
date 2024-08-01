@@ -61,36 +61,6 @@ class ClustersParams:
     MAX_PERCENT_OF_ORPHANS: float = 0.95  # The maximum percentage of orphans per class and stride
     assert (MAKE_EACH_ORPHAN_EACH_OWN_CLUSTER != REMOVE_ORPHANS) or (MAKE_EACH_ORPHAN_EACH_OWN_CLUSTER == REMOVE_ORPHANS == False), "Only one of the two options can be used"
 
-@dataclass
-class DRiseParams:
-    # For D-RISE
-    NUMBER_OF_MASKS: int = 6000
-    STRIDE: int = 8
-    P1: float = 0.8
-    GPU_BATCH: int = 64
-    GENERATE_NEW_MASKS: bool = False
-
-
-@dataclass
-class XAIParams:
-
-    XAI_METHOD: str = "LayerCAM"  # GradCAM, HiResCAM, LayerCAM, D-RISE
-    XAI_TARGET_LAYERS: List[int] = (15, 18, 21)
-    if XAI_METHOD == "D-RISE":
-        drise: DRiseParams = DRiseParams()
-
-    # Used when USE_XAI_TO_REMOVE_PROPOSALS is True
-    MAX_IOU_WITH_XAI: float = 0.5  # The maximum IOU between an UNK proposal bbox and a predicted bbox. If over the threshold, the UNK proposal is discarded
-    assert MAX_IOU_WITH_XAI > 0 and MAX_IOU_WITH_XAI <= 1, "MAX_IOU_WITH_XAI must be between 0 and 1"
-
-    XAI_RENORMALIZE: bool = False
-
-    # Used when USE_XAI_TO_MODIFY_SALIENCY is True
-    INFO_MERGING_METHOD: str = "multiply"  # scale_then_minus, multiply, turn_off_pixels, sigmoid
-    if INFO_MERGING_METHOD == "sigmoid":
-        SIGMOID_SLOPE: float = 8.0  # The slope of the sigmoid, more value means a steeper slope, making pixels will be either low or high
-        SIGMOID_INTERCEPT: float = 0.5  # The value at which the sigmoid will be 0.5 (moves the sigmoid to the left or right)
-
 
 @dataclass
 class RankParams:
@@ -129,11 +99,6 @@ class UnkEnhancementParams:
     THRESHOLDING_METHOD: str = "recursive_otsu"  # multithreshold_otsu, recursive_otsu, k_means, quantile, fast_otsu
     NUM_THRESHOLDS: int = 3  # The number of thresholds to be used in the thresholding methods
     OTSU_RECURSIVE_TRICK_FOR_4_THRS: bool = False  # If True, the first threshold's value will be removed from the saliency map
-
-    # Enable or disable the use of XAI
-    USE_XAI_TO_MODIFY_SALIENCY: bool = False  # If True, the XAI method will be used to enhance the localization of the UNK proposals
-    USE_XAI_TO_REMOVE_PROPOSALS: bool = False  # If True, the XAI method will be used to remove the UNK proposals
-    assert not (USE_XAI_TO_MODIFY_SALIENCY and USE_XAI_TO_REMOVE_PROPOSALS), "Only one of the XAI methods can be used"
     
     # Simple heuristics
     USE_SIMPLE_HEURISTICS: bool = False  # Use to enable or disable the simple heuristics, listed below
@@ -145,10 +110,6 @@ class UnkEnhancementParams:
 
     # Enable or disable ranking the prosals. if USE_HEURISTICS is False, no ranking will be done
     RANK_BOXES: bool = True
-    
-    # if USE_XAI_TO_MODIFY_SALIENCY or USE_XAI_TO_REMOVE_PROPOSALS:
-    #     USE_XAI: bool = True  # If True, the XAI method will be used to enhance the localization of the UNK proposals
-    xai: XAIParams = XAIParams()
     rank: RankParams = RankParams()
     
 
