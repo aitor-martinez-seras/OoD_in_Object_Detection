@@ -1,168 +1,11 @@
 from pathlib import Path
-from typing import List, Dict, Tuple, Union
-
-import matplotlib.pyplot as plt
-import numpy as np
-import torch
-from torch import Tensor
-from torchvision.utils import draw_bounding_boxes
-
-from ultralytics.yolo.engine.results import Results
-
-
-# def plot_results(
-#         class_names: List[str],
-#         results: List[Results],
-#         folder_path: Path,
-#         now: str,
-#         valid_preds_only: bool,
-#         origin_of_idx: int,
-#         image_format: str = 'pdf',
-#         ood_decision: Union[List[int], None] = None,
-#         ood_method_name: str = '',
-#         targets: Union[Dict[str, Tensor], None] = None,
-#         possible_unk_boxes_and_decisions: Union[Tuple[List[np.ndarray], List[np.ndarray]], None] = None
-#     ):
-#     # ----------------------
-#     ### Codigo para dibujar las cajas predichas y los targets ###
-#     # ----------------------
-#     # Parametros para plot
-#     width = 2
-#     font = 'FreeMonoBold'
-#     font_size = 12
-
-#     if ood_decision:
-#         assert ood_method_name is not None, "If ood_decision exists, ood_method must be a string with the name of the OoD method"
-
-#     # Create folder to store images
-#     if ood_method_name:
-#         prueba_ahora_path = folder_path / f'{now}_{ood_method_name}'
-#     else:
-#         prueba_ahora_path = folder_path / now
-#     prueba_ahora_path.mkdir(exist_ok=True)
-
-#     for img_idx, res in enumerate(results):
-        
-#         if valid_preds_only:
-#             valid_preds = np.array(res.valid_preds)
-#             bboxes = res.boxes.xyxy.cpu()[valid_preds]
-#             labels = res.boxes.cls.cpu()[valid_preds]
-#         else:
-#             bboxes = res.boxes.xyxy.cpu()
-#             labels = res.boxes.cls.cpu()
-
-#             # Este codigo es por si queremos que las cajas OoD se pinten con nombre OoD
-#             # for i, decision in enumerate(ood_decision[img_idx]):
-#             #     if decision == 0:
-#             #         labels[i] = 0
-#             # class_names[0] = 'OoD'
-
-#             # labels_for_plot = []
-#             # for i, lbl in enumerate(labels):
-#             #     if lbl == 0:
-#             #         labels_for_plot.append(f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}')
-#             #     else:    
-#             #         labels_for_plot.append(f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}') 
-        
-#         # If we have OoD labels, we plot the boxes with green for In-Distribution and red for OoD
-#         if ood_decision:
-#             if targets:
-#                 # Append bboxes of the targets and its labels
-#                 # Expand the ood_decision to the labels and assign the number n = -5 to the targets
-#                 # Then paint the targets in violet
-                
-#                 bboxes = torch.cat((bboxes, targets["bboxes"][img_idx]), dim=0)
-#                 labels = torch.cat((labels, targets["cls"][img_idx]), dim=0)
-#                 ood_decision_one_image = ood_decision[img_idx]
-#                 ood_decision_one_image = np.append(ood_decision_one_image, [-5]*len(targets["cls"][img_idx]))
-#                 colors = []
-#                 for decision in ood_decision_one_image:
-#                     if decision == 1:
-#                         colors.append('green')
-#                     elif decision == -5:
-#                         colors.append('violet')
-#                     elif decision == 0:
-#                         colors.append('red')
-#                     else:
-#                         raise ValueError("The OoD decision must be 0, 1 or -5")
-                    
-#                 labels_str = []
-#                 for i, lbl in enumerate(labels):
-#                     if ood_decision_one_image[i] == -5:
-#                         labels_str.append(f'{class_names[int(lbl.item())]} - GT')
-#                     else:
-#                         labels_str.append(f'{class_names[int(lbl.item())]} - {res.boxes.conf[i]:.2f}')
-
-#                 im = draw_bounding_boxes(
-#                     res.orig_img[img_idx].cpu(),
-#                     bboxes,
-#                     width=width,
-#                     font=font,
-#                     font_size=font_size,
-#                     labels=labels_str,
-#                     colors=colors
-#                 )
-#             else:
-#                 im = draw_bounding_boxes(
-#                     res.orig_img[img_idx].cpu(),
-#                     bboxes,
-#                     width=width,
-#                     font=font,
-#                     font_size=font_size,
-#                     labels=[f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}' for i, n in enumerate(labels)],
-#                     colors=['red' if n == 0 else 'green' for n in ood_decision[img_idx]]
-#                 )
-        
-#         # Just plot normal predictions
-#         else:
-#             if targets:
-#                 bboxes_preds_plus_gt = torch.cat((bboxes, targets["bboxes"][img_idx]), dim=0)
-#                 #labels_preds_plus_gt = torch.cat((labels, targets["cls"][img_idx]), dim=0)
-#                 # import random
-#                 # get_colors = lambda n: ["#%06x" % random.randint(0, 0xFFFFFF) for _ in range(n)]
-#                 # colors = get_colors(len(labels))
-#                 #colors.extend(['violet']*len(targets["cls"][img_idx]))
-#                 colors = ['green']*len(labels) + ['violet']*len(targets["cls"][img_idx])
-                
-#                 labels_str = []
-#                 for i, lbl in enumerate(labels):
-#                     # Check if they are predictions  for this image
-#                     labels_str.append(f'{class_names[int(lbl.item())]} - {res.boxes.conf[i]:.2f}')
-#                 for i, lbl in enumerate(targets["cls"][img_idx]):
-#                     labels_str.append(f'{class_names[int(lbl.item())]} - GT')
-#                 im = draw_bounding_boxes(
-#                     res.orig_img[img_idx].cpu(),
-#                     bboxes_preds_plus_gt,
-#                     width=width,
-#                     font=font,
-#                     font_size=font_size,
-#                     labels=labels_str,
-#                     colors=colors
-#                 )
-#             else:
-#                 im = draw_bounding_boxes(
-#                     res.orig_img[img_idx].cpu(),
-#                     bboxes,
-#                     width=5,
-#                     font=font,
-#                     font_size=font_size,
-#                     labels=[f'{class_names[int(n.item())]} - {res.boxes.conf[i]:.2f}' for i, n in enumerate(labels)]
-#                 )
-
-#         plt.imshow(im.permute(1,2,0))
-#         plt.savefig(prueba_ahora_path / f'{(origin_of_idx + img_idx):03}.{image_format}', dpi=300)
-#         plt.close()
-
-
-
-from pathlib import Path
 from typing import List, Dict, Tuple, Union, Optional
+
 import numpy as np
 import torch
 from torch import Tensor
 import matplotlib.pyplot as plt
 from torchvision.utils import draw_bounding_boxes
-
 from ultralytics.yolo.engine.results import Results
 
 
@@ -198,6 +41,7 @@ def prepare_bboxes_and_labels(
         for i, decision in enumerate(ood_decision[img_idx]):
             if decision == 0:
                 colors[i] = 'red'  # OoD
+                colors[i] = 'orange'  # OoD
             elif decision == 1:
                 colors[i] = 'green'  # In-Distribution
 
@@ -247,8 +91,11 @@ def prepare_bboxes_and_labels(
     return bboxes, labels_str, colors
 
 
-def plot_bounding_boxes(img: Tensor, bboxes: Tensor, labels: List[str], colors: List[str], width: int, font: str, font_size: int, image_path: Path):
+def plot_bounding_boxes(img: Tensor, bboxes: Tensor, labels: List[str], colors: List[str], width: int, font: str, font_size: int, image_path: Path, use_labels: bool,
+                        plot_gray_bands: bool, original_shape: List[Tuple[int, int]] = None):
     """Plot and save the image with bounding boxes."""
+    if not use_labels:
+        labels = None
     im = draw_bounding_boxes(
         img.cpu(),
         bboxes,
@@ -258,9 +105,25 @@ def plot_bounding_boxes(img: Tensor, bboxes: Tensor, labels: List[str], colors: 
         labels=labels,
         colors=colors
     )
+    # Remove padding if plot_gray_bands is False
+    if not plot_gray_bands:
+        # Limit the axis to the original shape using the actual shape as reference
+        max_shape = max(im.shape[1:])
+        width_padding = (max_shape - original_shape[1]) // 2
+        height_padding = (max_shape - original_shape[0]) // 2
+        if (max_shape - original_shape[1]) % 2 != 0:
+            width_padding -= 1
+        if (max_shape - original_shape[0]) % 2 != 0:
+            height_padding -= 1
+        print(f"Original shape: {original_shape}")
+        print(f"Current shape: {im.shape}")
+        print(f"Padding: {width_padding}, {height_padding}")
+        im = im[:, height_padding:original_shape[0]+height_padding, width_padding:original_shape[1]+width_padding]
     plt.imshow(im.permute(1, 2, 0))
+    # plt.xlim(width_padding, original_shape[0])
+    # plt.ylim(original_shape[1], height_padding)
     plt.axis('off')
-    plt.savefig(image_path, dpi=300, bbox_inches='tight')
+    plt.savefig(image_path, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close()
 
 
@@ -277,12 +140,18 @@ def plot_results(
         targets: Optional[Dict[str, Tensor]] = None,
         possible_unk_boxes: Optional[List[Tensor]] = None,
         ood_decision_on_possible_unk_boxes: Optional[List[List[int]]] = None,
-        distances_unk_prop_per_image: Optional[List[np.ndarray]] = None
+        distances_unk_prop_per_image: Optional[List[np.ndarray]] = None,
+        use_labels: bool = True,
+        plot_gray_bands=False,
+        original_shapes=None,
     ):
     """Main function to plot results."""
-    width = 2
+    width = 3
     font = 'FreeMonoBold'
     font_size = 12
+
+    if not plot_gray_bands and original_shapes is None:
+        raise ValueError("The original_shapes must be provided when plot_gray_bands is False.")
 
     assert not (ood_decision and not ood_method_name), "If ood_decision is provided, ood_method_name must not be empty."
     
@@ -303,4 +172,4 @@ def plot_results(
         )
 
         image_path = output_folder / f'{(origin_of_idx + img_idx):03}.{image_format}'
-        plot_bounding_boxes(res.orig_img[img_idx], bboxes, labels_str, colors, width, font, font_size, image_path)
+        plot_bounding_boxes(res.orig_img[img_idx], bboxes, labels_str, colors, width, font, font_size, image_path, use_labels, plot_gray_bands, original_shapes[img_idx])

@@ -413,10 +413,10 @@ class OODMethod(ABC):
         c = 0
         for idx_of_batch, data in enumerate(dataloader):
             count_of_images += len(data['im_file'])
-            # if idx_of_batch < 3:
-            #     c += len(data['im_file'])
-            #     continue
-            
+            if idx_of_batch < 3:
+                c += len(data['im_file'])
+                continue
+
             ### Preparar imagenes y targets ###
             imgs, targets = self.prepare_data_for_model(data, device)
             
@@ -875,6 +875,7 @@ class OODMethod(ABC):
                 saliency_map_plot = (saliency_map_plot * 255).astype(np.uint8)
                 plt.imshow(data['img'][img_idx].permute(1, 2, 0).cpu().numpy())
                 plt.imshow(saliency_map_plot, cmap='viridis', alpha=0.5)
+                plt.axis('off')
                 plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_saliency_map_over_image.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                 plt.close()
 
@@ -1017,12 +1018,12 @@ class OODMethod(ABC):
                         ax.set_xlim(0, grey_bg.shape[0]-1)
                         ax.set_ylim(grey_bg.shape[1]-1, 0)
                         ax.axis('off')
-                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_gray_bg_{idx:02}.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_gray_bg_{idx:03}.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                         plt.close()
                     else:
                         plt.imshow(saliency_map > thr, cmap='gray', extent=(start_x, start_x + saliency_map.shape[1], start_y + saliency_map.shape[0], start_y))
                         plt.axis('off')
-                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:02}.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:03}.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                         plt.close()
                 
             ### 4. Extract the bounding boxes from the saliency map using the thresholds
@@ -1040,7 +1041,7 @@ class OODMethod(ABC):
                         for bbox in possible_unk_boxes_per_thr[idx]:
                             x1, y1, x2, y2 = bbox
                             x1, y1, x2, y2 = x1 + start_x, y1 + start_y, x2 + start_x, y2 + start_y
-                            rect = patches.Rectangle((x1, y1), x2-x1, y2-y1, linewidth=1, edgecolor='r', facecolor='none')
+                            rect = patches.Rectangle((x1, y1), x2-x1, y2-y1, linewidth=3, edgecolor='r', facecolor='none')
                             ax.add_patch(rect)
                         ax.set_xlim(0, grey_bg.shape[0]-1)
                         ax.set_ylim(grey_bg.shape[1]-1, 0)
@@ -1048,20 +1049,13 @@ class OODMethod(ABC):
                         plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:03}_with_boxes_over_gray_bg.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                         plt.close()
                     else:
-                        # Thresholded image alone
-                        fig, ax = plt.subplots()
-                        ax.imshow(saliency_map > thr, cmap='gray')
-                        ax.axis('off')
-                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:03}.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
-                        plt.close()
-
                         # Boxes over the thresholded image
                         fig, ax = plt.subplots()
                         ax.imshow(saliency_map > thr, cmap='gray', extent=(start_x, start_x + saliency_map.shape[1], start_y + saliency_map.shape[0], start_y))
                         for bbox in possible_unk_boxes_per_thr[idx]:
                             x1, y1, x2, y2 = bbox
                             x1, y1, x2, y2 = x1 + start_x, y1 + start_y, x2 + start_x, y2 + start_y
-                            rect = patches.Rectangle((x1, y1), x2-x1, y2-y1, linewidth=1, edgecolor='r', facecolor='none')
+                            rect = patches.Rectangle((x1, y1), x2-x1, y2-y1, linewidth=3, edgecolor='r', facecolor='none')
                             ax.add_patch(rect)
                         # ax.set_xlim(0, grey_bg.shape[0]-1)
                         # ax.set_ylim(grey_bg.shape[1]-1, 0)
@@ -1085,7 +1079,7 @@ class OODMethod(ABC):
                             x1, y1, x2, y2 = bbox
                             x1, y1, x2, y2 = x1*stride_ratio, y1*stride_ratio, x2*stride_ratio, y2*stride_ratio
                             x1, y1, x2, y2 = x1 + start_x, y1 + start_y, x2 + start_x, y2 + start_y
-                            rect = patches.Rectangle((x1, y1), x2-x1, y2-y1, linewidth=1, edgecolor='r', facecolor='none')
+                            rect = patches.Rectangle((x1, y1), x2-x1, y2-y1, linewidth=3, edgecolor='r', facecolor='none')
                             ax.add_patch(rect)
                         ax.axis('off')
                         plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:03}_with_boxes_over_image.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
