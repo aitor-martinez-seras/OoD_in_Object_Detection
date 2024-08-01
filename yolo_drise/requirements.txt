@@ -1,7 +1,0 @@
-torchvision==0.17.0
-torch>=2.1.0
-matplotlib
-pillow
-argparse
-scikit-image
-tqdm

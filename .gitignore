@@ -15,8 +15,6 @@ runs*
 nohup.out
 /*.png
 /*.jpg
-al_expl_imgs
-explainability_images
 predicted_dataset
 
 # C extensions
