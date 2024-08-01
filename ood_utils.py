@@ -413,6 +413,10 @@ class OODMethod(ABC):
         c = 0
         for idx_of_batch, data in enumerate(dataloader):
             count_of_images += len(data['im_file'])
+            # if idx_of_batch < 3:
+            #     c += len(data['im_file'])
+            #     continue
+            
             ### Preparar imagenes y targets ###
             imgs, targets = self.prepare_data_for_model(data, device)
             
@@ -512,7 +516,9 @@ class OODMethod(ABC):
                 possible_unk_boxes=possible_unk_bboxes,
                 ood_decision_on_possible_unk_boxes=ood_decision_on_unknown,
                 distances_unk_prop_per_image=distances_per_image,
-                use_labels=False,
+                use_labels=True,
+                original_shapes=data['ori_shape'],
+                plot_gray_bands=True,
             )
             
             number_of_images_saved += len(data['im_file'])
@@ -1042,8 +1048,15 @@ class OODMethod(ABC):
                         plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:03}_with_boxes_over_gray_bg.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
                         plt.close()
                     else:
+                        # Thresholded image alone
                         fig, ax = plt.subplots()
-                        #ax.imshow(grey_bg)
+                        ax.imshow(saliency_map > thr, cmap='gray')
+                        ax.axis('off')
+                        plt.savefig(folder_path / f'{(origin_of_idx + img_idx):03}_thresholded_saliency_map_thr_{idx:03}.{IMAGE_FORMAT}', bbox_inches='tight', pad_inches=0)
+                        plt.close()
+
+                        # Boxes over the thresholded image
+                        fig, ax = plt.subplots()
                         ax.imshow(saliency_map > thr, cmap='gray', extent=(start_x, start_x + saliency_map.shape[1], start_y + saliency_map.shape[0], start_y))
                         for bbox in possible_unk_boxes_per_thr[idx]:
                             x1, y1, x2, y2 = bbox
