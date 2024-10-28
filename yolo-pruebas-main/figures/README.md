@@ -1,0 +1,1 @@
+Folder to save any kind of figures, both for debugging and running purposes in the custom scripts (not from Ultralytics)
