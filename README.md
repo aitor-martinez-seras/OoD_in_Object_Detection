@@ -39,7 +39,7 @@ The code has been only tested on Linux and some of the code may not work, as som
 
 # Download datasets
 
-## OWOD (Open World Object Detection)
+## COCO and Pascal VOC datasets
 
 Follow instructions in [datasets_utils/owod/instructions.md](datasets_utils/owod/instructions.md).
 
