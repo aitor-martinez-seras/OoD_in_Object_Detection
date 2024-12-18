@@ -17,8 +17,7 @@ To install the package:
 
 ```bash
 ├── datasets
-│   ├── coco
-│   └── TAO
+│   └──coco 
 └── < source_code_folder >
     ├── datasets_utils
     ├── data_utils.py
