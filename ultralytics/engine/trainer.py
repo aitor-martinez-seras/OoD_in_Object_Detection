@@ -154,6 +154,12 @@ class BaseTrainer:
         # HUB
         self.hub_session = None
 
+        # Enable dynamically selecting the number of classes
+        number_of_classes = overrides.get('number_of_classes', 0)
+        if number_of_classes:
+            self.data['nc'] = number_of_classes
+            #self.data['names'] = [f'class_{i}' for i in range(number_of_classes)]
+
         # Callbacks
         self.callbacks = _callbacks or callbacks.get_default_callbacks()
         if RANK in {-1, 0}:
@@ -432,10 +438,12 @@ class BaseTrainer:
             if RANK in {-1, 0}:
                 final_epoch = epoch + 1 >= self.epochs
                 self.ema.update_attr(self.model, include=["yaml", "nc", "args", "names", "stride", "class_weights"])
+                val_this_epoch = (epoch + 1) % self.args.val_every == 0 or epoch == 0 # Enable validation every n epochs (always validate first epoch)
 
                 # Validation
-                if self.args.val or final_epoch or self.stopper.possible_stop or self.stop:
+                if (self.args.val and val_this_epoch) or final_epoch or self.stopper.possible_stop or self.stop:
                     self.metrics, self.fitness = self.validate()
+                # Validation metrics are saved even in the absence of validation
                 self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
                 self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
                 if self.args.time:
