@@ -1,9 +1,8 @@
 # Introduction
 
-This file contains the data about the modifcations that must be made to the ultralytics library in order to make the method work. This modifications where originally made to an early version of the ultralytics library. This version is in ```ultralytics_old```, and here we reference the changes to that library.
+This file contains the data about the modifcations that must be made to the ultralytics library in order to make the method work. This modifications where originally made to an early version of the ultralytics library. This version is in ```ultralytics_old```, and here we reference the changes to that library. In the newer versions, the paths and names of the scripts modified are similar. but not equal.
 
 # Where to modify for extracting activations from the internals of the model
-
 
 ## Important
 
@@ -11,6 +10,7 @@ New version of ultralytics enables the usage of an argument called ```embed``` t
 ```python
 embed: # (list[int], optional) return feature vectors/embeddings from given layers
 ```
+It is not used in this library as we are porting the old code to the newer versions aiming to do the least modification of the original code. Probably using this new embed functionallity will result in easier implementation.
 
 
 ## Instructions as in the original version of ultralytics
@@ -52,6 +52,10 @@ For validation:
 
 ## Modified for training
 
+### Enable custom datasets
+
+[DetectionTrainer](ultralytics_old/yolo/v8/detect/train.py): in the function ```build_dataset```, enable the loading of the custom dataset class, as in the val.py case.
+
 ### Enable dynamically selecting number of classes
 
 
@@ -72,9 +76,47 @@ You have to modify [default.yaml](ultralytics_old/yolo/cfg/default.yaml) config,
 
 https://github.com/aitor-martinez-seras/yolo-ood/commit/e7e8b0f120e3de714d3b94baa5df78efd5299d67
 
+[val.py](ultralytics_old/yolo/v8/detect/val.py): The custom dataset classes created must be added when building dataset in ```build_dataset``` function. Example:
+
+```python
+if self.data.get('dataset_class') == 'TAODataset':
+return build_tao_dataset(self.args, img_path, batch, self.data, mode=mode, stride=gs)
+```
+
 # Add custom dataset classes properly
 
-1. Create a ```.yaml``` config file where the ```dataset_class``` attribute must be included, defining there some flag for the dataset class
+
+## For the first addition
+
+Add the following code to ```ultralytics_old/yolo/data/base.py``` in the update_labels function:
+```python
+def update_labels(self, include_class: Optional[list]):
+    """include_class, filter labels to include only these classes (optional)."""
+    include_class_array = np.array(include_class).reshape(1, -1)
+    count_removed_boxes = 0
+    for i in range(len(self.labels)):
+        if include_class is not None:
+            cls = self.labels[i]['cls']
+            bboxes = self.labels[i]['bboxes']
+            segments = self.labels[i]['segments']
+            keypoints = self.labels[i]['keypoints']
+            j = (cls == include_class_array).any(1)
+            count_removed_boxes += len(j) - j.sum()  # To count the number of removed instances
+            self.labels[i]['cls'] = cls[j]
+            self.labels[i]['bboxes'] = bboxes[j]
+            if segments:
+                self.labels[i]['segments'] = [segments[si] for si, idx in enumerate(j) if idx]
+            if keypoints is not None:
+                self.labels[i]['keypoints'] = keypoints[j]
+        if self.single_cls:
+            self.labels[i]['cls'][:, 0] = 0
+    if count_removed_boxes > 0:  # Print the number of removed instances only if there are any
+        print(f'Removed {count_removed_boxes} boxes from labels to include only the number of classes defined')
+```
+
+## For each addition
+
+1. Create a ```.yaml``` config file that must be included in [cfg](ultralytics_old/yolo/cfg) folder where the ```dataset_class``` attribute must be included, defining there some flag for the dataset class.
 2. Create the dataset class inside the ```ultralytics/yolo/data``` folder, either in a separate file or in ```ultralytics/yolo/data/dataset.py```. Ensure to at least define the ```get_img_files```, ```update_labels_info```, ```get_labels``` and ```build_transforms``` if inheriting from ```BaseDataset```. An example of a custom class can be found in [tao.py](yolo/data/tao.py)
 3. Create the class inheriting from [BaseDataset](yolo/data/base.py) or from [YOLODataset](yolo/data/dataset.py)
 4. Create a function in ```ultralytics/yolo/data/build.py``` imitating ```build_yolo_dataset``` function. Import the dataset class created following ```YOLODataset``` convention.

@@ -5,6 +5,10 @@ from collections import defaultdict
 from itertools import repeat
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
+from typing import Union, List, Dict
+import os
+import glob
+import re
 
 import cv2
 import numpy as np
@@ -830,3 +834,395 @@ class ClassificationDataset:
             x["msgs"] = msgs  # warnings
             save_dataset_cache_file(self.prefix, path, x, DATASET_CACHE_VERSION)
             return samples
+
+
+class FilteredYOLODataset(YOLODataset):
+    """
+    Dataset class for loading object detection labels in YOLO format with reduced number of classes
+    with respect to the original dataset. This class must be defined in the corresponding YAML file 
+    of the dataset. The number of classes to be used must be defined in the 'names' attribute of the dataset.
+    In case of OWOD type datasets, the 'coco_to_owod_mapping' attribute must be defined in the dataset YAML file to 
+    map the COCO classes to the OWOD classes. Also, the tasks .txt files must be defined in the 'owod' folder of the
+    'datasets_utils' folder. Each .txt shows the images that are part of the task, being each line of the .txt the name
+    of the image file without the extension and without the path.
+    """
+
+    def __init__(self, *args, data=None, use_segments=False, use_keypoints=False, **kwargs):
+        super().__init__(*args, data=data, use_segments=use_segments, use_keypoints=use_keypoints, **kwargs)
+        print(f' -- Filtering dataset --')
+        # 1. Check if we are in OWOD style datasets or COCO OOD/Mixed datasets
+        self.owod_task = kwargs['hyp'].get('owod_task', None)
+        self.ood_or_mixed = self.data.get("ood_or_mixed", None)
+
+        if self.ood_or_mixed:
+            # Case COCO OOD or Mixed
+            import json
+            assert kwargs["hyp"].get("split") == 'val', 'COCO OOD and Mixed datasets are only available for the validation split'
+            #assert self.owod_task is None, 'OWOD task is not available for COCO OOD and Mixed datasets'
+            self.number_of_classes = 20  # Only 20 classes in COCO OOD or Mixed
+            print(f"Using COCO {self.ood_or_mixed} dataset")
+
+            # 2. Load the annotations from the json files
+            if self.ood_or_mixed == 'ood':
+                annotations_json_path = self.data["json_files"][0]
+                with open(annotations_json_path, 'r') as f:
+                    annotations = json.load(f)
+            elif self.ood_or_mixed == 'mixed':
+                annotations_ind_json_path = self.data["json_files"][0]
+                annotations_ood_json_path = self.data["json_files"][1]
+                # TODO: Aqui me las tengo que arreglar para convertir esto en un solo dict o algo asi
+                with open(annotations_ind_json_path, 'r') as f:
+                    annotations_ind = json.load(f)
+                with open(annotations_ood_json_path, 'r') as f:
+                    annotations_ood = json.load(f)
+                # Merge the annotations
+                annotations = annotations_ind
+                for ann in annotations_ood["annotations"]:
+                    annotations["annotations"].append(ann)
+            else:
+                raise ValueError(f'Invalid value for ood_or_mixed: {self.ood_or_mixed}')
+            
+            # 3. Create the labels using the annotations
+            self.labels = self.create_labels_using_coco_ood_json_annotations(annotations)
+            # 3.1: In case we want to use only a limited set of images
+            from custom_hyperparams import CUSTOM_HYP
+            if CUSTOM_HYP.USE_ONLY_SUBSET_OF_IMAGES:
+                self.select_subset_of_images(images_to_select=CUSTOM_HYP.IMAGES_TO_SELECT)
+            # 4: Update the attributes related with the labels (im_files, ni, npy_files, ...)
+            self.update_attributes_to_new_labels()
+            assert len(self.labels) == len(self.im_files), 'Number of labels and images must be equal'
+
+        else:
+            # Case OWOD or VOC or COCO standard
+            if self.owod_task:
+                print(f'Using OWOD task {self.owod_task} to filter dataset')
+            else:
+                print(f'Using the number of classes defined in the dataset to filter the dataset')
+            self.number_of_classes = self.select_number_of_classes_owod(self.owod_task)
+            self.number_of_classes = len(self.data["names"]) if self.number_of_classes == 0 else self.number_of_classes
+
+            # 2: Update the labels
+            self.upate_labels_to_use_less_classes()  # TODO: Separar esta clase en dos clases, una para OWOD y otra para limitar el numero de clases a traves de los names
+            
+            # 3: Update the attributes related with the labels (im_files, ni, npy_files, ...)
+            self.update_attributes_to_new_labels()
+
+            # 4: Limit images to the ones that are part of the OWOD task (again checks if labels are correctly updated)
+            if self.owod_task:
+                self.limit_images_by_owod_tasks(self.owod_task)
+            assert len(self.labels) == len(self.im_files), 'Number of labels and images must be equal'
+
+        print(f'Succesfully filtered dataset. New dataset:')
+        print(f'  * {len(self.labels)} images')
+        print(f'  * {self.number_of_classes} classes')
+        print(f'  * {sum(len(lb["cls"]) for lb in self.labels)} boxes')
+        if self.owod_task:
+            print(f'  * OWOD task: {self.owod_task}')
+        print(f' -------------')
+        
+    ### Reimplementation of get_img_files in BaseDataset in ultralytics/yolo/data/base.py  ###
+    # The only difference is that we are using the 'path' variable inside the .yaml file
+    # of the dataset to define the root path for the images
+    def get_img_files(self, img_path):
+        """Read image files."""
+        try:
+            f = []  # image files
+            for p in img_path if isinstance(img_path, list) else [img_path]:
+                p = Path(p)  # os-agnostic
+                if p.is_dir():  # dir
+                    f += glob.glob(str(p / '**' / '*.*'), recursive=True)
+                    # F = list(p.rglob('*.*'))  # pathlib
+                elif p.is_file():  # file
+                    with open(p) as t:
+                        t = t.read().strip().splitlines()
+                        # New way of handling parent path selection
+                        parent = self.data.get('path', '')
+                        if parent:
+                            parent = str(parent) + os.sep
+                        else:
+                            parent = str(p.parent) + os.sep
+                        f += [x.replace('./', parent) if x.startswith('./') else x for x in t]  # local to global path
+                        # F += [p.parent / x.lstrip(os.sep) for x in t]  # local to global path (pathlib)
+                else:
+                    raise FileNotFoundError(f'{self.prefix}{p} does not exist')
+            im_files = sorted(x.replace('/', os.sep) for x in f if x.split('.')[-1].lower() in IMG_FORMATS)
+            # self.img_files = sorted([x for x in f if x.suffix[1:].lower() in IMG_FORMATS])  # pathlib
+            assert im_files, f'{self.prefix}No images found'
+        except Exception as e:
+            raise FileNotFoundError(f'{self.prefix}Error loading data from {img_path}\n{HELP_URL}') from e
+        if self.fraction < 1:
+            im_files = im_files[:round(len(im_files) * self.fraction)]
+        return im_files
+    
+    def select_subset_of_images(self, images_to_select: List[str]):
+        """
+        Select a subset of images to use in the dataset. This method is used to select a subset of images
+        when we want to use only a limited set of images for training, validation or testing.
+        """
+        # Get the images that are part of the subset
+        subset_images = [im_path + '.jpg' for im_path in images_to_select]
+        # Filter the labels to include only the ones present in the subset
+        self.labels = [lb for lb in self.labels if lb['im_file'].split('/')[-1] in subset_images]
+
+    def upate_labels_to_use_less_classes(self):
+        """
+        This method maps the COCO classes to the OWOD classes if we are in OWOD mode and then
+        filters the labels to include only the ones present in the YAML file in "names".        
+        """
+        # 1: Map COCO classes to OWOD classes if we are in OWOD
+        if self.data.get('coco_to_owod_mapping'):
+            # If present, means we are in OWOD using Pascal class order
+            # Therefore we need to update all class labels to the new mapping
+            print(f'Updating labels to match the OWOD class order')
+            self.map_coco_to_owod()
+        # 2: Filter labels to include only the ones present in the YAML file in "names"
+        classes = list(self.data["names"].keys())
+        self.update_labels(include_class=classes)  # From BaseDataset
+        if self.data.get('remove_images_with_no_annotations') is True:
+            # Remove empty labels if indicated in the dataset YAML file
+            print(f'Removing images with no annotations')
+            self.remove_image_labels_with_no_annotations()
+        else:
+            print('Maintaining images with no annotations (background images)')
+
+    def update_attributes_to_new_labels(self):        
+        # Update image files related attributes
+        self.im_files = [lb['im_file'] for lb in self.labels]  # update im_files
+        self.ni = len(self.labels)
+        self.ims, self.im_hw0, self.im_hw = [None] * self.ni, [None] * self.ni, [None] * self.ni
+        self.npy_files = [Path(f).with_suffix('.npy') for f in self.im_files]
+        # Update Buffer thread for mosaic images
+        self.buffer = []  # buffer size = batch size
+        self.max_buffer_length = min((self.ni, self.batch_size * 8, 1000)) if self.augment else 0
+
+    def remove_image_labels_with_no_annotations(self):
+        """Remove images with no annotations."""
+        self.labels = [lb for lb in self.labels if len(lb['cls']) > 0]
+
+    ### COCO OOD and Mixed Methods ###
+    def create_labels_using_coco_ood_json_annotations(self, annotations: Dict[str, List]) -> List[Dict]:
+        """Replace the labels with the annotations from the json file."""
+        # Take the images from the labels and create a dictionary with the image id as key and the image file as value
+        img_files = {lb["im_file"].split('/')[-1]: lb["im_file"] for lb in self.labels}
+
+        # Fill a dictionary with the annotations per image id
+        annotations_per_image_id = {}
+        for image in annotations["images"]:
+            image_id = image["id"]
+            annotations_per_image_id[image_id] = {
+                "im_file": img_files[image["file_name"]],
+                "shape": (image["height"], image["width"]),  # Height x Width is the convention
+                "cls": [],  # Placeholder for the class
+                "bboxes": [],  # Placeholder for the bbox
+                "segments": [],
+                "keypoints": None,  
+                "bbox_format": "xywh",
+                "normalized": True
+            }
+        set_img_ids_in_annotations_per_img = set(annotations_per_image_id.keys())
+
+        # Using the annotations img id, fill the cls and bboxes iteratively
+        print('WARNING: COCO OOD and Mixed classes, start at 1, so a -1 is applied to the cls to match OWOD classes.')
+        coco_ood_to_owod_mapping = self.data.get('coco_ood_to_owod_mapping')
+        img_ids_not_in_the_actual_images = set()
+        for ann in annotations["annotations"]:
+            image_id = ann["image_id"]
+
+            # WARNING: This is because some image IDs of the annotations of the mixed_OOD are not in the 
+            #   actual images (anntations["images"]), so I assume we skip them, as I assume in UnSniffer they do it
+            if image_id not in set_img_ids_in_annotations_per_img:
+                img_ids_not_in_the_actual_images.add(image_id)
+                continue
+
+            # Transform the cls to OWOD convention. First subtract 1 to match COCO classes, then apply mapping
+            ann_cls = ann["category_id"] - 1  # COCO OOD and Mixed classes start at 1
+            if ann_cls != 80:
+                ann_cls = coco_ood_to_owod_mapping[ann_cls]
+            annotations_per_image_id[image_id]["cls"].append([ann_cls])
+            # Obtain height and width of the image to normalize the bbox
+            im_height, im_width = annotations_per_image_id[image_id]["shape"]  # Height x Width is the convention
+            # Transform to cx, cy, w, h normalized
+            bbox = ann["bbox"]
+            x, y, w, h = bbox  # Annotation of bboxes come in xywh format
+            cx = (x + w / 2) / im_width
+            cy = (y + h / 2) / im_height
+            # Append bbox
+            annotations_per_image_id[image_id]["bboxes"].append(
+                [cx, cy, w / im_width, h / im_height]
+            )
+        print(f'WARNING: {len(img_ids_not_in_the_actual_images)} images in the annotations are not in the actual images, SKIPPING them!')
+        
+        # Finally, convert the dictionary to a list of labels and the cls and bboxes to numpy arrays
+        labels = list(annotations_per_image_id.values())
+        for label in labels:
+            if len(label["cls"]) == 0:
+                label["cls"] = np.empty((0, 1), dtype=np.float32)
+                label["bboxes"] = np.empty((0, 4), dtype=np.float32)
+            else:
+                label["cls"] = np.array(label["cls"], dtype=np.float32)
+                label["bboxes"] = np.array(label["bboxes"], dtype=np.float32)
+
+        return labels
+
+    ### OWOD Methods ###
+    def map_coco_to_owod(self):
+        """Map COCO classes to OWOD classes."""
+        mapping = self.data.get('coco_to_owod_mapping')
+        coco_pattern = re.compile(r'^\d{12}\.jpg$')
+        type_of_array = self.labels[0]['cls'].dtype
+        for label in self.labels:
+            #label['cls'] = np.array([[mapping[c[0]]] for c in label['cls']], dtype=type_of_array)
+            # Check if 'cls' is empty
+            if label['cls'].size == 0:
+                # Directly create an empty array with the desired shape and type
+                label['cls'] = np.empty((0, 1), dtype=type_of_array)
+            else:
+                # Proceed with mapping for non-empty arrays
+                # and only if they are COCO images, as VOC labels are already in the correct order
+                if coco_pattern.match(label["im_file"][-16:]):  # COCO images are always 12 digits long + .jpg
+                    label['cls'] = np.array([[mapping[c[0]]] for c in label['cls']], dtype=type_of_array)
+    
+    def select_number_of_classes_owod(self, selected_owod_task: str) -> int:
+        """Select the number of classes depending on the OWOD tasks."""
+        if selected_owod_task == 't1':
+            number_of_classes = 20
+        elif selected_owod_task == 't2':
+            number_of_classes = 40
+        elif selected_owod_task == 't3':
+            number_of_classes = 60
+        elif selected_owod_task == 't4':
+            number_of_classes = 80
+        elif selected_owod_task == 'all_task_test':
+            number_of_classes = 80
+        else:
+            number_of_classes = 0
+        return number_of_classes
+
+    def limit_images_by_owod_tasks(self, selected_owod_task: str):
+        """Limit images to the ones that are part of the OWOD task."""
+        # 1: Take the images that are part of the task
+        img_files_to_include = self.retrieve_task_file_names(selected_owod_task)
+        # Use python sets to improve lookup efficiency and use string operations rather than Path for the name
+        set_of_included_imgs = set(img_files_to_include)
+        self.labels = [lb for lb in self.labels if lb['im_file'].split('/')[-1].split('.')[0] in set_of_included_imgs]
+        # 2: Check if any label that should not be in the dataset is still present
+        classes = list(self.data["names"].keys())
+        classes = classes[:self.number_of_classes]  # Filter classes to the task
+        self.update_labels(include_class=classes)
+        # 3: Update attributes
+        self.update_attributes_to_new_labels()
+        
+    def retrieve_task_file_names(self, selected_owod_task: str) -> list[str]:
+        """Retrieve the file names for the selected OWOD task."""
+        root_path =  Path(__file__).resolve().parents[3]
+        owod_tasks_path = root_path / 'datasets_utils' / 'owod' / 'tasks'
+        mode = self._infer_mode()
+        print(f'Using OWOD task {selected_owod_task} for {mode} mode')
+        # Task 1
+        if selected_owod_task == 't1':
+            if mode == 'train':
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't1_train.txt')
+            elif mode == 'val':
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't1_known_test.txt')
+            else:
+                raise ValueError(f'Invalid mode {mode}')
+        # Task 2
+        elif selected_owod_task == 't2':
+            if mode == 'train':
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't2_train.txt')
+            elif mode == 'val':
+                raise NotImplementedError('Validation set for task 2 is not available')
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't2_val.txt')
+            else:
+                raise ValueError(f'Invalid mode {mode}')
+        # Task 3
+        elif selected_owod_task == 't3':
+            if mode == 'train':
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't3_train.txt')
+            elif mode == 'val':
+                raise NotImplementedError('Validation set for task 3 is not available')
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't3_val.txt')
+            else:
+                raise ValueError(f'Invalid mode {mode}')
+        # Task 4
+        elif selected_owod_task == 't4':
+            if mode == 'train':
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't4_train.txt')
+            elif mode == 'val':
+                raise NotImplementedError('Validation set for task 4 is not available')
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 't4_val.txt')
+            else:
+                raise ValueError(f'Invalid mode {mode}')
+        # All task test
+        elif selected_owod_task == 'all_task_test':
+            if mode == 'val':
+                img_files_to_include = self.read_img_files_from_txt(owod_tasks_path / 'all_task_test.txt')
+            else:
+                raise ValueError(f'Invalid mode {mode} for task all_task_test')    
+        
+        else:
+            raise ValueError(f'Invalid OWOD task selected: {selected_owod_task}')
+        return img_files_to_include
+
+    def read_img_files_from_txt(self, file_path):
+        """Read image files from a txt file."""
+        with open(file_path, 'r') as f:
+            return [line.rstrip() for line in f]
+
+    def _infer_mode(self) -> str:
+        img_files_paths_filename = Path(self.img_path).name
+        if 'train' in img_files_paths_filename:
+            return 'train'
+        elif 'val' in img_files_paths_filename:
+            return 'val'
+        elif 'test' in img_files_paths_filename:
+            return 'test'
+        else:
+            raise ValueError(f'Invalid mode for the file {img_files_paths_filename}')
+
+
+    """ INFO ABOUT THE TASKS and SPLITS
+     -- Task all_task_test --
+    Contained in Val split
+
+    -- Task all_task_val --
+    Contained in Train split
+
+    -- Task t1_known_test --
+    Contained in Val split
+
+    -- Task t1_train --
+    Contained in Train split
+
+    -- Task t1_train_with_unk --
+    Contained in Train split
+
+    -- Task t2_ft --
+    Contained in Train split
+
+    -- Task t2_train --
+    Contained in Train split
+
+    -- Task t2_train_with_unk --
+    Contained in Train split
+
+    -- Task t3_ft --
+    Contained in Train split
+
+    -- Task t3_train --
+    Contained in Train split
+
+    -- Task t3_train_with_unk --
+    Contained in Train split
+
+    -- Task t4_ft --
+    Contained in Train split
+
+    -- Task t4_train --
+    Contained in Train split
+
+    -- Task wr1 --
+    Intersection with Train split: 4951/9903
+    Intersection with Val split: 4952/9903
+    Intersection with Test split: 0/9903
+    """

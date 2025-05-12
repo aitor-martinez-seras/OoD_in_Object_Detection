@@ -11,6 +11,12 @@ from .dataset import (
     YOLOMultiModalDataset,
 )
 
+# Added to enable custom datasets
+from .build import build_tao_dataset, build_filtered_yolo_dataset
+from .tao import TAODataset
+from .dataset import FilteredYOLODataset
+
+
 __all__ = (
     "BaseDataset",
     "ClassificationDataset",
@@ -23,4 +29,8 @@ __all__ = (
     "build_grounding",
     "build_dataloader",
     "load_inference_source",
+    "TAODataset",
+    "build_tao_dataset",
+    "FilteredYOLODataset",
+    "build_filtered_yolo_dataset",
 )

@@ -13,6 +13,8 @@ from ultralytics.utils.checks import check_requirements
 from ultralytics.utils.metrics import ConfusionMatrix, DetMetrics, box_iou
 from ultralytics.utils.plotting import output_to_target, plot_images
 
+# Added manually
+from ultralytics.data import build_tao_dataset, build_filtered_yolo_dataset
 
 class DetectionValidator(BaseValidator):
     """
@@ -301,7 +303,13 @@ class DetectionValidator(BaseValidator):
         Returns:
             (Dataset): YOLO dataset.
         """
-        return build_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, stride=self.stride)
+        if self.data.get('dataset_class') == 'TAODataset':
+            return build_tao_dataset(self.args, img_path, batch, self.data, mode=mode, stride=self.stride)
+        elif self.data.get('dataset_class') == 'FilteredYOLODataset':
+            return build_filtered_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, stride=self.stride)
+        else:
+            return build_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, stride=self.stride)
+        #return build_yolo_dataset(self.args, img_path, batch, self.data, mode=mode, stride=self.stride)
 
     def get_dataloader(self, dataset_path, batch_size):
         """
