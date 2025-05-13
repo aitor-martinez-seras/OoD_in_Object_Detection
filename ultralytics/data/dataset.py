@@ -1116,7 +1116,7 @@ class FilteredYOLODataset(YOLODataset):
         
     def retrieve_task_file_names(self, selected_owod_task: str) -> list[str]:
         """Retrieve the file names for the selected OWOD task."""
-        root_path =  Path(__file__).resolve().parents[3]
+        root_path =  Path(__file__).resolve().parents[2]
         owod_tasks_path = root_path / 'datasets_utils' / 'owod' / 'tasks'
         mode = self._infer_mode()
         print(f'Using OWOD task {selected_owod_task} for {mode} mode')
