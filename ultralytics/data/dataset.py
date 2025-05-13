@@ -41,6 +41,7 @@ from .utils import (
     save_dataset_cache_file,
     verify_image,
     verify_image_label,
+    IMG_FORMATS
 )
 
 # Ultralytics dataset *.cache version, >= 1.0.0 for YOLOv8
@@ -848,7 +849,8 @@ class FilteredYOLODataset(YOLODataset):
     """
 
     def __init__(self, *args, data=None, use_segments=False, use_keypoints=False, **kwargs):
-        super().__init__(*args, data=data, use_segments=use_segments, use_keypoints=use_keypoints, **kwargs)
+        #super().__init__(*args, data=data, use_segments=use_segments, use_keypoints=use_keypoints, **kwargs)
+        super().__init__(*args, data=data, **kwargs)
         print(f' -- Filtering dataset --')
         # 1. Check if we are in OWOD style datasets or COCO OOD/Mixed datasets
         self.owod_task = kwargs['hyp'].get('owod_task', None)

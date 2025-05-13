@@ -5,9 +5,9 @@ from typing import Literal, List
 from tap import Tap
 
 from ultralytics import YOLO
-from ultralytics.yolo.utils.callbacks import tensorboard
-from ultralytics.yolo.utils import yaml_load
-from ultralytics.yolo.utils import DEFAULT_CFG_PATH
+from ultralytics.utils.callbacks import tensorboard
+from ultralytics.utils import yaml_load
+from ultralytics.utils import DEFAULT_CFG_PATH
 
 
 class SimpleArgumentParser(Tap):
