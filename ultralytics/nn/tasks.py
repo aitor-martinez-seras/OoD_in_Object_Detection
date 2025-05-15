@@ -178,8 +178,15 @@ class BaseModel(torch.nn.Module):
             # Extract the feature maps of the model
             if hasattr(self, 'which_layers_to_extract'):
                 if self.which_layers_to_extract == 'convolutional_layers':
-                    if m.i in [15, 18, 21]:
-                        output_extra.append(deepcopy(x))
+                    if "yolo12" in self.yaml["yaml_file"]:
+                        if m.i in [14, 17, 20]:
+                            output_extra.append(deepcopy(x))
+                    elif "yolov8" in self.yaml["yaml_file"]:
+                        if m.i in [15, 18, 21]:
+                            output_extra.append(deepcopy(x))
+                    else:
+                        if m.i in [16, 19, 22]:
+                            output_extra.append(deepcopy(x))
 
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
