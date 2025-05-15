@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 import matplotlib.pyplot as plt
 from torchvision.utils import draw_bounding_boxes
-from ultralytics.yolo.engine.results import Results
+from ultralytics.engine.results import Results
 
 
 def create_folder(folder_path: Path, now: str, ood_method_name: str = '') -> Path:
