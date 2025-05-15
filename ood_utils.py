@@ -299,6 +299,9 @@ class OODMethod(ABC):
             ### Prepare images and targets to feed the model ###
             imgs, targets = self.prepare_data_for_model(data, device)
 
+            # Prueba: Transform images to float
+            imgs = imgs.float()
+
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
             results = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_train, device=device)
 
