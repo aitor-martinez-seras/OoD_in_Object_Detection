@@ -300,7 +300,7 @@ class OODMethod(ABC):
             imgs, targets = self.prepare_data_for_model(data, device)
 
             # Prueba: Transform images to float
-            imgs = imgs.float()
+            imgs = imgs.float() / 255
 
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
             results = model.predict(imgs, save=False, verbose=False, conf=self.min_conf_threshold_train, device=device)
@@ -349,6 +349,9 @@ class OODMethod(ABC):
 
             ### Preparar imagenes y targets ###
             imgs, targets = self.prepare_data_for_model(data, device)
+
+            # Convert the images to float
+            imgs = imgs.float() / 255
             
             ### Procesar imagenes en el modelo para obtener logits y las cajas ###
             results = model.predict(imgs, save=False, verbose=True, conf=self.min_conf_threshold_test, device=device)
@@ -437,6 +440,9 @@ class OODMethod(ABC):
 
             ### Preparar imagenes y targets ###
             imgs, targets = self.prepare_data_for_model(data, device)
+
+            # Convert the images to float
+            imgs = imgs.float() / 255
 
             # # Write the file names of the images alongside the number of the image
             # with open(f'./imagenames.txt', 'a') as f:
@@ -2610,6 +2616,9 @@ class ActivationsExtractor(DistanceMethod):
             ### Prepare images and targets to feed the model ###
             imgs, targets = self.prepare_data_for_model(data, device)
 
+            # Convert imgs to float
+            imgs = imgs.float() / 255.0
+
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
             results = model.predict(imgs, save=False, verbose=False, device=device)
 
@@ -2686,6 +2695,9 @@ class FeaturemapExtractor(DistanceMethod):
                 
             ### Prepare images and targets to feed the model ###
             imgs, targets = self.prepare_data_for_model(data, device)
+
+            # Convert imgs to float
+            imgs = imgs.float() / 255.0
 
             ### Process the images to get the results (bboxes and clasification) and the extra info for OOD detection ###
             results = model.predict(imgs, save=False, verbose=False, device=device)
@@ -2915,6 +2927,9 @@ class FusionMethod(OODMethod):
 
             ### Preparar imagenes y targets ###
             imgs, targets = self.prepare_data_for_model(data, device)
+
+            # Convert imgs to float
+            imgs = imgs.float() / 255
 
             ###
             # Method 1
@@ -3272,6 +3287,9 @@ class TripleFusionMethod(OODMethod):
 
             ### Preparar imagenes y targets ###
             imgs, targets = self.prepare_data_for_model(data, device)
+
+            # Convert imgs to float
+            imgs = imgs.float() / 255
 
             ###
             # Method 1
