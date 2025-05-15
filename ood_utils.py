@@ -24,9 +24,9 @@ from scipy.optimize import linear_sum_assignment
 from scipy.stats import entropy
 
 from ultralytics import YOLO
-from ultralytics.yolo.data.build import InfiniteDataLoader
-from ultralytics.yolo.engine.results import Results
-from ultralytics.yolo.v8.detect.predict import extract_roi_aligned_features_from_correct_stride
+from ultralytics.data.build import InfiniteDataLoader
+from ultralytics.engine.results import Results
+from ultralytics.models.yolo.detect.predict import extract_roi_aligned_features_from_correct_stride
 from visualization_utils import plot_results, save_image_from_results_and_data
 from datasets_utils.owod.owod_evaluation_protocol import compute_metrics
 from unknown_localization_utils import extract_bboxes_from_saliency_map_and_thresholds

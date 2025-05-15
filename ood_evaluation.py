@@ -14,7 +14,7 @@ import torch
 
 import log
 from ultralytics import YOLO
-from ultralytics.yolo.data.build import InfiniteDataLoader
+from ultralytics.data.build import InfiniteDataLoader
 
 from ood_utils import configure_extra_output_of_the_model, OODMethod, LogitsMethod, DistanceMethod, NoMethod, MSP, Energy, ODIN, Sigmoid, \
     L1DistanceOneClusterPerStride, L2DistanceOneClusterPerStride, CosineDistanceOneClusterPerStride, \

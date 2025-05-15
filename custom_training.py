@@ -50,12 +50,13 @@ class SimpleArgumentParser(Tap):
         if self.model:
             # Assert that the model size will work with the model passed
             if self.model_size:
-                import re
-                try:
-                    yaml_path = f"{self.model}{self.model_size}.yaml"
-                    re.search(r'yolov\d+([nslmx])', Path(yaml_path).stem).group(1)
-                except AttributeError:
-                    raise ValueError("The YAML file name passed will not work with the model size passed. It must have the substring 'yolov8{size}' in the name.")
+                # import re
+                # try:
+                #     yaml_path = f"{self.model}{self.model_size}.yaml"
+                #     re.search(r'yolov\d+([nslmx])', Path(yaml_path).stem).group(1)
+                # except AttributeError:
+                #     raise ValueError("The YAML file name passed will not work with the model size passed. It must have the substring 'yolov8{size}' in the name.")
+                pass
 
         if self.model_path:
             print('Loading model from', self.model_path)

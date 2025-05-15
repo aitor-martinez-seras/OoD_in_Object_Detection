@@ -9,12 +9,12 @@ from PIL import Image
 import torchvision.ops as t_ops
 from torch.utils.data import DataLoader
 
-from ultralytics.yolo.data.utils import check_det_dataset
-from ultralytics.yolo.data.build import build_yolo_dataset, build_dataloader, build_tao_dataset, build_filtered_yolo_dataset
-from ultralytics.yolo.utils import DEFAULT_CFG
-from ultralytics.yolo.cfg import get_cfg
-from ultralytics.yolo.data import YOLODataset, BaseDataset
-from ultralytics.yolo.data.build import InfiniteDataLoader
+from ultralytics.data.utils import check_det_dataset
+from ultralytics.data.build import build_yolo_dataset, build_dataloader, build_tao_dataset, build_filtered_yolo_dataset
+from ultralytics.utils import DEFAULT_CFG
+from ultralytics.cfg import get_cfg
+from ultralytics.data import YOLODataset, BaseDataset
+from ultralytics.data.build import InfiniteDataLoader
 
 
 def segmentation_to_bbox(segmentation_img: Image, seg_value: int):
