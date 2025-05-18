@@ -194,7 +194,7 @@ def main():
         )
 
         # Save the arguments used to a file
-        args.save(ROOT / f'runs_{project_name}' / folder_name / 'script_args.json')
+        args.save(ROOT / f'runs_{project_name}' / folder_name / 'script_args.json', with_reproducibility=False)
 
 
 if __name__ == "__main__":
