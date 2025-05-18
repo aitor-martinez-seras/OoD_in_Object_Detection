@@ -323,7 +323,8 @@ class DetectionPredictor(BasePredictor):
         for i, pred in enumerate(preds):
             orig_img = orig_imgs[i] if isinstance(orig_imgs, list) else orig_imgs
             if not isinstance(orig_imgs, torch.Tensor):
-                pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
+                #pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
+                pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape[1:3])
             path = self.batch[0]
             img_path = path[i] if isinstance(path, list) else path
             if ood_info_retrieval_mode:  # True if we are retrieving logits or feature maps from the model
