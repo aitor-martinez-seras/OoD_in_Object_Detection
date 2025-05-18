@@ -257,6 +257,24 @@ class OODMethod(ABC):
                     else:
                         mask_matrix[i_pred, i_real] = False
             
+            # Save the current image with the boxes and the targets ploted
+            # from torchvision.utils import draw_bounding_boxes
+            # import matplotlib.pyplot as plt
+            # # Plot only the bboxes
+            # bboxes = res.boxes.xyxy.cpu()
+            # # Plot only targets
+            # bboxes = targets['bboxes'][img_idx].cpu()
+            # im = draw_bounding_boxes(
+            #     torch.from_numpy(res.orig_img)[img_idx].permute(2, 0, 1),
+            #     bboxes,
+            #     width=10,
+            #     labels=None,
+            # )
+            # plt.imshow(im.permute(1, 2, 0))
+            # plt.axis('off')
+            # plt.savefig("prueba_bboxes.png", dpi=300, bbox_inches='tight', pad_inches=0)
+            # plt.close()
+
             # Al multiplicarlas elemento a elemento, nos quedamos con los IoU de las cajas que coinciden en clase
             results[img_idx].assignment_score_matrix = iou_matrix * mask_matrix
             
