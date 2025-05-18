@@ -59,6 +59,8 @@ class Detect(nn.Module):
             )
         )
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
+        # Added 
+        self.output_values_before_sigmoid = False
 
         if self.end2end:
             self.one2one_cv2 = copy.deepcopy(self.cv2)
@@ -141,6 +143,9 @@ class Detect(nn.Module):
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
 
+        if self.output_values_before_sigmoid:
+            # NOTE: for custom export
+            return torch.cat((dbox, cls), 1)
         return torch.cat((dbox, cls.sigmoid()), 1)
 
     def bias_init(self):

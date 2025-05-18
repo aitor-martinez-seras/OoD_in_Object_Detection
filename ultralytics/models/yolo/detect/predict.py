@@ -142,8 +142,9 @@ class DetectionPredictor(BasePredictor):
         ood_info_retrieval_mode = hasattr(self.model.model, 'extraction_mode')
         if ood_info_retrieval_mode:  #in ['roi_aligned_ftmaps', 'logits', 'all_ftmaps', 'ftmaps_and_strides']:
             
-            if self.model.model.model[-1].output_values_before_sigmoid:
-                output_extra = preds[0][1]  # Los valores antes de la sigmoide
+            if self.model.model.model[-1].output_values_before_sigmoid or self.model.model.extraction_mode == "logits":
+                #output_extra = preds[0][1]  # Los valores antes de la sigmoide
+                output_extra = preds[0][0]
             else:
                 output_extra = preds[1]  # Los feature maps o logits
             preds = preds[0][0]  # Las predicciones
@@ -189,8 +190,8 @@ class DetectionPredictor(BasePredictor):
                 output_extra = roi_aligned_ftmaps_per_image_and_stride  # Sobreescibimos el output_extra con el resultado del roi_align
 
             elif self.model.model.extraction_mode == 'logits':
-                if not self.model.model.model[-1].output_values_before_sigmoid:
-                    output_extra = output_extra[0]  # Los logits
+                # if not self.model.model.model[-1].output_values_before_sigmoid:
+                #     output_extra = output_extra[0]  # Los logits
                 preds = ops.non_max_suppression_old(preds,
                                                 self.args.conf,
                                                 self.args.iou,

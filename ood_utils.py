@@ -3495,7 +3495,7 @@ def configure_extra_output_of_the_model(model: YOLO, ood_method: Type[OODMethod]
         elif ood_method.which_internal_activations in LOGITS_RELATED_OPTIONS:
             model.model.which_layers_to_extract = "logits"
             if ood_method.use_values_before_sigmoid:
-                model.model.model[-1].output_values_before_sigmoid = True
+                model.model.model[-1].output_values_before_sigmoid = False
         elif ood_method.which_internal_activations == "none":
             model.model.which_layers_to_extract = "none"
         else:
