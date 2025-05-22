@@ -183,7 +183,8 @@ class DetectionPredictor(BasePredictor):
                     ftmaps=output_extra,
                     boxes=[x[:, :4] for x in preds],  # Extracting only the boxes from the predictions
                     strides=strides,
-                    img_shape=img.shape[2:],
+                    img_shape=img.shape[2:],  # Indexing like this has given error with the original image in new yolo version
+                    #img_shape=img.shape[1:3],  # If error, 
                     device=device
                 )
 

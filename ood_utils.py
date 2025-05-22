@@ -262,13 +262,14 @@ class OODMethod(ABC):
             # import matplotlib.pyplot as plt
             # # Plot only the bboxes
             # bboxes = res.boxes.xyxy.cpu()
+            # labels = [res.names[int(_c)] for _c in res.boxes.cls.cpu()]
             # # Plot only targets
-            # bboxes = targets['bboxes'][img_idx].cpu()
+            # #bboxes = targets['bboxes'][img_idx].cpu()
             # im = draw_bounding_boxes(
             #     torch.from_numpy(res.orig_img)[img_idx].permute(2, 0, 1),
             #     bboxes,
             #     width=10,
-            #     labels=None,
+            #     labels=labels,
             # )
             # plt.imshow(im.permute(1, 2, 0))
             # plt.axis('off')
@@ -1510,7 +1511,8 @@ class DistanceMethod(OODMethod):
                     ftmaps=[ft[None, ...] for ft in ftmaps],
                     boxes=[res.boxes.xyxy],
                     strides=[strides],
-                    img_shape=res.orig_img.shape[2:],
+                    #img_shape=res.orig_img.shape[2:],
+                    img_shape=res.orig_img.shape[1:3],
                     device=res.boxes.xyxy.device,
                     extract_all_strides=False,
                 )
@@ -1680,7 +1682,8 @@ class DistanceMethod(OODMethod):
                             ftmaps=[ft[None, ...] for ft in ftmaps],
                             boxes=[boxes_one_img],
                             strides=[strides],
-                            img_shape=results[idx_img].orig_img.shape[2:],
+                            #img_shape=results[idx_img].orig_img.shape[2:],
+                            img_shape=res.orig_img.shape[1:3],
                             device=device,
                             extract_all_strides=True,
                         )
@@ -1711,7 +1714,8 @@ class DistanceMethod(OODMethod):
                         ftmaps=[ft[None, ...] for ft in ftmaps],
                         boxes=[res.boxes.xyxy],  
                         strides=[strides],
-                        img_shape=res.orig_img.shape[2:],
+                        #img_shape=res.orig_img.shape[2:],
+                        img_shape=res.orig_img.shape[1:3],
                         device=device
                     )
                     
@@ -2042,7 +2046,8 @@ class DistanceMethod(OODMethod):
                     ftmaps=[ft[None, ...] for ft in ftmaps],
                     boxes=[res.boxes.xyxy],
                     strides=[strides],
-                    img_shape=res.orig_img.shape[2:],
+                    #img_shape=res.orig_img.shape[2:],  gives error in new YOLO version
+                    img_shape=res.orig_img.shape[1:3],
                     device=res.boxes.xyxy.device,
                     extract_all_strides=False,
                 )
