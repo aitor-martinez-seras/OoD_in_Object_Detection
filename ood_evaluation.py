@@ -847,7 +847,7 @@ def main(args: SimpleArgumentParser):
         if args.benchmark == 'best_methods':
             raise NotImplementedError("Not implemented yet")
 
-        
+    
 
         #########
         # Used tpr threshold benchmark
@@ -855,9 +855,9 @@ def main(args: SimpleArgumentParser):
         elif args.benchmark == 'used_tpr':
             ## 1. Name results file
             if args.ood_method in DISTANCE_METHODS:
-                results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}_{args.cluster_method}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
+                results_file_name = f'{NOW}_{model.ckpt["train_args"]["name"]}_{args.benchmark}_{args.ood_method}_{args.cluster_method}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
             else:
-                results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
+                results_file_name = f'{NOW}_{model.ckpt["train_args"]["name"]}_{args.benchmark}_{args.ood_method}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
             USED_TPR_BENCHMARK = BENCHMARKS[args.benchmark]
             logger.info(f"Running benchmark for confidences {USED_TPR_BENCHMARK}")
 
@@ -908,9 +908,9 @@ def main(args: SimpleArgumentParser):
         elif args.benchmark == 'which_split_for_ind_scores':
             ## 1. Name results file
             if args.ood_method in DISTANCE_METHODS:
-                results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}_{args.cluster_method}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
+                results_file_name = f'{NOW}_{model.ckpt["train_args"]["name"]}_{args.benchmark}_{args.ood_method}_{args.cluster_method}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
             else:
-                results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
+                results_file_name = f'{NOW}_{model.ckpt["train_args"]["name"]}_{args.benchmark}_{args.ood_method}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
             WHICH_SPLIT = BENCHMARKS[args.benchmark]
             logger.info(f"Running benchmark for options {WHICH_SPLIT}")
 
@@ -961,9 +961,9 @@ def main(args: SimpleArgumentParser):
         elif args.benchmark == 'conf_thr_train':
             ## 1. Name results file
             if args.ood_method in DISTANCE_METHODS:
-                results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}_{args.cluster_method}'
+                results_file_name = f'{NOW}_{model.ckpt["train_args"]["name"]}_{args.benchmark}_{args.ood_method}_{args.cluster_method}'
             else:
-                results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}'
+                results_file_name = f'{NOW}_{model.ckpt["train_args"]["name"]}_{args.benchmark}_{args.ood_method}'
             CONF_THR_TRAIN_BENCHMARK = BENCHMARKS[args.benchmark]
             logger.info(f"Running benchmark for confidences {CONF_THR_TRAIN_BENCHMARK}")
 
@@ -1015,9 +1015,9 @@ def main(args: SimpleArgumentParser):
         elif args.benchmark == 'conf_thr_test':
             ## 1. Name results file
             if args.ood_method in DISTANCE_METHODS:
-                results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}_{args.cluster_method}'
+                results_file_name = f'{NOW}_{model.ckpt["train_args"]["name"]}_{args.benchmark}_{args.ood_method}_{args.cluster_method}'
             else:
-                results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}'
+                results_file_name = f'{NOW}_{model.ckpt["train_args"]["name"]}_{args.benchmark}_{args.ood_method}'
             CONF_THR_TEST_BENCHMARK = BENCHMARKS[args.benchmark]
             logger.info(f"Running benchmark for confidences {CONF_THR_TEST_BENCHMARK}")
 
@@ -1068,7 +1068,7 @@ def main(args: SimpleArgumentParser):
         #########
         elif args.benchmark == 'cluster_methods':
             ## 1. Name results file
-            results_file_name = f'{NOW}_{args.benchmark}_{args.ood_method}_{args.cluster_optimization_metric}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
+            results_file_name = f'{NOW}_{model.ckpt["train_args"]["name"]}_{args.benchmark}_{args.ood_method}_{args.cluster_optimization_metric}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
             CLUSTER_METHODS_TO_TEST = BENCHMARKS[args.benchmark]
             logger.info(f"Running benchmark for methods {CLUSTER_METHODS_TO_TEST}")
 
@@ -1146,7 +1146,7 @@ def main(args: SimpleArgumentParser):
         #########
         elif args.benchmark == 'logits_methods':
             ## 1. Name results file
-            results_file_name = f'{NOW}_{args.benchmark}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
+            results_file_name = f'{NOW}_{model.ckpt["train_args"]["name"]}_{args.benchmark}_conf_train{args.conf_thr_train}_conf_test{args.conf_thr_test}'
             LOGITS_METHOD_TO_TEST = BENCHMARKS[args.benchmark]
             logger.info(f"Running benchmark for methods {LOGITS_METHOD_TO_TEST}")
 
