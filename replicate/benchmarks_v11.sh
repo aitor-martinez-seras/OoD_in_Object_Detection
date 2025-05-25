@@ -18,7 +18,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 2: RQ1 - L2 Methods with different cluster strategies"
@@ -36,7 +36,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 3: RQ1 - L2 Methods with different cluster strategies"
 nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method Cosine_cl_stride --cluster_method one --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_Cosine_one.log 2>&1 &
@@ -53,7 +53,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 # SDR
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 4"
@@ -71,7 +71,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 5"
 
@@ -90,7 +90,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 6"
 
@@ -109,7 +109,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 # EUL
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 7"
@@ -129,7 +129,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 8"
 
@@ -148,7 +148,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 9"
 
@@ -167,7 +167,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 ## RQ2
 # Logits
@@ -185,7 +185,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 ## Fusion
 # or
@@ -209,7 +209,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 #
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 12"
@@ -226,7 +226,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 # and
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 13"
@@ -249,7 +249,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 #
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 14"
 
@@ -265,7 +265,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 
 # score
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 15"
@@ -288,7 +288,7 @@ pids+=($!)
 
 for pid in "${pids[@]}"; do
     wait "$pid"
-donewait
+done
 #
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 16"
 nohup python ood_evaluation.py --benchmark conf_thr_test --fusion_strategy score --ood_method fusion-MSP-L1_cl_stride --cluster_method one --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_score_MSP-L1one.log 2>&1 &
