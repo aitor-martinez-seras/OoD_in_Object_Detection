@@ -181,12 +181,17 @@ class BaseModel(torch.nn.Module):
                     if "yolo12" in self.yaml["yaml_file"]:
                         if m.i in [14, 17, 20]:
                             output_extra.append(deepcopy(x))
-                    elif "yolov8" in self.yaml["yaml_file"]:
+                    #elif self.yaml["yaml_file"] in ["yolov8", "yolov9", "yolov10"]:
+                    elif any(_model in self.yaml["yaml_file"] for _model in ["yolov8", "yolov9"]):    
                         if m.i in [15, 18, 21]:
                             output_extra.append(deepcopy(x))
-                    else:
+                    elif any(_model in self.yaml["yaml_file"] for _model in ["yolov10", "yolov11"]):
                         if m.i in [16, 19, 22]:
                             output_extra.append(deepcopy(x))
+                    else:
+                        raise ValueError(
+                            f"Model {self.yaml['yaml_file']} is not supported for convolutional layer extraction."
+                        )
 
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
