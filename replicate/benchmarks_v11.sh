@@ -1,96 +1,96 @@
-## No Method, for the VOC test performance results with RAW model
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method NoMethod --cluster_method one --which_internal_activations logits --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_NoMethod.log 2>&1 &
+# ## No Method, for the VOC test performance results with RAW model
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method NoMethod --cluster_method one --which_internal_activations logits --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_NoMethod.log 2>&1 &
 
-## RQ1
-# Vanilla runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 1: RQ1 - L1 Methods with different cluster strategies"
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1_cl_stride --cluster_method one --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1_one.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1_cl_stride --cluster_method KMeans --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1_KMeans.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1_cl_stride --cluster_method KMeans_10 --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1_KMeans_10.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1_cl_stride --cluster_method HDBSCAN --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1_HDBSCAN.log 2>&1 &
-pids+=($!)
+# ## RQ1
+# # Vanilla runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt
+# echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 1: RQ1 - L1 Methods with different cluster strategies"
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1_cl_stride --cluster_method one --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1_one.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1_cl_stride --cluster_method KMeans --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1_KMeans.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1_cl_stride --cluster_method KMeans_10 --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1_KMeans_10.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1_cl_stride --cluster_method HDBSCAN --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1_HDBSCAN.log 2>&1 &
+# pids+=($!)
 
-for pid in "${pids[@]}"; do
-    wait "$pid"
-done
+# for pid in "${pids[@]}"; do
+#     wait "$pid"
+# done
 
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 2: RQ1 - L2 Methods with different cluster strategies"
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2_cl_stride --cluster_method one --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2_one.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2_cl_stride --cluster_method KMeans --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2_KMeans.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2_cl_stride --cluster_method KMeans_10 --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2_KMeans_10.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2_cl_stride --cluster_method HDBSCAN --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2_HDBSCAN.log 2>&1 &
-pids+=($!)
+# echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 2: RQ1 - L2 Methods with different cluster strategies"
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2_cl_stride --cluster_method one --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2_one.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2_cl_stride --cluster_method KMeans --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2_KMeans.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2_cl_stride --cluster_method KMeans_10 --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2_KMeans_10.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2_cl_stride --cluster_method HDBSCAN --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2_HDBSCAN.log 2>&1 &
+# pids+=($!)
 
-for pid in "${pids[@]}"; do
-    wait "$pid"
-done
+# for pid in "${pids[@]}"; do
+#     wait "$pid"
+# done
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 3: RQ1 - L2 Methods with different cluster strategies"
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method Cosine_cl_stride --cluster_method one --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_Cosine_one.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method Cosine_cl_stride --cluster_method KMeans --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_Cosine_KMeans.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method Cosine_cl_stride --cluster_method KMeans_10 --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_Cosine_KMeans_10.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method Cosine_cl_stride --cluster_method HDBSCAN --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_Cosine_HDBSCAN.log 2>&1 &
-pids+=($!)
+# echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 3: RQ1 - L2 Methods with different cluster strategies"
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method Cosine_cl_stride --cluster_method one --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_Cosine_one.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method Cosine_cl_stride --cluster_method KMeans --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_Cosine_KMeans.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method Cosine_cl_stride --cluster_method KMeans_10 --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_Cosine_KMeans_10.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method Cosine_cl_stride --cluster_method HDBSCAN --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_Cosine_HDBSCAN.log 2>&1 &
+# pids+=($!)
 
-for pid in "${pids[@]}"; do
-    wait "$pid"
-done
+# for pid in "${pids[@]}"; do
+#     wait "$pid"
+# done
 
-# SDR
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 4"
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1Ivis --cluster_method one --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1Ivis_One.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1Ivis --cluster_method KMeans --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1Ivis_KMeans.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1Ivis --cluster_method KMeans_10 --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1Ivis_KMeans_10.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1Ivis --cluster_method HDBSCAN --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1Ivis_HDBSCAN.log 2>&1 &
-pids+=($!)
+# # SDR
+# echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 4"
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1Ivis --cluster_method one --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1Ivis_One.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1Ivis --cluster_method KMeans --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1Ivis_KMeans.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1Ivis --cluster_method KMeans_10 --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1Ivis_KMeans_10.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L1Ivis --cluster_method HDBSCAN --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L1Ivis_HDBSCAN.log 2>&1 &
+# pids+=($!)
 
-for pid in "${pids[@]}"; do
-    wait "$pid"
-done
+# for pid in "${pids[@]}"; do
+#     wait "$pid"
+# done
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 5"
+# echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 5"
 
-pids=()
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2Ivis --cluster_method one --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2Ivis_One.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2Ivis --cluster_method KMeans --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2Ivis_KMeans.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2Ivis --cluster_method KMeans_10 --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2Ivis_KMeans_10.log 2>&1 &
-pids+=($!)
-sleep 90
-nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2Ivis --cluster_method HDBSCAN --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2Ivis_HDBSCAN.log 2>&1 &
-pids+=($!)
+# pids=()
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2Ivis --cluster_method one --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2Ivis_One.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2Ivis --cluster_method KMeans --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2Ivis_KMeans.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2Ivis --cluster_method KMeans_10 --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2Ivis_KMeans_10.log 2>&1 &
+# pids+=($!)
+# sleep 90
+# nohup python ood_evaluation.py --benchmark conf_thr_test --ood_method L2Ivis --cluster_method HDBSCAN --which_internal_activations ftmaps_and_strides --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250517_1728_owod_t1_yolo11l_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11_conf_trest_L2Ivis_HDBSCAN.log 2>&1 &
+# pids+=($!)
 
-for pid in "${pids[@]}"; do
-    wait "$pid"
-done
+# for pid in "${pids[@]}"; do
+#     wait "$pid"
+# done
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 6"
 
