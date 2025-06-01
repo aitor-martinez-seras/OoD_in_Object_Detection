@@ -200,7 +200,8 @@ class DetectionPredictor(BasePredictor):
                                                 max_det=self.args.max_det,
                                                 classes=self.args.classes,
                                                 extra_item=output_extra)
-                output_extra = preds[1]
+                #output_extra = preds[1]
+                output_extra = [pos_and_logits[:, 4:] if len(pos_and_logits) != 0 else pos_and_logits for pos_and_logits in preds[1]]
                 preds = preds[0]
 
             elif self.model.model.extraction_mode == 'all_ftmaps':
