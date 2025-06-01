@@ -1347,6 +1347,10 @@ class LogitsMethod(OODMethod):
                     self.max_score[idx_cls] = 0.0
 
     def activations_transformation(self, activations: np.array, **kwargs) -> np.array:
+        # NEW ultralytics. The results always carry BBOX and CLS
+        return activations[..., 4:]
+
+        # OLD. In the OLD detect we only took the CLS when values_before_sigmoid was True
         if self.use_values_before_sigmoid:
             return activations  # In this case the activations are already the logits
         else:
@@ -3518,7 +3522,7 @@ def configure_extra_output_of_the_model(model: YOLO, ood_method: Type[OODMethod]
         elif ood_method.which_internal_activations in LOGITS_RELATED_OPTIONS:
             model.model.which_layers_to_extract = "logits"
             if ood_method.use_values_before_sigmoid:
-                model.model.model[-1].output_values_before_sigmoid = False
+                model.model.model[-1].output_values_before_sigmoid = True
         elif ood_method.which_internal_activations == "none":
             model.model.which_layers_to_extract = "none"
         else:
