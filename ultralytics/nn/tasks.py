@@ -185,7 +185,7 @@ class BaseModel(torch.nn.Module):
                     elif any(_model in self.yaml["yaml_file"] for _model in ["yolov8", "yolov9"]):    
                         if m.i in [15, 18, 21]:
                             output_extra.append(deepcopy(x))
-                    elif any(_model in self.yaml["yaml_file"] for _model in ["yolov10", "yolov11"]):
+                    elif any(_model in self.yaml["yaml_file"] for _model in ["yolov10", "yolo11"]):
                         if m.i in [16, 19, 22]:
                             output_extra.append(deepcopy(x))
                     else:
