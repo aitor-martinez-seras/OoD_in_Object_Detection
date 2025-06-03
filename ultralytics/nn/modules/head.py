@@ -101,7 +101,7 @@ class Detect(nn.Module):
             return {"one2many": x, "one2one": one2one}
 
         y = self._inference(one2one)
-        y = self.postprocess(y.permute(0, 2, 1), self.max_det, self.nc)
+        #y = self.postprocess(y.permute(0, 2, 1), self.max_det, self.nc)
         return y if self.export else (y, {"one2many": x, "one2one": one2one})
 
     def _inference(self, x):
