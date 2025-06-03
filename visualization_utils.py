@@ -113,8 +113,12 @@ def plot_bounding_boxes(img: Tensor, bboxes: Tensor, labels: List[str], colors: 
     """Plot and save the image with bounding boxes."""
     if not use_labels:
         labels = None
+    if isinstance(img, Tensor):
+        img = img.cpu()
+    if isinstance(img, np.ndarray):
+        img = torch.from_numpy(img).permute(2, 0, 1)  # Convert HWC to CHW format if needed
     im = draw_bounding_boxes(
-        img.cpu(),
+        img,
         bboxes,
         width=width,
         font=font,
