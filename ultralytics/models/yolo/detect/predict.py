@@ -193,6 +193,13 @@ class DetectionPredictor(BasePredictor):
             elif self.model.model.extraction_mode == 'logits':
                 # if not self.model.model.model[-1].output_values_before_sigmoid:
                 #     output_extra = output_extra[0]  # Los logits
+                if self.model.model.model[-1].output_values_before_sigmoid:
+                    # Compute the sigmoid of the logits
+                    bboxes_only = preds[:, :4, :]  # Extracting only the boxes from the predictions
+                    logits_only = preds[:, 4:, :]  # Extracting only the logits from the predictions
+                    # Reconstruct the predictions with the sigmoid applied to the logits
+                    preds = torch.cat((bboxes_only, logits_only.sigmoid()), dim=1)  # Concatenate the boxes and logits
+
                 preds = ops.non_max_suppression_old(preds,
                                                 self.args.conf,
                                                 self.args.iou,
@@ -200,7 +207,8 @@ class DetectionPredictor(BasePredictor):
                                                 max_det=self.args.max_det,
                                                 classes=self.args.classes,
                                                 extra_item=output_extra)
-                output_extra = preds[1]
+                # Remove from the output extra the bboxes
+                output_extra = [p[:, 4:] if len(p)>0 else p for p in preds[1]]
                 #output_extra = [pos_and_logits[:, 4:] if len(pos_and_logits) != 0 else pos_and_logits for pos_and_logits in preds[1]]
                 preds = preds[0]
 
