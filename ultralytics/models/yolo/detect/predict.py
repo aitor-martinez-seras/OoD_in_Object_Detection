@@ -149,6 +149,9 @@ class DetectionPredictor(BasePredictor):
                 output_extra = preds[1]  # Los feature maps o logits
             preds = preds[0][0]  # Las predicciones
             
+            # Check if the model is a v10 model
+            is_v10_model = "v10" in self.args.model
+
             if self.model.model.extraction_mode == 'roi_aligned_ftmaps':
                 # Para la prediccion se usan las 3 escalas de feature maps (8,16,32)
                 # y por tanto me he traido las 3 escalas, que vienen en la forma
@@ -206,7 +209,8 @@ class DetectionPredictor(BasePredictor):
                                                 agnostic=self.args.agnostic_nms,
                                                 max_det=self.args.max_det,
                                                 classes=self.args.classes,
-                                                extra_item=output_extra)
+                                                extra_item=output_extra,
+                                                v10=is_v10_model)
                 # Remove from the output extra the bboxes
                 output_extra = [p[:, 4:] if len(p)>0 else p for p in preds[1]]
                 #output_extra = [pos_and_logits[:, 4:] if len(pos_and_logits) != 0 else pos_and_logits for pos_and_logits in preds[1]]
@@ -247,6 +251,16 @@ class DetectionPredictor(BasePredictor):
                      torch.ones((s16*s16), device=device),  # 1
                      torch.ones((s32*s32), device=device) * 2)  # 2
                 )
+                
+                if is_v10_model:
+                    # Convert preds from xyxy to xywh format
+                    cls_values = preds[:, 4:]
+                    boxes = preds[:, :4]
+                    # Make the xyxy to xywh conversion. The shape is [N, 4, 8400]
+                    boxes_permuted = boxes.permute(0, 2, 1)  # Permute to [N, 8400, 4]
+                    boxes_xywh = ops.xyxy2xywh(boxes_permuted)  # Convert to xywh format
+                    boxes_xywh = boxes_xywh.permute(0, 2, 1)  # Permute back to [N, 4, 8400]
+                    preds = torch.cat((boxes_xywh, cls_values), dim=1)  # Concatenate the boxes and class values
 
                 # Perform NMS and extract the strides to which the final predicted bboxes belong
                 preds, strides = ops.non_max_suppression_old(
@@ -257,7 +271,7 @@ class DetectionPredictor(BasePredictor):
                     max_det=self.args.max_det,
                     classes=self.args.classes,  # Usually None
                     extra_item=None,
-                    strides=strides
+                    strides=strides,
                 )
 
                 # Merge the feature maps and the strides into a list of lists

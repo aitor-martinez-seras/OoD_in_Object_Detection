@@ -172,6 +172,9 @@ def main():
         #args.save(ROOT / args.model_path / 'script_args.json')
     else:
         print("*** Starting training ***")
+        if "v10" in args.model:
+            # Add validation mode to the model, to enable the postprocessing
+            model.model.validating = True
         model.train(
             data=yaml_file,
             cfg=f"{args.config}.yaml",  # https://docs.ultralytics.com/es/usage/cfg/

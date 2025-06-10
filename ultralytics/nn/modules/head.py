@@ -98,10 +98,12 @@ class Detect(nn.Module):
         for i in range(self.nl):
             x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
         if self.training:  # Training path
+            self.validating = True
             return {"one2many": x, "one2one": one2one}
 
         y = self._inference(one2one)
-        #y = self.postprocess(y.permute(0, 2, 1), self.max_det, self.nc)
+        if self.validating:
+            y = self.postprocess(y.permute(0, 2, 1), self.max_det, self.nc)
         return y if self.export else (y, {"one2many": x, "one2one": one2one})
 
     def _inference(self, x):
@@ -879,6 +881,9 @@ class v10Detect(Detect):
             for x in ch
         )
         self.one2one_cv3 = copy.deepcopy(self.cv3)
+        # Added
+        self.validating = False
+
 
     def fuse(self):
         """Removes the one2many head."""

@@ -359,7 +359,8 @@ def non_max_suppression_old(
         max_nms=30000,
         max_wh=7680,
         extra_item=None,
-        strides=None
+        strides=None,
+        v10=False,  # v10 compatibility
 ):
     """
     Perform non-maximum suppression (NMS) on a set of boxes, with support for masks and multiple labels per box.
@@ -454,7 +455,8 @@ def non_max_suppression_old(
         
         # Detections matrix nx6 (xyxy, conf, cls)
         box, cls, mask = x.split((4, nc, nm), 1)
-        box = xywh2xyxy(box)  # center_x, center_y, width, height) to (x1, y1, x2, y2)
+        if not v10:
+            box = xywh2xyxy(box)  # center_x, center_y, width, height) to (x1, y1, x2, y2)
         if multi_label:
             i, j = (cls > conf_thres).nonzero(as_tuple=False).T
             x = torch.cat((box[i], x[i, 4 + j, None], j[:, None].float(), mask[i]), 1)
