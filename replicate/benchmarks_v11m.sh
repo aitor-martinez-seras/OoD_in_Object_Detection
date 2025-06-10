@@ -2,7 +2,7 @@
 # python ood_evaluation.py --benchmark conf_thr_test --ood_method NoMethod --cluster_method one --which_internal_activations logits --which_split train_val  --load_ind_activations --ood_datasets owod coco_ood coco_mixed --device 0 --ind_info_creation_option valid_preds_one_stride  --conf_thr_train 0.15 --conf_thr_test 0.15 --tpr_thr 0.95 --model_path runs_OWOD/20250601_2346_owod_t1_yolo11m_from_scratch/weights/best.pt --ind_dataset owod --ind_split train --owod_task_ind t1 --ood_split val --owod_task_ood t1 > logs/benchmark_V11m_conf_trest_NoMethod.log 2>&1 &
 
 # Configure the GPU to use
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=1
 ## RQ1
 # Vanilla runs_OWOD/20250601_2346_owod_t1_yolo11m_from_scratch/weights/best.pt
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Block 1: RQ1 - L1 Methods with different cluster strategies"
