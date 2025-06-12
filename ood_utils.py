@@ -3531,3 +3531,6 @@ def configure_extra_output_of_the_model(model: YOLO, ood_method: Type[OODMethod]
             raise ValueError(f"The option {ood_method.which_internal_activations} is not valid.")
         # 2. Select the extraction mode for the ultralytics/yolo/v8/detect/predict.py
         model.model.extraction_mode = ood_method.which_internal_activations  # This attribute is created in the DetectionModel class
+
+        if "yolov10" in model.ckpt_path:
+            model.model.model[23].validating = False
