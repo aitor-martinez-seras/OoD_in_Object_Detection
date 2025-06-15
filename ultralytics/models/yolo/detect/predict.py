@@ -200,6 +200,11 @@ class DetectionPredictor(BasePredictor):
                     # Compute the sigmoid of the logits
                     bboxes_only = preds[:, :4, :]  # Extracting only the boxes from the predictions
                     logits_only = preds[:, 4:, :]  # Extracting only the logits from the predictions
+                    if is_v10_model:
+                        # Make the xyxy to xywh conversion. The shape is [N, 4, 8400]
+                        boxes_permuted = bboxes_only.permute(0, 2, 1)  # Permute to [N, 8400, 4]
+                        boxes_xywh = ops.xyxy2xywh(boxes_permuted)  # Convert to xywh format
+                        bboxes_only = boxes_xywh.permute(0, 2, 1)  # Permute back to [N, 4, 8400]
                     # Reconstruct the predictions with the sigmoid applied to the logits
                     preds = torch.cat((bboxes_only, logits_only.sigmoid()), dim=1)  # Concatenate the boxes and logits
 
@@ -210,7 +215,8 @@ class DetectionPredictor(BasePredictor):
                                                 max_det=self.args.max_det,
                                                 classes=self.args.classes,
                                                 extra_item=output_extra,
-                                                v10=is_v10_model)
+                                                #v10=is_v10_model
+                                                )
                 # Remove from the output extra the bboxes
                 output_extra = [p[:, 4:] if len(p)>0 else p for p in preds[1]]
                 #output_extra = [pos_and_logits[:, 4:] if len(pos_and_logits) != 0 else pos_and_logits for pos_and_logits in preds[1]]
