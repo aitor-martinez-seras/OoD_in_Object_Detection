@@ -1,6 +1,6 @@
 # Introduction
 
-This is the code for the paper ______. 
+This is the code for the paper On the Inherent Robustness of One-Stage Object Detection against Out-of-Distribution Data. 
 
 The code is based on an early version of the Ultralytics YOLOv8 repository. The more updated version of the libray can be found [here](https://github.com/ultralytics/ultralytics).
 
