@@ -1595,16 +1595,21 @@ class DistanceMethod(OODMethod):
         elif CUSTOM_HYP.fusion.DISTANCE_USE_IN_DISTRIBUTION_TO_DEFINE_LIMITS:
             if self.per_class and self.per_stride:
                 # Is a piecewise function
-                if score > self.thresholds[cls_idx][stride_idx]:
-                    a = -1 / (self.max_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
-                    b = self.thresholds[cls_idx][stride_idx] / (self.max_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
-                elif score < self.thresholds[cls_idx][stride_idx]:
-                    a = 1 / (self.min_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
-                    b = -self.thresholds[cls_idx][stride_idx] / (self.min_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+                if isinstance(self.thresholds[cls_idx], float):  # In case we have a threshold
+                    if score > self.thresholds[cls_idx][stride_idx]:
+                        a = -1 / (self.max_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+                        b = self.thresholds[cls_idx][stride_idx] / (self.max_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+                    elif score < self.thresholds[cls_idx][stride_idx]:
+                        a = 1 / (self.min_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+                        b = -self.thresholds[cls_idx][stride_idx] / (self.min_dist[cls_idx][stride_idx] - self.thresholds[cls_idx][stride_idx])
+                    else:
+                        print("Score is equal to the threshold")
+                        a = 0
+                        b = 0
                 else:
-                    print("Score is equal to the threshold")
-                    a = 0
-                    b = 0
+                    # No thresholds for this class and stride, so we cannot compute the indness
+                    print(f'Class {cls_idx}, stride {stride_idx} has no thresholds. Returning -1.')
+                    return -1
 
             else:
                 raise NotImplementedError("Not implemented yet")
