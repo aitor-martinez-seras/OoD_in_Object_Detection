@@ -83,11 +83,3 @@ Examples of usage are provided in the ```scripts/ood_evaluation.sh``` file.
 ## Training a YOLO model
 
 Examples are provided ```scripts/train_owod.sh``` file.
-
-# YOLO Sizes an architecture
-
-## Sizes
-![Yolo_sizes_image](ultralytics/assets/yolov8_sizes.png)
-
-## Architecture
-![Yolo_arch](ultralytics/assets/yolov8_arch.jpg)
